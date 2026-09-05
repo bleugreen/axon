@@ -36,7 +36,9 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use x11rb::{connection::Connection, protocol::xtest::ConnectionExt as _, wrapper::ConnectionExt as _};
+use x11rb::{
+    connection::Connection, protocol::xtest::ConnectionExt as _, wrapper::ConnectionExt as _,
+};
 
 /// Long enough for a real server on a loaded CI machine, short enough to fail rather than hang.
 const OBSERVED_WITHIN: Duration = Duration::from_secs(3);
@@ -140,7 +142,9 @@ fn xtest_input_is_observed_through_record_and_our_own_delivery_is_not() {
     // the event; it is the ledger every synthetic event this daemon posts registers with. Here that
     // path is exercised for real: `X11Session::click` is what the daemon's own pointer rung calls.
     self_delivery().arm();
-    session.click((CLICK_AT.0 as f64, CLICK_AT.1 as f64)).expect("a click posts");
+    session
+        .click((CLICK_AT.0 as f64, CLICK_AT.1 as f64))
+        .expect("a click posts");
     thread::sleep(Duration::from_millis(300));
     assert_eq!(
         queue.drain(Duration::ZERO).events.len(),
@@ -200,4 +204,3 @@ fn letter_keycode(keyboard: &Keyboard) -> Option<u8> {
             == Some(u32::from(b'a'))
     })
 }
-

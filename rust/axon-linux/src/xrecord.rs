@@ -98,10 +98,15 @@ impl RecordSession {
         let (control, _) = x11rb::connect(None)
             .map_err(|error| operation(format!("could not open a control connection: {error}")))?;
         if !supported(&control) {
-            return Err(operation("this X server does not provide the RECORD extension"));
+            return Err(operation(
+                "this X server does not provide the RECORD extension",
+            ));
         }
         control
-            .record_query_version(record::X11_XML_VERSION.0 as u16, record::X11_XML_VERSION.1 as u16)
+            .record_query_version(
+                record::X11_XML_VERSION.0 as u16,
+                record::X11_XML_VERSION.1 as u16,
+            )
             .map_err(|error| operation(format!("could not negotiate RECORD: {error}")))?
             .reply()
             .map_err(|error| operation(format!("could not negotiate RECORD: {error}")))?;
@@ -163,7 +168,9 @@ impl RecordSession {
             Ok(listener) => listener,
             Err(error) => {
                 free(&control);
-                return Err(operation(format!("could not create observer thread: {error}")));
+                return Err(operation(format!(
+                    "could not create observer thread: {error}"
+                )));
             }
         };
         Ok(Self {
@@ -249,14 +256,16 @@ pub fn decode(decoder: &mut Decoder, mut data: &[u8], queue: &RawQueue) {
                         state: event.state.into(),
                     })
             }
-            BUTTON_PRESS | BUTTON_RELEASE => xproto::ButtonPressEvent::try_parse(data)
-                .ok()
-                .map(|(event, _)| CoreEvent {
-                    kind,
-                    detail: event.detail,
-                    point: (event.root_x, event.root_y),
-                    state: event.state.into(),
-                }),
+            BUTTON_PRESS | BUTTON_RELEASE => {
+                xproto::ButtonPressEvent::try_parse(data)
+                    .ok()
+                    .map(|(event, _)| CoreEvent {
+                        kind,
+                        detail: event.detail,
+                        point: (event.root_x, event.root_y),
+                        state: event.state.into(),
+                    })
+            }
             MOTION_NOTIFY => xproto::MotionNotifyEvent::try_parse(data)
                 .ok()
                 .map(|(event, _)| CoreEvent {

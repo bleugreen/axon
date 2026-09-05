@@ -287,7 +287,11 @@ impl ModifierState {
 /// does, and letters are what a recording is made of.
 pub fn keysym_level(modifiers: ModifierState) -> usize {
     let shifted = usize::from(modifiers.shift != modifiers.lock);
-    if modifiers.level3 { 2 + shifted } else { shifted }
+    if modifiers.level3 {
+        2 + shifted
+    } else {
+        shifted
+    }
 }
 
 /// Whether a keysym is a modifier, which is context for the keystroke that follows rather than a
@@ -322,7 +326,7 @@ pub fn named_key(keysym: u32) -> Option<&'static str> {
         0xFF63 | 0xFF9E => "insert",
         0xFF50 | 0xFF95 => "home",
         0xFF57 | 0xFF9C => "end",
-        0xFF55 | 0xFF9A => "pageup", // Prior
+        0xFF55 | 0xFF9A => "pageup",   // Prior
         0xFF56 | 0xFF9B => "pagedown", // Next
         0xFF52 | 0xFF97 => "up",
         0xFF54 | 0xFF99 => "down",
@@ -685,7 +689,11 @@ mod tests {
         assert_eq!(keysym_text(0xFFB7).as_deref(), Some("7"), "KP_7");
         assert_eq!(keysym_text(0xFFAB).as_deref(), Some("+"), "KP_Add");
         assert_eq!(keysym_text(0xFF0D), None, "Return types no text");
-        assert_eq!(keysym_text(0x0100_0009), None, "a control character is not typed text");
+        assert_eq!(
+            keysym_text(0x0100_0009),
+            None,
+            "a control character is not typed text"
+        );
     }
 
     #[test]
@@ -696,7 +704,10 @@ mod tests {
         };
         assert_eq!(keysym_level(lock), 1);
         assert_eq!(
-            keysym_level(ModifierState { shift: true, ..lock }),
+            keysym_level(ModifierState {
+                shift: true,
+                ..lock
+            }),
             0,
             "shift while caps lock is on types lower case"
         );
@@ -828,7 +839,11 @@ mod tests {
             "expired but not yet swept, which is why matching checks the deadline too"
         );
         ledger.expect_at(KEY_PRESS, 39, injected + EXPECTATION_LIFETIME);
-        assert_eq!(ledger.outstanding(), 1, "the sweep runs on the next injection");
+        assert_eq!(
+            ledger.outstanding(),
+            1,
+            "the sweep runs on the next injection"
+        );
     }
 
     /// What the listener makes of a stream, in the cases a real desktop would only produce by
