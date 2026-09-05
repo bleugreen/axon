@@ -768,7 +768,7 @@ impl X11Session {
     /// The cost of that choice is that a layout switched *during* a recording is not noticed, which
     /// is worth stating because it is a real thing a user can do and the recording would transcribe
     /// the rest of the session against the layout it started with.
-    pub fn keyboard(&self) -> Result<Keyboard, BackendError> {
+    pub fn keyboard_layout(&self) -> Result<Keyboard, BackendError> {
         let mapping = self.keyboard_mapping()?;
         let masks = self.modifier_mapping()?.masks(&mapping);
         Ok(Keyboard { mapping, masks })

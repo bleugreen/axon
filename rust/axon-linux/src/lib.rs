@@ -49,6 +49,10 @@ pub use platform::{ACTIVATION_TIMEOUT, CHILD_NOT_PUBLISHED};
 /// a real X server without a desktop session.
 #[cfg(target_os = "linux")]
 pub mod x11;
+/// The RECORD half of global input observation: two connections to the X server, a listener thread
+/// that must keep reading, and the decode from recorded bytes into raw events.
+#[cfg(target_os = "linux")]
+pub mod xrecord;
 
 /// Tools this backend does not implement at all. These are not delivery decisions: the request
 /// names something the Linux daemon has no code path for, which stays a JSON-RPC error.
