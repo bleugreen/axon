@@ -1,0 +1,190 @@
+#!/usr/bin/env bash
+# Builds the axon-cmd npm tarball, asserts what it contains and claims, and proves that it installs
+# and imports as ESM in an empty consumer under both Node and Bun.
+#
+# Nothing here reaches a registry: the consumer installs the local tarball with --offline. The
+# manifest is derived from the tracked sources rather than transcribed, so a module that stops
+# being emitted, or a file that appears without being tracked, fails the check.
+#
+# With an output directory, the inspected tarball is left there. That is how the release publishes
+# the same bytes it inspected rather than repacking afterwards.
+#
+# Usage:
+#   scripts/check-sdk-ts-package               build in a temporary directory and check
+#   scripts/check-sdk-ts-package dist/sdk-ts   keep the checked tarball here
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+VERSION="$(./scripts/check-version)"
+PACKAGE_DIR="sdk/ts"
+TARBALL="axon-cmd-$VERSION.tgz"
+
+if [[ $# -gt 1 ]]; then
+  printf 'usage: %s [OUTPUT_DIR]\n' "$0" >&2
+  exit 2
+fi
+
+for tool in bun node npm; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    printf '%s is required to build and check the npm package\n' "$tool" >&2
+    exit 2
+  fi
+done
+
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/axon-cmd-ts.XXXXXX")"
+trap 'rm -rf "$WORK"' EXIT
+
+if [[ $# -eq 1 ]]; then
+  OUT="$(cd "$ROOT" && mkdir -p "$1" && cd "$1" && pwd)"
+  rm -f "$OUT/$TARBALL"
+else
+  OUT="$WORK/dist"
+  mkdir -p "$OUT"
+fi
+
+printf 'building axon-cmd %s\n' "$VERSION"
+(
+  cd "$PACKAGE_DIR"
+  bun install --frozen-lockfile > "$WORK/install.log" 2>&1 || { cat "$WORK/install.log" >&2; exit 1; }
+  # dist/ is not tracked, so a stale emit from a previous shape would otherwise be packed.
+  rm -rf dist
+  bun run build > "$WORK/build.log" 2>&1 || { cat "$WORK/build.log" >&2; exit 1; }
+  npm pack --pack-destination "$OUT" > "$WORK/pack.log" 2>&1 || { cat "$WORK/pack.log" >&2; exit 1; }
+)
+
+if [[ ! -f "$OUT/$TARBALL" ]]; then
+  printf 'pack did not produce %s\n' "$TARBALL" >&2
+  printf 'the tarball name encodes name and VERSION, so another name is drift\n' >&2
+  exit 1
+fi
+
+# One emitted module and one declaration per tracked source, plus the manifest and the README that
+# becomes the registry page. tsc emits nothing else, and `files` admits nothing else.
+git ls-files "$PACKAGE_DIR/src" \
+  | sed "s|^$PACKAGE_DIR/src/|package/dist/|; s|\\.ts$||" \
+  | while read -r stem; do printf '%s.js\n%s.d.ts\n' "$stem" "$stem"; done \
+  | { cat; printf 'package/README.md\npackage/package.json\n'; } \
+  | sort > "$WORK/tarball.expected"
+tar -tzf "$OUT/$TARBALL" | sed 's|/$||' | sort > "$WORK/tarball.actual"
+if ! diff -u "$WORK/tarball.expected" "$WORK/tarball.actual" > "$WORK/tarball.diff"; then
+  printf 'unexpected contents in %s (-expected +actual):\n' "$TARBALL" >&2
+  cat "$WORK/tarball.diff" >&2
+  exit 1
+fi
+printf '%s: %s files\n' "$TARBALL" "$(wc -l < "$WORK/tarball.actual" | tr -d ' ')"
+
+# What the registry will display, and what npm's trusted publishing and provenance both read.
+tar -xzOf "$OUT/$TARBALL" package/package.json > "$WORK/packed.json"
+node - "$WORK/packed.json" "$VERSION" <<'NODE'
+import { readFileSync } from "node:fs";
+
+const [, , manifestPath, version] = process.argv;
+const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+const failures = [];
+const require_ = (path, expected) => {
+  const actual = path.split(".").reduce((value, key) => value?.[key], manifest);
+  if (actual !== expected) failures.push(`${path} is ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)}`);
+};
+
+require_("name", "axon-cmd");
+require_("version", version);
+require_("license", "MIT");
+require_("type", "module");
+require_("types", "./dist/index.d.ts");
+require_("exports..types", "./dist/index.d.ts");
+require_("exports..import", "./dist/index.js");
+require_("engines.node", ">=20");
+require_("publishConfig.access", "public");
+require_("publishConfig.provenance", true);
+
+// npm validates a trusted publish, and mints provenance, against this exact string. A mismatch is
+// refused at publish time, which is the worst moment to discover it.
+require_("repository.url", "git+https://github.com/bleugreen/axon.git");
+if (!manifest.bugs?.url) failures.push("bugs.url is missing");
+if (!manifest.homepage) failures.push("homepage is missing");
+if (!manifest.description) failures.push("description is missing");
+
+const runtime = Object.keys(manifest.dependencies ?? {});
+if (runtime.length > 0) failures.push(`unexpected runtime dependencies: ${runtime.join(", ")}`);
+// devDependencies are stripped from what a consumer installs, but a peer or optional dependency is
+// not, and would arrive uninspected.
+for (const field of ["peerDependencies", "optionalDependencies", "bundledDependencies"]) {
+  if (manifest[field]) failures.push(`${field} would reach consumers`);
+}
+
+if (failures.length > 0) {
+  for (const failure of failures) console.error(`manifest: ${failure}`);
+  process.exit(1);
+}
+console.log(`manifest: ${manifest.name} ${manifest.version}, no runtime dependencies`);
+NODE
+
+# An empty consumer, the tarball, and nothing else. --offline is what makes this a check of the
+# artifact rather than of the network.
+CONSUMER="$WORK/consumer"
+mkdir -p "$CONSUMER"
+cp "$OUT/$TARBALL" "$CONSUMER/"
+cat > "$CONSUMER/package.json" <<'JSON'
+{ "name": "axon-cmd-consumer", "version": "0.0.0", "private": true, "type": "module" }
+JSON
+cat > "$CONSUMER/import.mjs" <<'JAVASCRIPT'
+import { Axon, SocketTransport, schemaProductVersion, availability } from "axon-cmd";
+
+const runtime = process.argv[2];
+const expected = process.argv[3];
+if (schemaProductVersion !== expected) {
+  console.error(`${runtime}: the generated client states ${schemaProductVersion}, expected ${expected}`);
+  process.exit(1);
+}
+if (typeof Axon?.connect !== "function" || typeof SocketTransport !== "function") {
+  console.error(`${runtime}: the package did not export a usable client`);
+  process.exit(1);
+}
+console.log(`${runtime}: import { Axon } from "axon-cmd" -> ${Object.keys(availability).length} tools`);
+JAVASCRIPT
+
+(
+  cd "$CONSUMER"
+  npm install --offline --no-audit --no-fund --ignore-scripts "./$TARBALL" > "$WORK/consumer.log" 2>&1 || {
+    cat "$WORK/consumer.log" >&2
+    exit 1
+  }
+  # Both runtimes the package claims. They resolve ESM and package `exports` independently, so one
+  # passing says nothing about the other.
+  node import.mjs node "$VERSION"
+  bun import.mjs bun "$VERSION"
+)
+
+# The declarations are the package's typed surface; shipping them unresolvable is a silent loss.
+cat > "$CONSUMER/consume.ts" <<'TYPESCRIPT'
+import { Axon, type KeyboardParams } from "axon-cmd";
+
+export const key: KeyboardParams = { app: "Safari", key: "cmd+s" };
+export const connect = (): Promise<Axon> => Axon.connect();
+TYPESCRIPT
+cat > "$CONSUMER/tsconfig.json" <<'JSON'
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": []
+  },
+  "include": ["consume.ts"]
+}
+JSON
+(
+  cd "$CONSUMER"
+  "$ROOT/$PACKAGE_DIR/node_modules/.bin/tsc" -p tsconfig.json
+  echo "types: a TypeScript consumer resolves axon-cmd through its declarations"
+)
+
+printf 'axon-cmd %s: tarball inspected, installs and imports clean under Node and Bun\n' "$VERSION"
+if [[ $# -eq 1 ]]; then
+  printf '%s\n' "$OUT/$TARBALL"
+fi
