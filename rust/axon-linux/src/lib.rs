@@ -18,15 +18,15 @@ use std::{
 
 pub mod keys;
 pub mod lifecycle;
-/// The pure half of global input observation: how an X11 core event becomes a recorded keystroke
-/// or pointer event, and how this daemon's own synthetic input is kept out of the recording. No X
-/// server and no accessibility bus, so the hosted suite runs all of it on every platform.
-pub mod recording;
 #[cfg(target_os = "linux")]
 mod ocr;
 /// The measured table of which toolkits act on background, window-targeted input. Pure, and public
 /// so its entries can be read next to the fixtures they cite.
 pub mod pixel;
+/// The pure half of global input observation: how an X11 core event becomes a recorded keystroke
+/// or pointer event, and how this daemon's own synthetic input is kept out of the recording. No X
+/// server and no accessibility bus, so the hosted suite runs all of it on every platform.
+pub mod recording;
 /// The daemon's local socket transport, in the library so its resilience to hostile clients is
 /// testable without a desktop or an AT-SPI bus.
 #[cfg(unix)]

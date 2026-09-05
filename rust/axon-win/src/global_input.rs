@@ -348,11 +348,13 @@ fn enrich(
                 layout_text(virtual_key, scan_code, state)
             })?;
             let context = key_context(commands)?;
-            scope.accepts(&context.app).then_some(RecordedInputEvent::KeyDown {
-                app: context.app,
-                keystroke,
-                timestamp_ms,
-            })
+            scope
+                .accepts(&context.app)
+                .then_some(RecordedInputEvent::KeyDown {
+                    app: context.app,
+                    keystroke,
+                    timestamp_ms,
+                })
         }
         RawInput::Button { down, point } => {
             let evidence = point_evidence(commands, point)?;

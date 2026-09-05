@@ -2087,7 +2087,10 @@ impl Actor {
         .ok()?;
         let component = timeout(
             "component interface",
-            timeout("interfaces", proxy.proxies()).await.ok()?.component(),
+            timeout("interfaces", proxy.proxies())
+                .await
+                .ok()?
+                .component(),
         )
         .await
         .ok()?;
@@ -2123,7 +2126,9 @@ impl Actor {
         else {
             return evidence;
         };
-        evidence.role = timeout("role", proxy.get_role_name()).await.unwrap_or_default();
+        evidence.role = timeout("role", proxy.get_role_name())
+            .await
+            .unwrap_or_default();
         // `title` and not `label`, because that is where `node` puts an AT-SPI name when it builds
         // the snapshot this evidence will be matched against, and `node_matches` compares the two
         // field by field. Splitting the one name AT-SPI publishes across both would match nothing.
@@ -2243,7 +2248,10 @@ impl Actor {
         .ok()?;
         let component = timeout(
             "component interface",
-            timeout("interfaces", proxy.proxies()).await.ok()?.component(),
+            timeout("interfaces", proxy.proxies())
+                .await
+                .ok()?
+                .component(),
         )
         .await
         .ok()?;
@@ -2257,9 +2265,10 @@ impl Actor {
         if answered.is_some() {
             return answered;
         }
-        let (origin_x, origin_y, _, _) = timeout("extents", component.get_extents(CoordType::Screen))
-            .await
-            .ok()?;
+        let (origin_x, origin_y, _, _) =
+            timeout("extents", component.get_extents(CoordType::Screen))
+                .await
+                .ok()?;
         timeout(
             "point lookup",
             component.get_accessible_at_point(x - origin_x, y - origin_y, CoordType::Window),
@@ -2340,7 +2349,9 @@ impl Actor {
         // evidence record carrying only its application and point still authors as a point target,
         // which is what shared core falls back to anyway when no candidate resolves.
         Ok(Some(RecordedTargetEvidence {
-            candidates: self.ancestry_evidence(&chain, window_title.as_deref()).await,
+            candidates: self
+                .ancestry_evidence(&chain, window_title.as_deref())
+                .await,
             app,
             point: RecordedPoint {
                 x: point.0,
@@ -2364,7 +2375,9 @@ impl Actor {
             Some(frame) => self.name_of(frame).await,
             None => None,
         };
-        let candidates = self.ancestry_evidence(&chain, window_title.as_deref()).await;
+        let candidates = self
+            .ancestry_evidence(&chain, window_title.as_deref())
+            .await;
         Ok(Some(RecordedFocusedEvidence {
             value: candidates.first().and_then(|nearest| nearest.value.clone()),
             target: RecordedTargetEvidence {
