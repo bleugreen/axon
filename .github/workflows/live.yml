@@ -667,6 +667,39 @@ jobs:
           done
           echo 'Linux under Wayland withheld the foreground rung at both policies'
 
+          # Observation is a different refusal from delivery and has to be exercised as one. This
+          # session is the only place the project can prove it: XWayland answers as a complete X
+          # server and does provide RECORD, so a backend that checked the extension alone would
+          # start a recording here and capture a desktop that looks empty while the user works.
+          # It is also the reason this row exists at all -- there is no listen-only global input
+          # protocol on Wayland to fall back to, by design rather than by omission.
+          started="$(jq -cn '{"jsonrpc":"2.0","id":1,"method":"recording.start","params":{"scope":{"scope":"allApplications"}}}' | "$daemon" serve-once 2>/dev/null || true)"
+          if [ -z "$started" ]; then
+            # `recording.*` is a socket method rather than an MCP tool, so it is asked for over the
+            # socket the daemon is already serving.
+            started="$(../scripts/axon-socket-request "$daemon" '{"jsonrpc":"2.0","id":1,"method":"recording.start","params":{"scope":{"scope":"allApplications"}}}')"
+          fi
+          printf '%s\n' "$started"
+          # A transport error, not an action result: the capability is absent rather than declined.
+          printf '%s' "$started" | jq -e '.error.code == -32004' >/dev/null
+          printf '%s' "$started" | jq -e '.error.data.kind == "capability-unavailable"' >/dev/null
+          printf '%s' "$started" | jq -e '.error.data.capability == "observeGlobalInput"' >/dev/null
+          # The specific code, not merely "unavailable". A caller has to be able to tell this
+          # session -- where the answer is permanent -- from an X server started without RECORD.
+          printf '%s' "$started" | jq -e '.error.data.code == "wayland-restricted"' >/dev/null
+          printf '%s' "$started" | jq -e '.error.data.reason | test("listen-only")' >/dev/null
+
+          # A refused start must leave no session behind to abandon.
+          status="$(../scripts/axon-socket-request "$daemon" '{"jsonrpc":"2.0","id":2,"method":"recording.status","params":{}}')"
+          printf '%s' "$status" | jq -e '.result.recording == false' >/dev/null
+
+          # And the same fact in the published health document, so the census, the refusal, and the
+          # session's own report cannot drift apart.
+          health="$("$daemon" status --json)"
+          printf '%s' "$health" | jq -e '.capabilities[] | select(.capability == "observeGlobalInput") | .usable == false and .reason == "wayland-restricted"' >/dev/null
+          printf '%s' "$health" | jq -e '.capabilities[] | select(.capability == "hitTest") | .usable == false and .reason == "wayland-restricted"' >/dev/null
+          echo 'Linux under Wayland refused recording.start with a typed capability reason'
+
       # The lifecycle and the published status document, exercised against a real logged-in GNOME
       # session. The desktop's own registration was parked at the top of the job, so `daemon
       # install` registers this build and nothing else, and the restore step below unregisters it
