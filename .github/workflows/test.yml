@@ -36,7 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # VERSION is the release source and the Swift and Rust literals are derived copies. Nothing
+      # VERSION is the release source and compiled/package literals are derived copies. Nothing
       # else notices when they drift, and the drift only becomes visible at release time.
       - name: Check version agreement
         run: ./scripts/check-version

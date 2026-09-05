@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Verifies that every place Axon states its version agrees with the checked-in VERSION file.
 #
-# VERSION is the single release source. Swift and Rust each need the version as a
-# compile-time literal, so those literals are derived copies that drift silently
-# unless something checks them. This is that something.
+# VERSION is the single release source. Swift, Rust, and the published SDK packages
+# each need the version as a literal, so those literals are derived copies that drift
+# silently unless something checks them. This is that something.
 #
 # Usage:
 #   scripts/check-version               verify agreement, exit 1 on drift
@@ -32,6 +32,8 @@ fi
 
 SWIFT_VERSION_FILE="Sources/AxonCore/AxonVersion.swift"
 CARGO_WORKSPACE_FILE="rust/Cargo.toml"
+TYPESCRIPT_PACKAGE_FILE="sdk/ts/package.json"
+PYTHON_PACKAGE_FILE="sdk/python/pyproject.toml"
 
 read_swift_version() {
   sed -n 's/.*public static let current = "\([^"]*\)".*/\1/p' "$SWIFT_VERSION_FILE"
@@ -43,12 +45,28 @@ read_cargo_version() {
        in_section && /^version = / { gsub(/(version = |")/, ""); print; exit }' "$CARGO_WORKSPACE_FILE"
 }
 
+read_typescript_package_version() {
+  sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TYPESCRIPT_PACKAGE_FILE"
+}
+
+read_python_package_version() {
+  awk '/^\[project\]/ { in_section = 1; next }
+       /^\[/ { in_section = 0 }
+       in_section && /^version = / { gsub(/(version = |")/, ""); print; exit }' "$PYTHON_PACKAGE_FILE"
+}
+
 if [[ "$WRITE" == "1" ]]; then
   /usr/bin/sed -i.bak "s/public static let current = \"[^\"]*\"/public static let current = \"$VERSION\"/" "$SWIFT_VERSION_FILE"
   rm -f "$SWIFT_VERSION_FILE.bak"
   /usr/bin/sed -i.bak "/^\[workspace\.package\]/,/^\[/ s/^version = \".*\"/version = \"$VERSION\"/" "$CARGO_WORKSPACE_FILE"
   rm -f "$CARGO_WORKSPACE_FILE.bak"
-  printf 'wrote version %s into %s and %s\n' "$VERSION" "$SWIFT_VERSION_FILE" "$CARGO_WORKSPACE_FILE"
+  /usr/bin/sed -i.bak "s/^\([[:space:]]*\"version\"[[:space:]]*:[[:space:]]*\)\"[^\"]*\"/\1\"$VERSION\"/" "$TYPESCRIPT_PACKAGE_FILE"
+  rm -f "$TYPESCRIPT_PACKAGE_FILE.bak"
+  /usr/bin/sed -i.bak "/^\[project\]/,/^\[/ s/^version = \".*\"/version = \"$VERSION\"/" "$PYTHON_PACKAGE_FILE"
+  rm -f "$PYTHON_PACKAGE_FILE.bak"
+  printf 'wrote version %s into %s, %s, %s, and %s\n' \
+    "$VERSION" "$SWIFT_VERSION_FILE" "$CARGO_WORKSPACE_FILE" \
+    "$TYPESCRIPT_PACKAGE_FILE" "$PYTHON_PACKAGE_FILE"
 fi
 
 failures=0
@@ -62,6 +80,8 @@ check() {
 
 check "$SWIFT_VERSION_FILE" "$(read_swift_version)"
 check "$CARGO_WORKSPACE_FILE [workspace.package]" "$(read_cargo_version)"
+check "$TYPESCRIPT_PACKAGE_FILE" "$(read_typescript_package_version)"
+check "$PYTHON_PACKAGE_FILE [project]" "$(read_python_package_version)"
 
 # Every product crate must inherit the workspace version rather than pinning its own.
 for crate in axon-core axon-win axon-linux; do
