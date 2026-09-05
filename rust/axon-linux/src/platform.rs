@@ -7,6 +7,9 @@ use crate::{
     screencast::{CaptureError, INTERACTIVE_TIMEOUT, ScreenCapture, ScreenCastActor},
     x11::{X11Session, coordinate},
 };
+
+#[path = "global_input.rs"]
+mod global_input;
 use atspi::{
     CoordType, ObjectRefOwned, State,
     proxy::{
@@ -23,8 +26,11 @@ use atspi::{
 };
 use axon_core::{
     AppQuery, Application, BackendError, Capability, CapabilityInfo, CaptureBounds,
-    ChildPageCapture, ChildPageRequest, KeyboardIntent, Node, Observation, PlatformBackend, Rect,
-    Screenshot, Snapshot, SnapshotHandle, Window,
+    ChildPageCapture, ChildPageRequest, GlobalInputObserver, KeyboardIntent, Node, Observation,
+    ObserverQuiescence, PlatformBackend, RecordedAppIdentity, RecordedElementEvidence,
+    RecordedFocusedEvidence, RecordedInputEvent, RecordedPoint, RecordedSettleEvidence,
+    RecordedTargetEvidence, RecordingEvidenceProvider, RecordingScope, Rect, Screenshot, Snapshot,
+    SnapshotHandle, Window, reason,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -91,6 +97,26 @@ const NO_WINDOW_MANAGER: &str = "this X11 session has no EWMH-capable window man
      foreground application can be neither read nor activated";
 const NO_XTEST: &str = "this X server does not provide the XTEST extension, so there is no way to \
      post synthetic input to it";
+const NO_RECORD: &str = "this X server does not provide the RECORD extension, so there is no way \
+     to observe input this daemon did not send";
+const WAYLAND_OBSERVATION: &str = "this is a Wayland session: the compositor delivers input only \
+     to the surface it is aimed at, and there is no listen-only global input protocol to ask it \
+     for the rest -- by design rather than by omission";
+
+/// How far out from a recorded event this backend looks for something worth naming.
+///
+/// Much shallower than a capture walk, and deliberately so: this runs once per pointer event, at
+/// event time, against providers answering across D-Bus at up to [`CALL_TIMEOUT`] each. Shared core
+/// only needs the actionable ancestry near the hit; it re-resolves whatever it is given against a
+/// full snapshot afterwards.
+const RECORDED_ANCESTRY: usize = 6;
+
+/// How far a descent through the accessibility tree towards a point may go.
+///
+/// `GetAccessibleAtPoint` answers with a direct child rather than the deepest hit, so reaching a
+/// leaf means asking repeatedly. A provider that answers with itself, or with a cycle, would
+/// otherwise loop here at event time.
+const MAX_POINT_DESCENT: usize = MAX_DEPTH;
 
 type Reply<T> = mpsc::Sender<Result<T, BackendError>>;
 enum Command {
@@ -105,6 +131,23 @@ enum Command {
     Set(SnapshotHandle, String, Reply<()>),
     Focus(SnapshotHandle, Reply<()>),
     Toolkit(String, Reply<Option<pixel::Toolkit>>),
+    /// Recording evidence: what the interface looked like at one screen point.
+    ///
+    /// Answered on this actor rather than on an accessibility-bus connection of the observer's
+    /// own, because one native worker per process is the discipline this crate is built on. The
+    /// observer holds a clone of this channel and asks at event time, which is the only time the
+    /// answer is true.
+    ///
+    /// The process comes with the point because AT-SPI cannot supply it: the bus exposes no
+    /// stacking order, so choosing between two applications whose windows both cover a point would
+    /// be a guess here. X11 answers it as a fact, and the observer asks X11 first.
+    PointEvidence(u32, (f64, f64), Reply<Option<RecordedTargetEvidence>>),
+    /// Recording evidence: the focused element and the complete value `setValue` authoring needs.
+    FocusedEvidence(u32, Reply<Option<RecordedFocusedEvidence>>),
+    /// Recording evidence: the application a process owns, named as `enumerate` names it.
+    RecordedIdentity(u32, Reply<Option<RecordedAppIdentity>>),
+    /// The deepest element at a screen point, for `hitTest`.
+    Hit(u32, (f64, f64), Reply<Option<Node>>),
     Extents(SnapshotHandle, Reply<Option<Rect>>),
 }
 
@@ -236,6 +279,7 @@ struct SessionFacts {
     window_manager: bool,
     screenshot_windows: bool,
     xtest: bool,
+    record: bool,
 }
 
 /// Why global input cannot be delivered in this session, or `None` when it can.
@@ -266,6 +310,53 @@ fn input_restriction(facts: SessionFacts) -> Option<&'static str> {
     None
 }
 
+/// Why this session cannot observe global input, or `None` when it can.
+///
+/// Pure, and separated from the probing, for the same reason [`input_restriction`] is: a server
+/// without RECORD is something no ordinary desktop and no CI lane produces by accident, and the
+/// decision has to be tested somewhere it can be arranged.
+///
+/// Wayland outranks everything, and it is not redundant with the rest. Mutter under Wayland runs
+/// XWayland, which answers as a complete X server and does provide RECORD -- and records only what
+/// reaches XWayland's own clients. A Wayland-native application's input never appears there at all,
+/// so an observer that trusted the extension check would record a session that looks empty while
+/// the user works.
+///
+/// A window manager is deliberately *not* required. Without one a recording still captures
+/// keystrokes and clicks; what it loses is the ability to name the application under a point, which
+/// costs the click its semantic target and not the recording its existence.
+fn observation_restriction(facts: SessionFacts) -> Option<(&'static str, &'static str)> {
+    if facts.wayland {
+        return Some((reason::WAYLAND_RESTRICTED, WAYLAND_OBSERVATION));
+    }
+    if !facts.x_display {
+        return Some((reason::NO_X_DISPLAY, NO_X_DISPLAY));
+    }
+    if !facts.record {
+        return Some((reason::NO_RECORD_EXTENSION, NO_RECORD));
+    }
+    None
+}
+
+/// Why a screen point cannot be resolved to an element, or `None` when it can.
+///
+/// Not the same question as synthetic input, and the difference is XTEST: naming what is under a
+/// point reads the window tree and needs nothing to post with. A session that can see but not type
+/// is a real session, and reusing [`input_restriction`] here would refuse a hit test on it for a
+/// reason that is about something else.
+///
+/// No window manager is required either. The process is read from the client's own `_NET_WM_PID`,
+/// which an application sets on itself, rather than from the manager's `_NET_CLIENT_LIST`.
+fn point_lookup_restriction(facts: SessionFacts) -> Option<(&'static str, &'static str)> {
+    if facts.wayland {
+        return Some((reason::WAYLAND_RESTRICTED, WAYLAND_SESSION));
+    }
+    if !facts.x_display {
+        return Some((reason::NO_X_DISPLAY, NO_X_DISPLAY));
+    }
+    None
+}
+
 /// Why an application window cannot be located and captured in this session.
 fn screenshot_provider_kind(facts: SessionFacts) -> ScreenshotProviderKind {
     if facts.wayland {
@@ -291,6 +382,7 @@ fn session_facts() -> SessionFacts {
             .as_ref()
             .is_some_and(X11Session::supports_screenshot_capture),
         xtest: x11.as_ref().is_some_and(X11Session::supports_xtest),
+        record: x11.as_ref().is_some_and(X11Session::supports_record),
     }
 }
 
@@ -331,13 +423,57 @@ fn screenshot_provider(facts: SessionFacts) -> ScreenshotProvider {
 }
 
 pub struct LinuxBackend {
+    /// The recording seam. Held for the process's lifetime rather than built per session, because
+    /// it owns a clone of the AT-SPI actor's command channel and that channel is what lets it read
+    /// evidence at event time without opening a second accessibility-bus connection.
+    ///
+    /// Declared before `tx`, and that ordering is the whole reason it is an `Option`: fields drop
+    /// in declaration order, so this releases its threads and its clone of the channel while the
+    /// actor is still there to answer, rather than after the channel has closed underneath it.
+    global_input: Option<global_input::LinuxGlobalInputObserver>,
     tx: mpsc::Sender<Command>,
     input: InputSession,
     screenshot: ScreenshotProvider,
     screen_capture: Option<ScreenCaptureProvider>,
+    /// A connection kept for asking the X server about the session rather than acting on it: what
+    /// process owns what is under a point.
+    ///
+    /// Its own connection because its availability is its own question. A session can answer that
+    /// and still refuse synthetic input, so borrowing the delivery provider's connection would
+    /// refuse a hit test for a reason that has nothing to do with hit testing.
+    lookup: Option<Box<X11Session>>,
+    /// Why this session cannot observe global input, or `None` when it can. Decided once from the
+    /// same facts every other provider is chosen from, so the capability census, the preflight,
+    /// and a `recording.start` that reached the observer cannot disagree.
+    observation: Option<(&'static str, &'static str)>,
+    /// Why a screen point cannot be resolved to an element, or `None` when it can.
+    point_lookup: Option<(&'static str, &'static str)>,
     /// AT-SPI identity to process id, read on demand and refreshed when stale or missed.
     identities: Vec<AppIdentity>,
     identities_read: Option<Instant>,
+}
+
+/// The typed refusal a caller is owed when this session cannot observe global input.
+///
+/// A `CapabilityReason` rather than a bare `Capability`, so the specific reason survives to the
+/// wire as `data.code`: a caller that only learned "unavailable" could not tell a Wayland session,
+/// where the answer is permanent, from an X server started without RECORD, where it is an option.
+fn observation_refusal(code: &'static str, reason: &'static str) -> BackendError {
+    BackendError::CapabilityReason {
+        capability: Capability::ObserveGlobalInput,
+        code,
+        reason: reason.into(),
+        diagnostic: None,
+    }
+}
+
+fn point_lookup_refusal(code: &'static str, reason: &'static str) -> BackendError {
+    BackendError::CapabilityReason {
+        capability: Capability::HitTest,
+        code,
+        reason: reason.into(),
+        diagnostic: None,
+    }
 }
 
 impl LinuxBackend {
@@ -374,7 +510,16 @@ impl LinuxBackend {
         // Missing desktop mechanisms are ordinary states: semantic capture runs on AT-SPI alone.
         // Probe once so input and screenshot provider selection cannot disagree about the session.
         let facts = session_facts();
+        let point_lookup = point_lookup_restriction(facts);
         Ok(Self {
+            global_input: Some(global_input::LinuxGlobalInputObserver::new(tx.clone())),
+            lookup: point_lookup
+                .is_none()
+                .then(X11Session::connect)
+                .flatten()
+                .map(Box::new),
+            observation: observation_restriction(facts),
+            point_lookup,
             tx,
             input: input_session(facts),
             screenshot: screenshot_provider(facts),
@@ -439,6 +584,24 @@ impl LinuxBackend {
         }
     }
 
+    fn observer(&mut self) -> &mut global_input::LinuxGlobalInputObserver {
+        self.global_input
+            .as_mut()
+            .expect("the global input observer lives as long as the backend")
+    }
+
+    /// Which process owns whatever is under a screen point, or the reason this session cannot say.
+    pub(crate) fn process_at(&self, point: (f64, f64)) -> Result<Option<u32>, BackendError> {
+        if let Some((code, reason)) = self.point_lookup {
+            return Err(point_lookup_refusal(code, reason));
+        }
+        let session = self
+            .lookup
+            .as_ref()
+            .ok_or_else(|| point_lookup_refusal(reason::NO_X_DISPLAY, NO_X_DISPLAY))?;
+        session.process_at((coordinate(point.0), coordinate(point.1)))
+    }
+
     fn read_identities(&mut self) -> Result<(), BackendError> {
         self.identities = self.ask(Command::Identities)?;
         self.identities_read = Some(Instant::now());
@@ -481,24 +644,30 @@ impl PlatformBackend for LinuxBackend {
             Capability::Focus,
             Capability::SerializeHistory,
         ];
-        let unavailable = [
-            (
-                Capability::ObserveChanges,
-                "AT-SPI event observation is not implemented",
-            ),
-            (
-                Capability::Scroll,
-                "AT-SPI has no portable delta-scroll operation",
-            ),
-            (
-                Capability::HitTest,
-                "AT-SPI point lookup is not implemented",
-            ),
-            (
-                Capability::ObserveGlobalInput,
-                "global input observation is not implemented",
-            ),
-        ];
+        let unavailable = [(
+            Capability::ObserveChanges,
+            "AT-SPI event observation is not implemented",
+        )];
+        // Scroll is refused for a reason about this backend rather than about the session, so it
+        // sits apart from both groups: nothing a machine could be reconfigured to do would make it
+        // available.
+        let scroll = CapabilityInfo {
+            capability: Capability::Scroll,
+            usable: false,
+            restriction: Some("AT-SPI has no portable delta-scroll operation".into()),
+        };
+        // These two are facts about the running session, like synthetic input below, and each is
+        // asked separately because they are separate questions: observing input needs RECORD,
+        // naming what is under a point needs a display, and neither needs the other.
+        let session_dependent = [
+            (Capability::ObserveGlobalInput, self.observation),
+            (Capability::HitTest, self.point_lookup),
+        ]
+        .map(|(capability, restriction)| CapabilityInfo {
+            capability,
+            usable: restriction.is_none(),
+            restriction: restriction.map(|(_, reason)| reason.to_string()),
+        });
         // Synthetic input is the one pair whose availability is a fact about the running session
         // rather than about this build, and the same answer decides both the health document and
         // the dispatch ladder.
@@ -528,7 +697,8 @@ impl PlatformBackend for LinuxBackend {
                     }),
             )
             .chain(input)
-            .chain([screenshot])
+            .chain(session_dependent)
+            .chain([scroll, screenshot])
             .collect())
     }
     fn enumerate_applications(&self) -> Result<Vec<Application>, BackendError> {
@@ -629,8 +799,17 @@ impl PlatformBackend for LinuxBackend {
             ScreenshotProvider::Unavailable(_) => unreachable!(),
         }
     }
-    fn hit_test(&mut self, _: (f64, f64)) -> Result<Option<Node>, BackendError> {
-        Err(capability(Capability::HitTest, "not implemented"))
+    fn global_input_observer(&mut self) -> Result<&mut dyn GlobalInputObserver, BackendError> {
+        match self.observation {
+            Some((code, reason)) => Err(observation_refusal(code, reason)),
+            None => Ok(self),
+        }
+    }
+    fn hit_test(&mut self, point: (f64, f64)) -> Result<Option<Node>, BackendError> {
+        let Some(pid) = self.process_at(point)? else {
+            return Ok(None);
+        };
+        self.ask(|r| Command::Hit(pid, point, r))
     }
     fn supports_foreground_transaction(&self) -> bool {
         matches!(self.input, InputSession::Available(_))
@@ -679,6 +858,89 @@ impl PlatformBackend for LinuxBackend {
         Ok(true)
     }
 }
+impl GlobalInputObserver for LinuxBackend {
+    fn start(&mut self, scope: &RecordingScope) -> Result<(), BackendError> {
+        // Refused here as well as at the route's preflight, because shared core's
+        // `UserActionRecorder::start_with_redaction` calls this method directly and a session that
+        // cannot observe must not get as far as opening a recording it would have to abandon.
+        if let Some((code, reason)) = self.observation {
+            return Err(observation_refusal(code, reason));
+        }
+        // Read here, on the backend, because it already holds a connection to the display. The
+        // observer would otherwise open one of its own beside the two RECORD needs.
+        let keyboard = self
+            .lookup
+            .as_ref()
+            .ok_or_else(|| observation_refusal(reason::NO_X_DISPLAY, NO_X_DISPLAY))?
+            .keyboard_layout()?;
+        self.observer().start(scope, keyboard)
+    }
+
+    fn poll(&mut self, timeout: Duration) -> Result<Vec<RecordedInputEvent>, BackendError> {
+        self.observer().poll(timeout)
+    }
+
+    fn stop(&mut self) -> Result<(), BackendError> {
+        self.observer().stop()
+    }
+
+    fn is_recording(&self) -> bool {
+        self.global_input
+            .as_ref()
+            .is_some_and(global_input::LinuxGlobalInputObserver::is_recording)
+    }
+}
+
+impl ObserverQuiescence for LinuxBackend {
+    fn quiesce_global_input(&mut self) {
+        self.observer().quiesce();
+    }
+}
+
+/// How a recorded application is asked for again, when core needs a fresh capture of it.
+///
+/// The process id leads because it is the only identity that cannot go ambiguous mid-session, and
+/// `select` matches on it alone when it is present. The name follows for the case where no pid was
+/// read, and matches applications the way `look` matches them.
+fn recorded_app_query(app: &RecordedAppIdentity) -> AppQuery {
+    AppQuery {
+        process_id: app.process_id,
+        name: (!app.name.is_empty()).then(|| app.name.clone()),
+        identifier: None,
+    }
+}
+
+impl RecordingEvidenceProvider for LinuxBackend {
+    fn read_focused(&mut self) -> Result<Option<RecordedFocusedEvidence>, BackendError> {
+        let Some(pid) = self
+            .lookup
+            .as_ref()
+            .and_then(|session| session.active_window_pid().ok().flatten())
+        else {
+            return Ok(None);
+        };
+        self.ask(|r| Command::FocusedEvidence(pid, r))
+    }
+
+    fn capture_snapshot(
+        &mut self,
+        app: &RecordedAppIdentity,
+    ) -> Result<Option<Snapshot>, BackendError> {
+        // A capture that fails is not a recording that fails. By the time shared core resolves a
+        // click, the window it landed in may be gone -- a menu that closed, a dialog that was
+        // dismissed -- and `None` is the seam that says so: the action is kept and authored
+        // against its point rather than taking the whole session down with it.
+        Ok(PlatformBackend::capture(self, &recorded_app_query(app)).ok())
+    }
+
+    fn settle(&mut self, _: usize, _: &str) -> Result<RecordedSettleEvidence, BackendError> {
+        // A no-op, exactly as it is on macOS and Windows. Shared core calls this to preserve
+        // ordering around an appended group; inventing a per-platform settle observation is a
+        // separate decision from making a platform record at all, and this issue does not take it.
+        Ok(RecordedSettleEvidence::default())
+    }
+}
+
 impl PointerTargetVerifier for LinuxBackend {
     /// Whether the resolved element still reports a rectangle covering the point the caller is
     /// about to be clicked at.
@@ -1162,6 +1424,18 @@ impl Actor {
                 }
                 Command::Extents(h, r) => {
                     let _ = r.send(self.extents(&h).await);
+                }
+                Command::PointEvidence(pid, point, r) => {
+                    let _ = r.send(self.point_evidence(pid, point).await);
+                }
+                Command::FocusedEvidence(pid, r) => {
+                    let _ = r.send(self.focused_evidence(pid).await);
+                }
+                Command::RecordedIdentity(pid, r) => {
+                    let _ = r.send(self.recorded_identity(pid).await);
+                }
+                Command::Hit(pid, point, r) => {
+                    let _ = r.send(self.hit(pid, point).await);
                 }
             }
         }
@@ -1740,6 +2014,400 @@ impl Actor {
             Err(operation("focus", "provider rejected focus"))
         }
     }
+
+    // -- recording evidence and point lookup ---------------------------------------------------
+
+    /// The application a process owns, together with the identity a recording names it by.
+    ///
+    /// The name and not a bus address, because `UserActionRecorder::target` writes
+    /// `bundle_identifier.unwrap_or(name)` into the artifact's `app` field and replay resolves an
+    /// `AppQuery` against it. A recorded action has to call an application what `look` calls it;
+    /// axn/207 was exactly this divergence on macOS, where capture handed a resolver comparing
+    /// process ids a bundle identifier and every recording came back with nothing in it.
+    ///
+    /// `bundle_identifier` stays `None`, and that is a statement rather than an omission: this
+    /// backend has no durable application identity to put there. It spells one as an AT-SPI
+    /// identity, which is a unique bus name and a per-session object path, and names one by
+    /// whatever the toolkit publishes as the application name. Minting a third here would produce
+    /// artifacts that resolve against nothing else in the daemon.
+    async fn recorded_application(
+        &self,
+        pid: u32,
+    ) -> Result<Option<(ObjectRefOwned, RecordedAppIdentity)>, BackendError> {
+        let query = AppQuery {
+            process_id: Some(pid),
+            name: None,
+            identifier: None,
+        };
+        Ok(self.select(&query).await?.map(|(object, name)| {
+            let app = RecordedAppIdentity {
+                name,
+                bundle_identifier: None,
+                process_id: Some(pid),
+            };
+            (object, app)
+        }))
+    }
+
+    async fn recorded_identity(
+        &self,
+        pid: u32,
+    ) -> Result<Option<RecordedAppIdentity>, BackendError> {
+        Ok(self.recorded_application(pid).await?.map(|(_, app)| app))
+    }
+
+    async fn state_of(&self, object: &ObjectRefOwned) -> Option<atspi::StateSet> {
+        let proxy = timeout(
+            "accessible proxy",
+            object.as_accessible_proxy(&self.connection),
+        )
+        .await
+        .ok()?;
+        timeout("state", proxy.get_state()).await.ok()
+    }
+
+    async fn name_of(&self, object: &ObjectRefOwned) -> Option<String> {
+        let proxy = timeout(
+            "accessible proxy",
+            object.as_accessible_proxy(&self.connection),
+        )
+        .await
+        .ok()?;
+        timeout("name", proxy.name())
+            .await
+            .ok()
+            .filter(|name| !name.is_empty())
+    }
+
+    /// The centre of an element on screen, for the point a recording falls back to.
+    async fn centre_of(&self, object: &ObjectRefOwned) -> Option<RecordedPoint> {
+        let proxy = timeout(
+            "accessible proxy",
+            object.as_accessible_proxy(&self.connection),
+        )
+        .await
+        .ok()?;
+        let component = timeout(
+            "component interface",
+            timeout("interfaces", proxy.proxies())
+                .await
+                .ok()?
+                .component(),
+        )
+        .await
+        .ok()?;
+        let (x, y, width, height) = timeout("extents", component.get_extents(CoordType::Screen))
+            .await
+            .ok()?;
+        (width > 0 && height > 0).then(|| RecordedPoint {
+            x: f64::from(x) + f64::from(width) / 2.0,
+            y: f64::from(y) + f64::from(height) / 2.0,
+        })
+    }
+
+    /// One element, described in the portable terms a recording is made of.
+    ///
+    /// Native references never cross this boundary: everything here is a string a fresh capture of
+    /// the same interface could be matched against, which is what lets a recorded target be
+    /// re-resolved later against a tree this one knows nothing about.
+    async fn element_evidence(
+        &self,
+        object: &ObjectRefOwned,
+        window_title: Option<&str>,
+    ) -> RecordedElementEvidence {
+        let mut evidence = RecordedElementEvidence {
+            identifier: Some(identity(object)),
+            window_title: window_title.map(str::to_owned),
+            ..Default::default()
+        };
+        let Ok(proxy) = timeout(
+            "accessible proxy",
+            object.as_accessible_proxy(&self.connection),
+        )
+        .await
+        else {
+            return evidence;
+        };
+        evidence.role = timeout("role", proxy.get_role_name())
+            .await
+            .unwrap_or_default();
+        // `title` and not `label`, because that is where `node` puts an AT-SPI name when it builds
+        // the snapshot this evidence will be matched against, and `node_matches` compares the two
+        // field by field. Splitting the one name AT-SPI publishes across both would match nothing.
+        let name = timeout("name", proxy.name())
+            .await
+            .ok()
+            .filter(|name| !name.is_empty());
+        evidence.title = name;
+        evidence.description = timeout("description", proxy.description())
+            .await
+            .ok()
+            .filter(|description| !description.is_empty());
+        evidence.sensitive =
+            crate::recording::is_sensitive(&evidence.role, evidence.description.as_deref());
+        let Ok(proxies) = timeout("interfaces", proxy.proxies()).await else {
+            return evidence;
+        };
+        if let Ok(action) = timeout("action interface", proxies.action()).await {
+            evidence.actions = timeout("actions", action.get_actions())
+                .await
+                .map(|actions| actions.into_iter().map(|action| action.name).collect())
+                .unwrap_or_default();
+        }
+        // Read only after the element has been classified, and skipped entirely when it is
+        // sensitive. The rule the observer sensitivity contract states is that a credential is
+        // never *read*, not that it is read and then dropped -- see `axon_core::evidence_value`,
+        // which states the same rule where the read is synchronous.
+        if !evidence.sensitive
+            && let Ok(text) = timeout("text interface", proxies.text()).await
+        {
+            evidence.value = timeout("text", text.get_text(0, -1)).await.ok();
+        }
+        evidence
+    }
+
+    /// The ancestry a recording carries, nearest first, capped at [`RECORDED_ANCESTRY`].
+    async fn ancestry_evidence(
+        &self,
+        chain: &[ObjectRefOwned],
+        window_title: Option<&str>,
+    ) -> Vec<RecordedElementEvidence> {
+        let mut candidates = Vec::new();
+        for object in chain.iter().rev().take(RECORDED_ANCESTRY) {
+            candidates.push(self.element_evidence(object, window_title).await);
+        }
+        candidates
+    }
+
+    /// The application's top-level windows, the one that says it is active first.
+    ///
+    /// Ordering rather than filtering: an application whose provider sets `STATE_ACTIVE` on nothing
+    /// still has windows worth looking in, and a search that insisted on the state would find
+    /// nothing at all there.
+    async fn frames(&self, root: &ObjectRefOwned) -> Vec<ObjectRefOwned> {
+        let (frames, _) = published(self.children(root).await.unwrap_or_default());
+        let mut ordered: Vec<ObjectRefOwned> = Vec::with_capacity(frames.len());
+        for frame in frames {
+            let active = self
+                .state_of(&frame)
+                .await
+                .is_some_and(|state| state.contains(State::Active));
+            if active {
+                ordered.insert(0, frame);
+            } else {
+                ordered.push(frame);
+            }
+        }
+        ordered
+    }
+
+    /// The chain from a top-level window down to the deepest element at a screen point.
+    ///
+    /// Window first and leaf last, because shared core resolves the nearest *actionable* ancestor
+    /// and needs what is above the leaf to do it.
+    ///
+    /// `GetAccessibleAtPoint` answers with a direct child rather than the deepest hit, so reaching
+    /// a leaf means asking repeatedly until the provider stops descending. Screen coordinates are
+    /// asked for first because that is the frame the event arrived in; a provider that answers only
+    /// in window coordinates -- the AT-SPI proxies' own documentation warns that some do -- is
+    /// asked again relative to the window it is in rather than being written off.
+    async fn point_chain(&self, root: &ObjectRefOwned, point: (f64, f64)) -> Vec<ObjectRefOwned> {
+        let x = point.0.round() as i32;
+        let y = point.1.round() as i32;
+        for frame in self.frames(root).await {
+            let mut chain = vec![frame.clone()];
+            let mut current = frame;
+            for _ in 0..MAX_POINT_DESCENT {
+                let Some(child) = self.child_at_point(&current, x, y).await else {
+                    break;
+                };
+                if child.path_as_str() == current.path_as_str() {
+                    break;
+                }
+                chain.push(child.clone());
+                current = child;
+            }
+            // A window that answered with nothing is one the point is not in, which is the
+            // ordinary case for every window of the application except one.
+            if chain.len() > 1 {
+                return chain;
+            }
+        }
+        Vec::new()
+    }
+
+    async fn child_at_point(
+        &self,
+        object: &ObjectRefOwned,
+        x: i32,
+        y: i32,
+    ) -> Option<ObjectRefOwned> {
+        let proxy = timeout(
+            "accessible proxy",
+            object.as_accessible_proxy(&self.connection),
+        )
+        .await
+        .ok()?;
+        let component = timeout(
+            "component interface",
+            timeout("interfaces", proxy.proxies())
+                .await
+                .ok()?
+                .component(),
+        )
+        .await
+        .ok()?;
+        let answered = timeout(
+            "point lookup",
+            component.get_accessible_at_point(x, y, CoordType::Screen),
+        )
+        .await
+        .ok()
+        .filter(|child| !child.is_null());
+        if answered.is_some() {
+            return answered;
+        }
+        let (origin_x, origin_y, _, _) =
+            timeout("extents", component.get_extents(CoordType::Screen))
+                .await
+                .ok()?;
+        timeout(
+            "point lookup",
+            component.get_accessible_at_point(x - origin_x, y - origin_y, CoordType::Window),
+        )
+        .await
+        .ok()
+        .filter(|child| !child.is_null())
+    }
+
+    /// The chain from a top-level window down to whatever holds focus, window first.
+    ///
+    /// **AT-SPI has no query for the focused element.** There is no equivalent of macOS's
+    /// `AXFocusedUIElement` or of UI Automation's `GetFocusedElement`; the only mechanisms the bus
+    /// offers are the focus *event* an assistive technology subscribes to, which this backend's
+    /// actor cannot service while it is answering commands, and asking objects whether they say
+    /// they are focused. So this searches, depth first, from the active window outwards.
+    ///
+    /// Bounded by the same node and depth limits a capture walk uses, because it is the same kind
+    /// of walk over the same trees, and pruned by what a provider says is on screen: a subtree
+    /// nobody can see holds nothing the user just typed into.
+    async fn focus_chain(&self, root: &ObjectRefOwned) -> Vec<ObjectRefOwned> {
+        let mut budget = MAX_NODES;
+        let mut stack: Vec<Vec<ObjectRefOwned>> = self
+            .frames(root)
+            .await
+            .into_iter()
+            .rev()
+            .map(|frame| vec![frame])
+            .collect();
+        while let Some(chain) = stack.pop() {
+            if budget == 0 {
+                break;
+            }
+            budget -= 1;
+            let Some(object) = chain.last() else { continue };
+            let state = self.state_of(object).await;
+            if state
+                .as_ref()
+                .is_some_and(|state| state.contains(State::Focused))
+            {
+                return chain;
+            }
+            // Pruned only on a positive statement that this subtree is off screen. A provider that
+            // answered nothing at all is descended into rather than written off, because losing a
+            // subtree here means transcribing a password as plain text further up.
+            if state.as_ref().is_some_and(|state| {
+                !state.contains(State::Showing) && !state.contains(State::Visible)
+            }) {
+                continue;
+            }
+            if chain.len() >= MAX_DEPTH {
+                continue;
+            }
+            let (children, _) = published(self.children(object).await.unwrap_or_default());
+            for child in children.into_iter().rev() {
+                let mut next = chain.clone();
+                next.push(child);
+                stack.push(next);
+            }
+        }
+        Vec::new()
+    }
+
+    async fn point_evidence(
+        &self,
+        pid: u32,
+        point: (f64, f64),
+    ) -> Result<Option<RecordedTargetEvidence>, BackendError> {
+        let Some((root, app)) = self.recorded_application(pid).await? else {
+            return Ok(None);
+        };
+        let chain = self.point_chain(&root, point).await;
+        let window_title = match chain.first() {
+            Some(frame) => self.name_of(frame).await,
+            None => None,
+        };
+        // A lookup that found nothing is not a failed recording. The event still happened, and an
+        // evidence record carrying only its application and point still authors as a point target,
+        // which is what shared core falls back to anyway when no candidate resolves.
+        Ok(Some(RecordedTargetEvidence {
+            candidates: self
+                .ancestry_evidence(&chain, window_title.as_deref())
+                .await,
+            app,
+            point: RecordedPoint {
+                x: point.0,
+                y: point.1,
+            },
+        }))
+    }
+
+    async fn focused_evidence(
+        &self,
+        pid: u32,
+    ) -> Result<Option<RecordedFocusedEvidence>, BackendError> {
+        let Some((root, app)) = self.recorded_application(pid).await? else {
+            return Ok(None);
+        };
+        let chain = self.focus_chain(&root).await;
+        let Some(focused) = chain.last().cloned() else {
+            return Ok(None);
+        };
+        let window_title = match chain.first() {
+            Some(frame) => self.name_of(frame).await,
+            None => None,
+        };
+        let candidates = self
+            .ancestry_evidence(&chain, window_title.as_deref())
+            .await;
+        Ok(Some(RecordedFocusedEvidence {
+            value: candidates.first().and_then(|nearest| nearest.value.clone()),
+            target: RecordedTargetEvidence {
+                app,
+                // The centre of the focused element, so the point fallback a sensitive or
+                // unresolvable field lands on is somewhere a replay could actually click.
+                point: self.centre_of(&focused).await.unwrap_or_default(),
+                candidates,
+            },
+        }))
+    }
+
+    async fn hit(&self, pid: u32, point: (f64, f64)) -> Result<Option<Node>, BackendError> {
+        let Some((root, _)) = self.recorded_application(pid).await? else {
+            return Ok(None);
+        };
+        let chain = self.point_chain(&root, point).await;
+        let Some(deepest) = chain.last().cloned() else {
+            return Ok(None);
+        };
+        // Depth zero: the element under the point, not the tree beneath it. A caller wanting that
+        // asks `look` for the application, which is the walk built for it.
+        let mut remaining = 1;
+        let mut refs = Vec::new();
+        self.node(deepest, 0, 0, &mut remaining, &mut refs)
+            .await
+            .map(Some)
+    }
 }
 async fn timeout<T, E>(
     name: &str,
@@ -2034,6 +2702,7 @@ mod tests {
     }
 
     const USABLE: SessionFacts = SessionFacts {
+        record: true,
         wayland: false,
         x_display: true,
         window_manager: true,
@@ -2109,6 +2778,128 @@ mod tests {
             }),
             Some(WAYLAND_SESSION)
         );
+    }
+
+    /// Observation asks for different facts than delivery does, and the difference is not cosmetic:
+    /// a session with no window manager and no XTEST can still record everything the user types.
+    #[test]
+    fn observation_needs_a_display_and_record_and_nothing_else_x11_offers() {
+        assert_eq!(observation_restriction(USABLE), None);
+        assert_eq!(
+            observation_restriction(SessionFacts {
+                window_manager: false,
+                xtest: false,
+                ..USABLE
+            }),
+            None,
+            "a session that cannot post input can still watch it"
+        );
+        assert_eq!(
+            observation_restriction(SessionFacts {
+                x_display: false,
+                ..USABLE
+            }),
+            Some((reason::NO_X_DISPLAY, NO_X_DISPLAY))
+        );
+        // The Xvfb lane checks this against a real server rather than trusting the read; here the
+        // decision itself is pinned, because a build of X without RECORD is something no ordinary
+        // desktop produces by accident.
+        assert_eq!(
+            observation_restriction(SessionFacts {
+                record: false,
+                ..USABLE
+            }),
+            Some((reason::NO_RECORD_EXTENSION, NO_RECORD))
+        );
+    }
+
+    /// Wayland outranks every X11 fact, and for observation it is not the same refusal as for
+    /// delivery: XWayland provides RECORD and records only its own clients, so a session that
+    /// checked the extension alone would record a desktop that looks empty while the user works.
+    #[test]
+    fn wayland_withholds_observation_however_complete_the_x11_session_looks() {
+        let (code, restriction) = observation_restriction(SessionFacts {
+            wayland: true,
+            ..USABLE
+        })
+        .expect("a Wayland session cannot observe global input");
+        assert_eq!(code, reason::WAYLAND_RESTRICTED);
+        assert!(restriction.contains("listen-only"), "{restriction}");
+
+        // And the wire shape a caller actually receives, which is the half axn/220 exists for: the
+        // specific code survives rather than flattening into "unavailable".
+        let BackendError::CapabilityReason {
+            capability, code, ..
+        } = observation_refusal(code, restriction)
+        else {
+            panic!("a refusal from this seam is always typed")
+        };
+        assert_eq!(capability, Capability::ObserveGlobalInput);
+        assert_eq!(code, reason::WAYLAND_RESTRICTED);
+    }
+
+    /// Naming what is under a point needs a display and nothing else. It reads the client's own
+    /// `_NET_WM_PID`, not the window manager's client list, so a bare X session can still answer.
+    #[test]
+    fn a_point_can_be_named_without_a_window_manager_or_xtest() {
+        assert_eq!(point_lookup_restriction(USABLE), None);
+        assert_eq!(
+            point_lookup_restriction(SessionFacts {
+                window_manager: false,
+                screenshot_windows: false,
+                xtest: false,
+                ..USABLE
+            }),
+            None
+        );
+        assert_eq!(
+            point_lookup_restriction(SessionFacts {
+                wayland: true,
+                ..USABLE
+            })
+            .map(|(code, _)| code),
+            Some(reason::WAYLAND_RESTRICTED)
+        );
+        assert_eq!(
+            point_lookup_restriction(SessionFacts {
+                x_display: false,
+                ..USABLE
+            })
+            .map(|(code, _)| code),
+            Some(reason::NO_X_DISPLAY)
+        );
+    }
+
+    /// Every reason this backend publishes has to survive the health document's own classification,
+    /// or a session fact arrives at a caller spelled `not-implemented` -- which says the build is
+    /// missing the feature rather than that the machine is.
+    #[test]
+    fn every_session_restriction_classifies_as_the_code_it_is_published_with() {
+        let restrictions = [
+            observation_restriction(SessionFacts {
+                wayland: true,
+                ..USABLE
+            }),
+            observation_restriction(SessionFacts {
+                x_display: false,
+                ..USABLE
+            }),
+            observation_restriction(SessionFacts {
+                record: false,
+                ..USABLE
+            }),
+            point_lookup_restriction(SessionFacts {
+                wayland: true,
+                ..USABLE
+            }),
+        ];
+        for (code, restriction) in restrictions.into_iter().flatten() {
+            assert_eq!(
+                axon_core::classify_health_restriction(restriction),
+                code,
+                "{restriction:?} is published as {code} but health reads it differently"
+            );
+        }
     }
 
     #[test]

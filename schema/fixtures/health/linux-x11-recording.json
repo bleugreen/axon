@@ -16,9 +16,7 @@
   "session": {
     "interactive": true,
     "graphical": true,
-    "accessibilityEnabled": false,
-    "reason": "accessibility-disabled",
-    "detail": "wayland; this session reports accessibility disabled (org.a11y.Status.IsEnabled is false), so applications that read it at startup \u2014 Chromium, Electron, and Chromium-backed webviews \u2014 are not on the bus at all"
+    "detail": "x11"
   },
   "permissions": [
     {
@@ -69,27 +67,19 @@
     },
     {
       "capability": "pointerInput",
-      "usable": false,
-      "reason": "wayland-restricted",
-      "restriction": "Wayland does not permit unrestricted synthetic input from an ordinary client"
+      "usable": true
     },
     {
       "capability": "keyboardInput",
-      "usable": false,
-      "reason": "wayland-restricted",
-      "restriction": "Wayland does not permit unrestricted synthetic input from an ordinary client"
+      "usable": true
     },
     {
       "capability": "screenshot",
-      "usable": false,
-      "reason": "portal-authorization-required",
-      "restriction": "a desktop portal authorization flow is required"
+      "usable": true
     },
     {
       "capability": "hitTest",
-      "usable": false,
-      "reason": "wayland-restricted",
-      "restriction": "this is a Wayland session: the compositor does not permit unrestricted synthetic input, and X11 cannot read or set the Wayland foreground even where XWayland is running alongside"
+      "usable": true
     },
     {
       "capability": "serializeHistory",
@@ -97,9 +87,7 @@
     },
     {
       "capability": "observeGlobalInput",
-      "usable": false,
-      "reason": "wayland-restricted",
-      "restriction": "this is a Wayland session: the compositor delivers input only to the surface it is aimed at, and there is no listen-only global input protocol to ask it for the rest -- by design rather than by omission"
+      "usable": true
     }
   ]
 }

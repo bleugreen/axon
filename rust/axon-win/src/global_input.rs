@@ -18,17 +18,15 @@
 
 use super::Command;
 use crate::recording::{
-    ModifierState, RawEvent, RawInput, RawQueue, classify_keystroke, dropped_events_warning,
-    is_self_delivered, wheel_delta,
+    ModifierState, RawEvent, RawInput, RawQueue, classify_keystroke, is_self_delivered, wheel_delta,
 };
 use axon_core::{
     BackendError, Capability, GlobalInputObserver, RecordedAppIdentity, RecordedInputEvent,
-    RecordedPoint, RecordedTargetEvidence, RecordingScope,
+    RecordedPoint, RecordedTargetEvidence, RecordingScope, dropped_events_warning,
 };
 use std::{
-    collections::VecDeque,
     sync::{
-        Arc, Condvar, Mutex, OnceLock,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
@@ -276,42 +274,14 @@ fn layout_text(virtual_key: u16, scan_code: u32, modifiers: ModifierState) -> Op
 }
 
 /// The enriched events `poll` hands to shared core.
-#[derive(Default)]
-struct Enriched {
-    events: Mutex<VecDeque<RecordedInputEvent>>,
-    ready: Condvar,
-}
+///
+/// The same hand-off shape as the raw queue -- produced on one thread, drained with a timeout on
+/// another -- with no bound, because these are the product rather than the backlog. Dropping one
+/// here would lose an action that had already been read and understood.
+type Enriched = axon_core::ObservedInputQueue<RecordedInputEvent>;
 
-impl Enriched {
-    fn push(&self, event: RecordedInputEvent) {
-        self.events
-            .lock()
-            .expect("enriched queue is never poisoned")
-            .push_back(event);
-        self.ready.notify_one();
-    }
-
-    fn drain(&self, timeout: Duration) -> Vec<RecordedInputEvent> {
-        let mut events = self
-            .events
-            .lock()
-            .expect("enriched queue is never poisoned");
-        if events.is_empty() {
-            events = self
-                .ready
-                .wait_timeout(events, timeout)
-                .expect("enriched queue is never poisoned")
-                .0;
-        }
-        events.drain(..).collect()
-    }
-
-    fn clear(&self) {
-        self.events
-            .lock()
-            .expect("enriched queue is never poisoned")
-            .clear();
-    }
+fn enriched_queue() -> Enriched {
+    Enriched::with_capacity(usize::MAX)
 }
 
 /// Asks the MTA actor one question and waits for its answer.
@@ -378,15 +348,17 @@ fn enrich(
                 layout_text(virtual_key, scan_code, state)
             })?;
             let context = key_context(commands)?;
-            accepts(scope, &context.app).then_some(RecordedInputEvent::KeyDown {
-                app: context.app,
-                keystroke,
-                timestamp_ms,
-            })
+            scope
+                .accepts(&context.app)
+                .then_some(RecordedInputEvent::KeyDown {
+                    app: context.app,
+                    keystroke,
+                    timestamp_ms,
+                })
         }
         RawInput::Button { down, point } => {
             let evidence = point_evidence(commands, point)?;
-            if !accepts(scope, &evidence.app) {
+            if !scope.accepts(&evidence.app) {
                 return None;
             }
             Some(if down {
@@ -417,7 +389,7 @@ fn enrich(
             horizontal,
         } => {
             let evidence = point_evidence(commands, point)?;
-            if !accepts(scope, &evidence.app) {
+            if !scope.accepts(&evidence.app) {
                 return None;
             }
             let (delta_x, delta_y) = wheel_delta(mouse_data, horizontal);
@@ -441,14 +413,6 @@ fn point_evidence(
     .flatten()
 }
 
-/// Whether an event belongs to the session's scope.
-fn accepts(scope: &RecordingScope, app: &RecordedAppIdentity) -> bool {
-    match scope {
-        RecordingScope::AllApplications => true,
-        RecordingScope::Application { app: wanted } => wanted.matches_runtime(app),
-    }
-}
-
 /// Drains raw events and reads the interface around each one, at event time.
 fn enrichment_thread(
     scope: RecordingScope,
@@ -465,8 +429,8 @@ fn enrichment_thread(
             // before any action was recorded; the notification is what the artifact keeps, so a
             // recording read a week later still admits the gap.
             eprintln!("axon-win: {warning}");
-            enriched.push(RecordedInputEvent::Notification {
-                app: scope_identity(&scope),
+            enriched.offer(RecordedInputEvent::Notification {
+                app: scope.identity(),
                 notification: warning,
                 role: None,
                 timestamp_ms: now_ms(),
@@ -474,21 +438,12 @@ fn enrichment_thread(
         }
         for raw in batch.events {
             if let Some(event) = enrich(&scope, &commands, &mut modifiers, raw) {
-                enriched.push(event);
+                enriched.offer(event);
             }
         }
         if raw_queue().stopped() {
             return;
         }
-    }
-}
-
-/// An identity a scoped session will accept, so an observation about the recording itself is not
-/// filtered out of the recording it is about.
-fn scope_identity(scope: &RecordingScope) -> RecordedAppIdentity {
-    match scope {
-        RecordingScope::AllApplications => RecordedAppIdentity::default(),
-        RecordingScope::Application { app } => app.clone(),
     }
 }
 
@@ -511,7 +466,7 @@ impl WindowsGlobalInputObserver {
     pub fn new(commands: mpsc::Sender<Command>) -> Self {
         Self {
             commands,
-            enriched: Arc::new(Enriched::default()),
+            enriched: Arc::new(enriched_queue()),
             session: None,
         }
     }
@@ -588,7 +543,7 @@ impl GlobalInputObserver for WindowsGlobalInputObserver {
             return Err(error);
         }
         raw_queue().reset();
-        self.enriched.clear();
+        self.enriched.reset();
         BUTTON_HELD.store(false, Ordering::Relaxed);
 
         let (hooks, hook_thread_id) = start_hook_thread()?;
@@ -616,7 +571,7 @@ impl GlobalInputObserver for WindowsGlobalInputObserver {
         if self.session.is_none() {
             return Err(operation("no global input observer session is active"));
         }
-        Ok(self.enriched.drain(timeout))
+        Ok(self.enriched.drain(timeout).events)
     }
 
     fn stop(&mut self) -> Result<(), BackendError> {
@@ -624,7 +579,7 @@ impl GlobalInputObserver for WindowsGlobalInputObserver {
         self.session = None;
         // Discarded here and not a moment sooner. `quiesce` is what makes a session's last events
         // reachable; a caller that wants them polls between the two calls.
-        self.enriched.clear();
+        self.enriched.reset();
         Ok(())
     }
 

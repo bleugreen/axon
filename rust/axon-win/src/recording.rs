@@ -6,14 +6,7 @@
 #![cfg_attr(not(windows), allow(dead_code))]
 
 use axon_core::RecordedKeystroke;
-use std::{
-    collections::VecDeque,
-    sync::{
-        Condvar, Mutex, OnceLock,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-    },
-    time::Duration,
-};
+use std::sync::OnceLock;
 
 /// The sentinel this daemon writes into `dwExtraInfo` on every input record it posts, and the only
 /// thing that tells its own delivery apart from a person's hand on the keyboard.
@@ -259,120 +252,13 @@ pub fn wheel_delta(mouse_data: u32, horizontal: bool) -> (f64, f64) {
     }
 }
 
-/// What one drain of the raw queue found, including what it had to throw away to keep up.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct RawBatch {
-    pub events: Vec<RawEvent>,
-    /// Events the hook could not hand over since the previous drain. Never silently zero: a
-    /// recording that lost actions has to say so.
-    pub dropped: usize,
-    /// The deepest the queue has been this session, which is what says whether the enrichment
-    /// thread is keeping up or merely has not fallen behind yet.
-    pub high_water: usize,
-}
-
-/// A bounded hand-off from the hook callback to the enrichment thread.
+/// The bounded hand-off from the hook callback to the enrichment thread.
 ///
-/// Bounded and non-blocking on the producer side, both for the same reason: a low-level hook
-/// callback that takes longer than `LowLevelHooksTimeout` (300 ms by default) is removed from the
-/// chain by Windows without asking. So the callback offers an event and gives up immediately if it
-/// cannot have the lock or the queue is full, counting what it dropped rather than waiting.
-pub struct RawQueue {
-    events: Mutex<VecDeque<RawEvent>>,
-    ready: Condvar,
-    capacity: usize,
-    dropped: AtomicUsize,
-    high_water: AtomicUsize,
-    stopped: AtomicBool,
-}
-
-impl RawQueue {
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self {
-            events: Mutex::new(VecDeque::with_capacity(capacity.min(1024))),
-            ready: Condvar::new(),
-            capacity,
-            dropped: AtomicUsize::new(0),
-            high_water: AtomicUsize::new(0),
-            stopped: AtomicBool::new(false),
-        }
-    }
-
-    /// Hands one event over if that can be done without waiting. Returns whether it was taken.
-    pub fn offer(&self, event: RawEvent) -> bool {
-        let Ok(mut events) = self.events.try_lock() else {
-            self.dropped.fetch_add(1, Ordering::Relaxed);
-            return false;
-        };
-        if events.len() >= self.capacity {
-            self.dropped.fetch_add(1, Ordering::Relaxed);
-            return false;
-        }
-        events.push_back(event);
-        let depth = events.len();
-        drop(events);
-        self.high_water.fetch_max(depth, Ordering::Relaxed);
-        self.ready.notify_one();
-        true
-    }
-
-    /// Takes everything queued, waiting up to `timeout` for the first event.
-    pub fn drain(&self, timeout: Duration) -> RawBatch {
-        let mut events = self
-            .events
-            .lock()
-            .expect("raw input queue is never poisoned");
-        if events.is_empty() && !self.stopped.load(Ordering::Acquire) {
-            events = self
-                .ready
-                .wait_timeout(events, timeout)
-                .expect("raw input queue is never poisoned")
-                .0;
-        }
-        RawBatch {
-            events: events.drain(..).collect(),
-            dropped: self.dropped.swap(0, Ordering::Relaxed),
-            high_water: self.high_water.load(Ordering::Relaxed),
-        }
-    }
-
-    /// Wakes a waiting drain and stops future ones from waiting at all.
-    pub fn stop(&self) {
-        self.stopped.store(true, Ordering::Release);
-        self.ready.notify_all();
-    }
-
-    pub fn stopped(&self) -> bool {
-        self.stopped.load(Ordering::Acquire)
-    }
-
-    /// Returns the queue to the state a fresh session expects.
-    ///
-    /// The queue outlives any one session because a low-level hook callback is handed no context
-    /// pointer and can only reach a static, so starting a second recording has to clear what the
-    /// first one left rather than construct a new queue.
-    pub fn reset(&self) {
-        self.events
-            .lock()
-            .expect("raw input queue is never poisoned")
-            .clear();
-        self.dropped.store(0, Ordering::Relaxed);
-        self.high_water.store(0, Ordering::Relaxed);
-        self.stopped.store(false, Ordering::Release);
-    }
-
-    pub fn high_water(&self) -> usize {
-        self.high_water.load(Ordering::Relaxed)
-    }
-
-    /// What is waiting right now, which is what says whether enrichment ever caught up.
-    pub fn depth(&self) -> usize {
-        self.events
-            .lock()
-            .expect("raw input queue is never poisoned")
-            .len()
-    }
-}
+/// The discipline it enforces -- a producer that never waits, a drop count that is always reported,
+/// and a queue that survives one session because a low-level hook callback is handed no context
+/// pointer and can reach only a static -- is the same on every platform, so it is stated once in
+/// shared core. Only the raw event differs.
+pub type RawQueue = axon_core::ObservedInputQueue<RawEvent>;
 
 /// Whether a button transition should change what the observer believes about the user's hand.
 ///
@@ -395,24 +281,6 @@ pub fn button_state_change(down: bool, self_delivered: bool) -> Option<bool> {
 /// change to one place that already has a test pointed at it.
 pub fn is_sensitive(is_password: bool) -> bool {
     is_password
-}
-
-/// The value an element reports as evidence, which for a sensitive element is nothing at all.
-///
-/// `read` is a closure and not a value because the rule is that the credential is never read, not
-/// that it is read and then dropped. Shared core also refuses to build a target from a sensitive
-/// element, but that refusal runs later: by then a provider that had already read the value would
-/// have put it in a buffer, a log line, and a redaction pass that cannot recognise it.
-pub fn evidence_value(sensitive: bool, read: impl FnOnce() -> Option<String>) -> Option<String> {
-    (!sensitive).then(read).flatten()
-}
-
-/// The warning a drop is reported as, in the one channel a provider has to annotate a recording.
-pub fn dropped_events_warning(dropped: usize) -> String {
-    format!(
-        "the global input observer dropped {dropped} raw event(s) before this point; actions may be \
-         missing from this recording"
-    )
 }
 
 #[cfg(test)]
@@ -596,27 +464,9 @@ mod tests {
     }
 
     #[test]
-    fn a_password_field_is_sensitive_and_its_value_is_never_even_read() {
+    fn a_password_field_is_sensitive() {
         assert!(is_sensitive(true), "UIA_IsPasswordPropertyId is the floor");
         assert!(!is_sensitive(false));
-
-        let mut reads = 0;
-        assert_eq!(
-            evidence_value(true, || {
-                reads += 1;
-                Some("hunter2".into())
-            }),
-            None
-        );
-        assert_eq!(
-            reads, 0,
-            "a sensitive value is not read, not merely dropped"
-        );
-
-        assert_eq!(
-            evidence_value(false, || Some("draft".into())),
-            Some("draft".into())
-        );
     }
 
     #[test]
@@ -653,54 +503,5 @@ mod tests {
         assert_ne!(delivery_tag_for(ours), delivery_tag_for(helper));
         assert!(!is_self_delivered(delivery_tag_for(helper)));
         assert_eq!(delivery_tag_for(ours), self_delivery_tag());
-    }
-
-    #[test]
-    fn a_full_queue_drops_and_counts_rather_than_waiting() {
-        let queue = RawQueue::with_capacity(2);
-        let event = |timestamp_ms| RawEvent {
-            input: RawInput::Key {
-                virtual_key: 0x41,
-                scan_code: 0x1E,
-                up: false,
-            },
-            timestamp_ms,
-            extra_info: 0,
-        };
-        assert!(queue.offer(event(1)));
-        assert!(queue.offer(event(2)));
-        assert!(!queue.offer(event(3)), "the third has nowhere to go");
-
-        let batch = queue.drain(Duration::ZERO);
-        assert_eq!(batch.events.len(), 2);
-        assert_eq!(batch.dropped, 1);
-        assert_eq!(batch.high_water, 2);
-
-        assert_eq!(
-            queue.drain(Duration::ZERO).dropped,
-            0,
-            "a drop is reported once, against the actions that followed it"
-        );
-        assert!(
-            dropped_events_warning(1).contains("missing"),
-            "the warning says what was lost"
-        );
-
-        queue.reset();
-        assert_eq!(queue.high_water(), 0, "a second session starts clean");
-        assert!(queue.offer(event(4)));
-    }
-
-    #[test]
-    fn a_stopped_queue_stops_waiting() {
-        let queue = RawQueue::with_capacity(8);
-        queue.stop();
-        let started = std::time::Instant::now();
-        assert!(queue.drain(Duration::from_secs(30)).events.is_empty());
-        assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "stop releases the enrichment thread instead of leaving it parked"
-        );
-        assert!(queue.stopped());
     }
 }
