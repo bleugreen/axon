@@ -575,6 +575,21 @@ jobs:
           # match the bytes that actually reach the release.
           sha256sum -c ./*.sha256
 
+      # The last gate before the release becomes visible. Both SDKs are part of this version, so a
+      # release that announced itself while either registry lacked it would be announcing something
+      # that does not exist. Asked here independently of the publish jobs, because the point is to
+      # confirm the outcome rather than to trust the step that produced it.
+      - name: Verify both SDKs are published
+        if: needs.version.outputs.publish == 'true'
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          ./scripts/verify-published-sdk pypi \
+            "sdk-artifacts/python/axon_cmd-$VERSION-py3-none-any.whl" \
+            "sdk-artifacts/python/axon_cmd-$VERSION.tar.gz"
+          ./scripts/verify-published-sdk npm "sdk-artifacts/ts/axon-cmd-$VERSION.tgz"
+
       - name: Publish GitHub release
         if: needs.version.outputs.publish == 'true'
         env:
