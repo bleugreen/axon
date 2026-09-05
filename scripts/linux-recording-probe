@@ -170,3 +170,60 @@ for scope in allApplications application; do
   fi
 done
 echo "both scopes recorded the same flow, which is what tells an identity disagreement apart from a broken observer"
+
+note "replaying what was recorded"
+# `continueOnError` is not a convenience here. A recorded click declares no postcondition, so the
+# runner scores it as unsuccessful and, under the default, stops the batch at the first one --
+# meaning every recorded artifact containing a click replays exactly one action. That is axn/228,
+# it is not specific to this platform, and it is deliberately not fixed here. What this asserts
+# instead is what the recording is actually about: every action dispatched, and every recorded
+# target resolved to exactly one element.
+run_recorded() {
+  local mode="$1"
+  jq -cn --arg script "$(cat /tmp/axon-linux-recording.axn)" --argjson dry "$2" \
+    '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"script":$script,"dryRun":$dry,"continueOnError":true}}}' \
+    | "$daemon" mcp
+}
+
+for dry in true false; do
+  replayed="$(run_recorded "$dry" "$dry")"
+  printf '%s' "$replayed" | jq --argjson dry "$dry" '{dryRun: $dry, actions: [.result.structuredContent.actions[]? | {id, tool, dispatchSuccess, resolution: .resolution.status}]}'
+  printf '%s' "$replayed" | jq -e '
+    (.result.structuredContent.actions | length) >= 2
+    and all(.result.structuredContent.actions[]; .resolution.status == "unique")
+  ' >/dev/null || fail "a recorded target did not resolve uniquely on replay (dryRun=$dry)"
+  if [ "$dry" = false ]; then
+    printf '%s' "$replayed" | jq -e 'all(.result.structuredContent.actions[]; .dispatchSuccess == true)' >/dev/null \
+      || fail "a recorded action did not dispatch on live replay"
+  fi
+done
+
+note "saving a slice of live history and replaying that too"
+saved="$("$ask" "$(jq -cn --arg app "$app" '{"jsonrpc":"2.0","id":4,"method":"save","params":{"app":$app}}')")"
+printf '%s' "$saved" | jq '{actionCount: .result.actionCount, script: .result.script}'
+printf '%s' "$saved" | jq -e '.result.actionCount >= 1' >/dev/null \
+  || { printf '%s\n' "$saved"; fail "save exported nothing from live history"; }
+
+saved_script="$(printf '%s' "$saved" | jq -r '.result.script')"
+replayed="$(jq -cn --arg script "$saved_script" \
+  '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"script":$script,"continueOnError":true}}}' \
+  | "$daemon" mcp)"
+printf '%s' "$replayed" | jq '{actions: [.result.structuredContent.actions[]? | {id, tool, dispatchSuccess, verified: .verification.verified, observed: .verification.observed}]}'
+printf '%s' "$replayed" | jq -e 'all(.result.structuredContent.actions[]; .dispatchSuccess == true)' >/dev/null \
+  || fail "a saved action did not dispatch on replay"
+
+note "the daemon's own delivery is not in the recording"
+# The other half of the exclusion, live. A recording started and immediately stopped around the
+# daemon's own click must come back empty: if it does not, every action an agent takes during a
+# recording is being attributed to the user.
+"$ask" '{"jsonrpc":"2.0","id":5,"method":"recording.start","params":{"scope":{"scope":"allApplications"}}}' >/dev/null
+mcp "$(jq -cn --arg app "$app" --argjson x "${button_at%% *}" --argjson y "${button_at##* }" \
+  '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"click","arguments":{"app":$app,"point":{"x":$x,"y":$y},"deliveryPolicy":"foregroundPermitted"}}}')" >/dev/null || true
+sleep 0.6
+own="$("$ask" '{"jsonrpc":"2.0","id":6,"method":"recording.stop","params":{}}')"
+printf '%s' "$own" | jq '{actionCount: .result.actionCount}'
+printf '%s' "$own" | jq -e '(.result.actionCount // 0) == 0' >/dev/null \
+  || fail "the daemon recorded its own click as the user's"
+
+note "PASSED"
+echo "post this output on cairn://p/axn/169 as the fedora row of the Linux recording evidence"
