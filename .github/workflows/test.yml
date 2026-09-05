@@ -118,6 +118,13 @@ jobs:
         working-directory: sdk/python
         run: pytest
 
+      # The release's publication verifier decides whether a release uploads and whether a re-run
+      # of a half-finished release may proceed. Both decisions are only ever reached against a live
+      # registry mid-release, which is the worst place to find one of them wrong, so the script
+      # rehearses them here against stubbed responses instead.
+      - name: Rehearse the publication verifier's decisions
+        run: ./scripts/verify-published-sdk --self-test
+
       # The release's own packaging step, run here so a packaging regression surfaces on the pull
       # request that causes it. It builds the wheel and sdist, asserts their contents against the
       # tracked sources and their metadata against what an index will display, then installs the
