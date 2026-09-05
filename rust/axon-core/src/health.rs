@@ -331,6 +331,16 @@ impl CapabilityState {
 ///
 /// Backends explain themselves in prose, which is useful to a person and useless to a program.
 /// This is the one place that prose is turned into something a consumer can branch on.
+/// The reason code a restriction sentence is published under.
+///
+/// Public so a backend can check that a restriction it authored classifies as the code it hands to
+/// a caller directly. The two travel different paths -- one through `health-v1`, one through a
+/// typed `-32004` -- and a session fact that arrives at one spelled `not-implemented` says the
+/// build is missing the feature rather than that the machine is.
+pub fn classify_health_restriction(restriction: &str) -> &'static str {
+    classify_restriction(restriction)
+}
+
 fn classify_restriction(restriction: &str) -> &'static str {
     let lowered = restriction.to_ascii_lowercase();
     if lowered.contains("screen recording") {
