@@ -89,12 +89,27 @@ the failure rather than answering on its own.
 ### From a program
 
 A program should not spawn a stdio facade to make one call. It talks to the daemon socket directly,
-and the recommended clients for that are the SDKs in `sdk/ts` and `sdk/python`, whose per-tool
-methods are generated from `schema/tool-surface-v1.json` by one generator rather than maintained by
-hand, so neither can describe a tool surface the other does not.
+and the recommended clients for that are published under one name, `axon-cmd`, on both npm and
+PyPI. They are built from `sdk/ts` and `sdk/python`, and their per-tool methods are generated from
+`schema/tool-surface-v1.json` by one generator rather than maintained by hand, so neither can
+describe a tool surface the other does not.
+
+```sh
+npm install axon-cmd      # or: bun add axon-cmd
+```
+
+```sh
+uv add axon-cmd           # or: pip install axon-cmd
+```
+
+Both packages have zero runtime dependencies and are versioned with the daemon, so `axon-cmd 0.3.6`
+is the client for Axon 0.3.6. Neither package installs or contains the daemon: Axon is a separate
+install (see [Install Axon](install.md)) and has to be running, which is exactly what
+`Axon.connect()` confirms before it returns. The Python import name is `axon_cmd`, which is not the
+`axon` distribution on PyPI — that name belongs to an unrelated project.
 
 ```ts
-import { Axon } from "@axon/sdk";
+import { Axon } from "axon-cmd";
 
 const axon = await Axon.connect();
 const session = axon.session("checkout");
@@ -109,7 +124,7 @@ await session.save({ path: "checkout.axn" });
 ```
 
 ```python
-from axon import Axon
+from axon_cmd import Axon
 
 axon = Axon.connect()
 session = axon.session("checkout")
