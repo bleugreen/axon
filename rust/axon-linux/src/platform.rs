@@ -652,24 +652,30 @@ impl PlatformBackend for LinuxBackend {
             Capability::Focus,
             Capability::SerializeHistory,
         ];
-        let unavailable = [
-            (
-                Capability::ObserveChanges,
-                "AT-SPI event observation is not implemented",
-            ),
-            (
-                Capability::Scroll,
-                "AT-SPI has no portable delta-scroll operation",
-            ),
-            (
-                Capability::HitTest,
-                "AT-SPI point lookup is not implemented",
-            ),
-            (
-                Capability::ObserveGlobalInput,
-                "global input observation is not implemented",
-            ),
-        ];
+        let unavailable = [(
+            Capability::ObserveChanges,
+            "AT-SPI event observation is not implemented",
+        )];
+        // Scroll is refused for a reason about this backend rather than about the session, so it
+        // sits apart from both groups: nothing a machine could be reconfigured to do would make it
+        // available.
+        let scroll = CapabilityInfo {
+            capability: Capability::Scroll,
+            usable: false,
+            restriction: Some("AT-SPI has no portable delta-scroll operation".into()),
+        };
+        // These two are facts about the running session, like synthetic input below, and each is
+        // asked separately because they are separate questions: observing input needs RECORD,
+        // naming what is under a point needs a display, and neither needs the other.
+        let session_dependent = [
+            (Capability::ObserveGlobalInput, self.observation),
+            (Capability::HitTest, self.point_lookup),
+        ]
+        .map(|(capability, restriction)| CapabilityInfo {
+            capability,
+            usable: restriction.is_none(),
+            restriction: restriction.map(|(_, reason)| reason.to_string()),
+        });
         // Synthetic input is the one pair whose availability is a fact about the running session
         // rather than about this build, and the same answer decides both the health document and
         // the dispatch ladder.
@@ -699,7 +705,8 @@ impl PlatformBackend for LinuxBackend {
                     }),
             )
             .chain(input)
-            .chain([screenshot])
+            .chain(session_dependent)
+            .chain([scroll, screenshot])
             .collect())
     }
     fn enumerate_applications(&self) -> Result<Vec<Application>, BackendError> {
@@ -800,7 +807,19 @@ impl PlatformBackend for LinuxBackend {
             ScreenshotProvider::Unavailable(_) => unreachable!(),
         }
     }
-    fn hit_test(&mut self, _: (f64, f64)) -> Result<Option<Node>, BackendError> {
+    fn global_input_observer(&mut self) -> Result<&mut dyn GlobalInputObserver, BackendError> {
+        match self.observation {
+            Some((code, reason)) => Err(observation_refusal(code, reason)),
+            None => Ok(self),
+        }
+    }
+    fn hit_test(&mut self, point: (f64, f64)) -> Result<Option<Node>, BackendError> {
+        let Some(pid) = self.process_at(point)? else {
+            return Ok(None);
+        };
+        self.ask(|r| Command::Hit(pid, point, r))
+    }
+    fn unused_hit_test(&mut self, _: (f64, f64)) -> Result<Option<Node>, BackendError> {
         Err(capability(Capability::HitTest, "not implemented"))
     }
     fn supports_foreground_transaction(&self) -> bool {
