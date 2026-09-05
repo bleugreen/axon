@@ -1940,8 +1940,12 @@ mod tests {
     use std::{cell::RefCell, rc::Rc, time::Duration};
 
     #[test]
-    fn recording_start_refuses_when_native_observer_is_unavailable() {
-        let mut router = Router::new(backend(vec![node("Save")], None));
+    fn recording_start_refuses_when_this_session_cannot_observe() {
+        let mut backend = backend(vec![node("Save")], None);
+        backend.observer_refusal = Some("wayland-restricted");
+        let starts = Rc::clone(&backend.observer_starts);
+        let mut router = Router::new(backend);
+
         let response = router
             .request(JsonRpcRequest::new(
                 Some(JsonRpcId::Integer(1)),
@@ -1953,10 +1957,19 @@ mod tests {
             panic!("linux recording.start must not return empty success")
         };
         assert_eq!(failure.error.code, -32004);
-        assert_eq!(
-            failure.error.data.unwrap()["reason"],
-            "observer-unavailable"
-        );
+        let data = failure.error.data.expect("a typed refusal carries data");
+        // The whole point of the typed shape: which refusal it is survives to the wire. Before
+        // this, every `BackendError` on this backend flattened into an untyped -32000, so a caller
+        // could not tell a Wayland session -- where the answer is permanent -- from an X server
+        // started without RECORD, where it is a server option.
+        assert_eq!(data["kind"], "capability-unavailable");
+        assert_eq!(data["capability"], "observeGlobalInput");
+        assert_eq!(data["code"], "wayland-restricted");
+
+        // Refused before dispatch: nothing was started, so nothing had to be abandoned.
+        assert_eq!(*starts.borrow(), 0);
+        assert!(router.recorder.is_none());
+        assert!(!router.daemon.recording.status().recording);
 
         let save = router
             .request(JsonRpcRequest::new(
@@ -1966,7 +1979,135 @@ mod tests {
             ))
             .unwrap();
         assert!(
-            !matches!(save, JsonRpcResponse::Failure(ref failure) if failure.error.data.as_ref().is_some_and(|data| data["reason"] == "observer-unavailable"))
+            !matches!(save, JsonRpcResponse::Failure(ref failure) if failure.error.data.as_ref().is_some_and(|data| data["kind"] == "capability-unavailable"))
+        );
+    }
+
+    /// The route this issue exists to open: a start that is allowed records real events and stops
+    /// into an authored document, with the observer released exactly once on the way out.
+    #[test]
+    fn recording_records_observed_input_and_stops_into_an_authored_document() {
+        let backend = backend(vec![node("Save")], None);
+        let observed = Rc::clone(&backend.observed_input);
+        let starts = Rc::clone(&backend.observer_starts);
+        let stops = Rc::clone(&backend.observer_stops);
+        let mut router = Router::new(backend);
+
+        let started = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(1)),
+                "recording.start",
+                Some(json!({"scope":{"scope":"allApplications"}})),
+            ))
+            .unwrap();
+        assert!(matches!(started, JsonRpcResponse::Success(_)));
+        assert_eq!(*starts.borrow(), 1);
+        assert!(router.daemon.recording.status().recording);
+
+        observed
+            .borrow_mut()
+            .push(axon_core::RecordedInputEvent::KeyDown {
+                app: axon_core::RecordedAppIdentity {
+                    name: "App".into(),
+                    bundle_identifier: None,
+                    process_id: None,
+                },
+                keystroke: axon_core::RecordedKeystroke::Key {
+                    key: "return".into(),
+                },
+                timestamp_ms: 7,
+            });
+
+        let status = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(2)),
+                "recording.status",
+                Some(json!({})),
+            ))
+            .unwrap();
+        assert!(matches!(status, JsonRpcResponse::Success(_)));
+
+        let JsonRpcResponse::Success(stopped) = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(3)),
+                "recording.stop",
+                Some(json!({})),
+            ))
+            .unwrap()
+        else {
+            panic!("a stop with an observed action authors a document")
+        };
+        assert_eq!(stopped.result["actionCount"], 1);
+        let script = stopped.result["script"]
+            .as_str()
+            .expect("an authored script");
+        assert!(script.contains("keyboard"), "{script}");
+        assert!(script.contains("return"), "{script}");
+        assert!(router.recorder.is_none());
+        assert!(!router.daemon.recording.status().recording);
+        assert_eq!(*stops.borrow(), 1, "the observer is released exactly once");
+    }
+
+    /// A recording keeps the events its observer had not finished producing when the stop arrived.
+    ///
+    /// This is the failure mode a backend that reads the interface behind its listener has and a
+    /// synchronous one does not: at the moment `recording.stop` is dispatched, the last events of
+    /// the session exist only as undecoded input in a queue. Polling before observation has been
+    /// brought to a stop, and then finishing, authors a recording that stops short of its own
+    /// ending -- silently, because the count is plausible and only the tail is missing.
+    #[test]
+    fn stopping_keeps_the_events_the_observer_had_not_yet_produced() {
+        let backend = backend(vec![node("Save")], None);
+        let pending = Rc::clone(&backend.pending_until_quiesce);
+        let mut router = Router::new(backend);
+
+        router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(1)),
+                "recording.start",
+                Some(json!({"scope":{"scope":"allApplications"}})),
+            ))
+            .unwrap();
+
+        pending
+            .borrow_mut()
+            .push(axon_core::RecordedInputEvent::KeyDown {
+                app: axon_core::RecordedAppIdentity {
+                    name: "App".into(),
+                    bundle_identifier: None,
+                    process_id: None,
+                },
+                keystroke: axon_core::RecordedKeystroke::Key {
+                    key: "return".into(),
+                },
+                timestamp_ms: 11,
+            });
+
+        // A status poll cannot see it yet, which is what makes this a real backlog rather than an
+        // event the test simply queued late.
+        let status = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(2)),
+                "recording.status",
+                Some(json!({})),
+            ))
+            .unwrap();
+        assert!(matches!(status, JsonRpcResponse::Success(_)));
+        assert_eq!(pending.borrow().len(), 1, "still behind");
+
+        let JsonRpcResponse::Success(stopped) = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(3)),
+                "recording.stop",
+                Some(json!({})),
+            ))
+            .unwrap()
+        else {
+            panic!("a stop that quiesced its observer authors what it was still producing")
+        };
+        assert_eq!(
+            stopped.result["actionCount"], 1,
+            "the recording lost the action its observer produced while stopping"
         );
     }
 
@@ -2331,6 +2472,22 @@ mod tests {
         }
     }
     impl PlatformBackend for FakeBackend {
+        /// This fake records, so by default it claims the observer seam. Without the override it
+        /// would inherit the core default that refuses, and `recording.start`'s capability
+        /// preflight would turn every recording test here into a capability refusal.
+        fn global_input_observer(
+            &mut self,
+        ) -> Result<&mut dyn axon_core::GlobalInputObserver, BackendError> {
+            match self.observer_refusal {
+                Some(code) => Err(BackendError::CapabilityReason {
+                    capability: Capability::ObserveGlobalInput,
+                    code,
+                    reason: "this is a Wayland session".into(),
+                    diagnostic: None,
+                }),
+                None => Ok(self),
+            }
+        }
         fn capabilities(&self) -> Result<Vec<CapabilityInfo>, BackendError> {
             Ok(vec![
                 CapabilityInfo {

@@ -2700,6 +2700,7 @@ mod tests {
     }
 
     const USABLE: SessionFacts = SessionFacts {
+        record: true,
         wayland: false,
         x_display: true,
         window_manager: true,
