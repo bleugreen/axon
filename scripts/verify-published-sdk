@@ -167,7 +167,99 @@ def report(headline: str, differences: list[str]) -> int:
 POLL_SECONDS = 15
 
 
+def _tar(entries: dict[str, bytes], mtime: int = 0) -> bytes:
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        for name, payload in entries.items():
+            info = tarfile.TarInfo(name)
+            info.size, info.mtime = len(payload), mtime
+            archive.addfile(info, io.BytesIO(payload))
+    return buffer.getvalue()
+
+
+def _zip(entries: dict[str, bytes]) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for name, payload in entries.items():
+            archive.writestr(name, payload)
+    return buffer.getvalue()
+
+
+def _fetch_under(behaviour: object) -> object:
+    """What fetch does when the transport behaves this way: a value, or the exception raised."""
+    original = urllib.request.urlopen
+    urllib.request.urlopen = behaviour  # type: ignore[assignment]
+    try:
+        return fetch("https://example.invalid/probe")
+    except Exception as error:  # noqa: BLE001 - identifying what is raised is the point
+        return error
+    finally:
+        urllib.request.urlopen = original  # type: ignore[assignment]
+
+
+def self_test() -> int:
+    """Exercise the decisions that otherwise only ever run against a live registry mid-release.
+
+    The status mapping decides whether a release uploads, and the content comparison decides
+    whether a re-run proceeds. Neither is reachable from an ordinary test run, and both are worst
+    discovered wrong while a release is half finished.
+    """
+    failures: list[str] = []
+
+    def check(label: str, actual: object, expected: object) -> None:
+        if actual != expected:
+            failures.append(f"{label}: got {actual!r}, expected {expected!r}")
+
+    def raising(error: Exception):
+        def behaviour(*_args: object, **_kwargs: object) -> object:
+            raise error
+        return behaviour
+
+    def http(code: int) -> urllib.error.HTTPError:
+        return urllib.error.HTTPError("https://example.invalid/probe", code, "refused", {}, None)
+
+    # Absent is one status and one status only.
+    check("404", _fetch_under(raising(http(404))), None)
+    check("200", _fetch_under(lambda *_a, **_k: io.BytesIO(b"body")), b"body")
+
+    # A registry that will not answer must not be read as a registry with nothing to say. 403 in
+    # particular once mapped to "absent" here, which would have let a release upload against a
+    # version whose state was never established.
+    for code in (401, 403, 429, 500, 503):
+        outcome = _fetch_under(raising(http(code)))
+        if not isinstance(outcome, PublicationUnknown):
+            failures.append(f"HTTP {code}: got {outcome!r}, expected PublicationUnknown")
+    unreachable = _fetch_under(raising(urllib.error.URLError("connection refused")))
+    if not isinstance(unreachable, PublicationUnknown):
+        failures.append(f"unreachable host: got {unreachable!r}, expected PublicationUnknown")
+
+    # Identical contents must match across archives that are not byte-identical, or every retry
+    # after a toolchain update would fail a release for no reason.
+    payload = {"package/index.js": b"export const a = 1;\n", "package/package.json": b"{}\n"}
+    check("same contents, different framing", compare("t", _tar(payload), _tar(payload, 1), "tar"), [])
+    check("same contents, zip", compare("w", _zip(payload), _zip(payload), "zip"), [])
+
+    # And a difference that matters must be named rather than tolerated.
+    changed = {**payload, "package/index.js": b"export const a = 2;\n"}
+    check("one changed file", compare("t", _tar(changed), _tar(payload), "tar"),
+          ["t: package/index.js is published with different bytes"])
+    check("file absent upstream", compare("t", _tar({**payload, "package/new.js": b""}), _tar(payload), "tar"),
+          ["t: package/new.js is missing from the published artifact"])
+    check("file only upstream", compare("t", _tar(payload), _tar({**payload, "package/old.js": b""}), "tar"),
+          ["t: package/old.js is in the published artifact but not in this build"])
+
+    if failures:
+        for failure in failures:
+            print(f"self-test: {failure}", file=sys.stderr)
+        return 1
+    print("self-test: status mapping and content comparison behave")
+    return 0
+
+
 def main(argv: list[str]) -> int:
+    if argv == ["--self-test"]:
+        return self_test()
+
     wait = 0.0
     if argv[:1] == ["--wait"]:
         if len(argv) < 2:
@@ -197,7 +289,11 @@ def main(argv: list[str]) -> int:
 
     deadline = time.monotonic() + wait
     while True:
-        status = check()
+        try:
+            status = check()
+        except PublicationUnknown as unknown:
+            print(f"cannot establish what the registry holds: {unknown}", file=sys.stderr)
+            return 1
         if status != NOT_PUBLISHED or time.monotonic() >= deadline:
             if status == NOT_PUBLISHED and wait > 0:
                 print(
