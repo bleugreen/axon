@@ -11,8 +11,11 @@ archives carrying identical contents can still differ in gzip framing or recorde
 failing a release over that would be a false alarm; a file whose bytes differ is the real thing.
 
 Usage:
-    scripts/verify-published-sdk pypi WHEEL SDIST
-    scripts/verify-published-sdk npm TARBALL
+    scripts/verify-published-sdk [--wait SECONDS] pypi WHEEL SDIST
+    scripts/verify-published-sdk [--wait SECONDS] npm TARBALL
+
+--wait keeps asking until the version appears, which is what an upload needs: a registry accepts a
+upload before it serves it. Contradicted contents fail immediately rather than being waited on.
 
 Exit status:
     0   the registry serves this version and its contents match the given artifacts
@@ -28,6 +31,7 @@ import json
 import subprocess
 import sys
 import tarfile
+import time
 import urllib.error
 import urllib.request
 import zipfile
@@ -146,7 +150,17 @@ def report(headline: str, differences: list[str]) -> int:
     return 0
 
 
+POLL_SECONDS = 15
+
+
 def main(argv: list[str]) -> int:
+    wait = 0.0
+    if argv[:1] == ["--wait"]:
+        if len(argv) < 2:
+            print("--wait needs a number of seconds", file=sys.stderr)
+            return 1
+        wait, argv = float(argv[1]), argv[2:]
+
     version = subprocess.run(
         [str(ROOT / "scripts" / "check-version")],
         cwd=ROOT, check=True, capture_output=True, text=True,
@@ -160,12 +174,24 @@ def main(argv: list[str]) -> int:
 
     match argv:
         case ["pypi", wheel, sdist]:
-            return verify_pypi(version, Path(wheel), Path(sdist))
+            check = lambda: verify_pypi(version, Path(wheel), Path(sdist))  # noqa: E731
         case ["npm", tarball]:
-            return verify_npm(version, Path(tarball))
+            check = lambda: verify_npm(version, Path(tarball))  # noqa: E731
         case _:
             print(__doc__, file=sys.stderr)
             return 1
+
+    deadline = time.monotonic() + wait
+    while True:
+        status = check()
+        if status != NOT_PUBLISHED or time.monotonic() >= deadline:
+            if status == NOT_PUBLISHED and wait > 0:
+                print(
+                    f"waited {wait:.0f}s and the registry still does not serve axon-cmd {version}",
+                    file=sys.stderr,
+                )
+            return status
+        time.sleep(POLL_SECONDS)
 
 
 if __name__ == "__main__":
