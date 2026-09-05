@@ -231,15 +231,45 @@ completion gate: the release is not cut while either registry is missing its pac
 
 ### One-time setup
 
-PyPI and npm differ on whether a name can be created by a workflow. PyPI supports a *pending*
-trusted publisher, configured under the account's Publishing page, which creates the project on
-first use — so no manual upload is needed to establish `axon-cmd` there. npm has no equivalent: a
-trusted publisher is configured in an existing package's settings, so the first `axon-cmd` version
-must be published manually by a maintainer, after which the trusted publisher is registered and
-token publishing should be disallowed under Settings → Publishing access.
+PyPI and npm differ on whether a package name can be brought into existence by a workflow, and that
+difference decides the order of operations for each.
 
-A pending PyPI publisher reserves nothing. If another account registers `axon-cmd` before the first
-publish lands, the pending publisher is invalidated.
+**PyPI** supports a *pending* trusted publisher, registered under the account's Publishing page
+rather than a project's, which creates the project on first use. No manual upload is needed. The
+form takes:
+
+| Field | Value |
+| --- | --- |
+| PyPI Project Name | `axon-cmd` |
+| Owner | `bleugreen` |
+| Repository name | `axon` |
+| Workflow name | `release.yml` |
+| Environment name | `pypi` |
+
+A pending publisher reserves nothing. If another account registers `axon-cmd` before the first
+publish lands, the pending publisher is invalidated and the name is gone.
+
+**npm** has no equivalent: a trusted publisher is configured in an existing package's settings, so
+`axon-cmd` has to exist on npm before automated publishing can work at all. A maintainer publishes
+once by hand, then fills in Trusted Publisher under the package's settings:
+
+| Field | Value |
+| --- | --- |
+| Organization or user | `bleugreen` |
+| Repository | `axon` |
+| Workflow filename | `release.yml` |
+| Environment name | `npm` |
+| Allowed actions | `npm publish` (the release job publishes directly rather than staging) |
+
+Afterwards, set Settings → Publishing access to require two-factor authentication and disallow
+tokens. Trusted publishing keeps working, because it is not token authentication, and the manual
+credential that bootstrapped the package stops being a way in.
+
+Both environments, `pypi` and `npm`, must exist in the repository's GitHub settings. They carry no
+secrets — the only credential either job has is the OIDC token GitHub mints for it — but the
+environment name is part of the identity each registry checks, so a missing or renamed environment
+is a publish failure rather than a warning. They are also where a required reviewer would go if a
+release should pause for approval before it uploads.
 
 ## Homebrew Cask
 
