@@ -831,6 +831,121 @@ mod tests {
         assert_eq!(ledger.outstanding(), 1, "the sweep runs on the next injection");
     }
 
+    /// What the listener makes of a stream, in the cases a real desktop would only produce by
+    /// accident and this can produce on purpose.
+    #[test]
+    fn a_wheel_notch_is_a_scroll_and_motion_only_counts_between_a_press_and_its_release() {
+        let ledger = SelfDelivery::new();
+        let mut decoder = Decoder::default();
+        let mut observe = |kind, detail| {
+            decoder.observe_against(
+                &ledger,
+                CoreEvent {
+                    kind,
+                    detail,
+                    point: (10, 20),
+                    state: 0,
+                },
+            )
+        };
+
+        assert_eq!(
+            observe(MOTION_NOTIFY, 0),
+            None,
+            "a pointer crossing the screen is not an action"
+        );
+        assert_eq!(
+            observe(BUTTON_PRESS, BUTTON_PRIMARY),
+            Some(RawInput::Button {
+                down: true,
+                point: (10, 20)
+            })
+        );
+        assert_eq!(
+            observe(MOTION_NOTIFY, 0),
+            Some(RawInput::Motion { point: (10, 20) }),
+            "motion between a press and its release is a drag"
+        );
+        assert_eq!(
+            observe(BUTTON_RELEASE, BUTTON_PRIMARY),
+            Some(RawInput::Button {
+                down: false,
+                point: (10, 20)
+            })
+        );
+        assert_eq!(observe(MOTION_NOTIFY, 0), None);
+
+        // X11 spells a wheel notch as a press and a release of button 4. Only the press is a notch.
+        assert_eq!(
+            observe(BUTTON_PRESS, BUTTON_WHEEL_UP),
+            Some(RawInput::Wheel {
+                button: BUTTON_WHEEL_UP,
+                point: (10, 20)
+            })
+        );
+        assert_eq!(
+            observe(BUTTON_RELEASE, BUTTON_WHEEL_UP),
+            None,
+            "recording the release too would double every scroll"
+        );
+        assert_eq!(
+            observe(MOTION_NOTIFY, 0),
+            None,
+            "nor does a wheel notch make the observer think a button is held"
+        );
+
+        assert_eq!(
+            observe(KEY_PRESS, 38),
+            Some(RawInput::Key {
+                keycode: 38,
+                state: 0
+            })
+        );
+        assert_eq!(
+            observe(KEY_RELEASE, 38),
+            None,
+            "a key release carries nothing the recorder needs"
+        );
+    }
+
+    /// The sequence the ledger exists for, at the level the listener sees it.
+    ///
+    /// Our own release must not be what decides the user is no longer dragging. If it were, every
+    /// real motion sample after a click this daemon posted mid-gesture would be discarded and the
+    /// user's drag would be recorded truncated.
+    #[test]
+    fn our_own_click_cannot_truncate_a_drag_the_user_is_making() {
+        let ledger = SelfDelivery::new();
+        ledger.arm();
+        let mut decoder = Decoder::default();
+        let mut observe = |kind, detail| {
+            decoder.observe_against(
+                &ledger,
+                CoreEvent {
+                    kind,
+                    detail,
+                    point: (5, 6),
+                    state: 0,
+                },
+            )
+        };
+
+        assert!(observe(BUTTON_PRESS, BUTTON_PRIMARY).is_some());
+
+        // The daemon posts a click of its own, mid-gesture. Both halves are registered before they
+        // are sent, exactly as `X11Session::fake_input` registers them.
+        ledger.expect(BUTTON_PRESS, BUTTON_PRIMARY);
+        ledger.expect(BUTTON_RELEASE, BUTTON_PRIMARY);
+        assert_eq!(observe(BUTTON_PRESS, BUTTON_PRIMARY), None);
+        assert_eq!(observe(BUTTON_RELEASE, BUTTON_PRIMARY), None);
+
+        assert_eq!(
+            observe(MOTION_NOTIFY, 0),
+            Some(RawInput::Motion { point: (5, 6) }),
+            "our own release must not end the user's drag"
+        );
+    }
+
     #[test]
     fn a_flood_of_failed_injections_cannot_grow_the_ledger_without_bound() {
         let ledger = SelfDelivery::new();
