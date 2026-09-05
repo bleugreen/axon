@@ -24,8 +24,8 @@ use crate::recording::{
 use crate::x11::{Keyboard, X11Session};
 use crate::xrecord::RecordSession;
 use axon_core::{
-    BackendError, GlobalInputObserver, RecordedAppIdentity, RecordedInputEvent, RecordedPoint,
-    RecordedTargetEvidence, RecordingScope, dropped_events_warning,
+    BackendError, RecordedAppIdentity, RecordedInputEvent, RecordedPoint, RecordedTargetEvidence,
+    RecordingScope, dropped_events_warning,
 };
 use std::{
     sync::{Arc, mpsc},
@@ -326,17 +326,6 @@ impl LinuxGlobalInputObserver {
         self_delivery().disarm();
     }
 
-    /// The deepest the raw queue has been this session, which is what says whether enrichment is
-    /// keeping up or merely has not fallen behind yet.
-    pub fn raw_queue_depth(&self) -> usize {
-        self.raw.high_water()
-    }
-
-    /// What is still waiting for enrichment. Zero at the end of a burst means it caught up.
-    pub fn raw_queue_pending(&self) -> usize {
-        self.raw.depth()
-    }
-
     pub fn poll(&mut self, timeout: Duration) -> Result<Vec<RecordedInputEvent>, BackendError> {
         if self.session.is_none() {
             return Err(operation("no global input observer session is active"));
@@ -364,8 +353,3 @@ impl Drop for LinuxGlobalInputObserver {
     }
 }
 
-/// Named so the trait's own methods can be reached on the backend that delegates to this observer.
-const _: fn() = || {
-    fn assert_seam<T: GlobalInputObserver>() {}
-    let _ = assert_seam::<super::LinuxBackend>;
-};
