@@ -47,6 +47,10 @@ packages = ["axon_cmd"]
 # The tests read sdk/fixtures and schema/fixtures, which are repository paths rather than package
 # data, so they cannot run from an unpacked sdist. Shipping them would ship something that cannot
 # work: the sdist carries the client, its metadata, and its README.
+#
+# Hatchling force-includes the nearest .gitignore into every sdist, and it walks up to find one.
+# The `sdk/python/.gitignore` beside this file is therefore load-bearing: without it a published
+# sdist would carry the whole repository's ignore list, and `ignore-vcs` does not suppress it.
 [tool.hatch.build.targets.sdist]
 include = ["axon_cmd", "README.md"]
 
