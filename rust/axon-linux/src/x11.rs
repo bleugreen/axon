@@ -137,6 +137,15 @@ impl X11Session {
             .is_some()
     }
 
+    /// Whether this server actually provides RECORD.
+    ///
+    /// Read for the same reason [`Self::supports_xtest`] is read: a server can be built or started
+    /// without it and will answer everything else about the session normally. `Xvfb` in particular
+    /// is a build where its presence is worth checking rather than assuming.
+    pub fn supports_record(&self) -> bool {
+        crate::xrecord::supported(&self.connection)
+    }
+
     /// Whether a window manager is present that publishes the two properties the foreground
     /// transaction is built from.
     ///
@@ -457,6 +466,32 @@ impl X11Session {
         for _ in 0..MAX_WINDOW_TREE_STEPS {
             if owned.contains(&window) {
                 return Ok(Some(window));
+            }
+            match self.parent_of(window)? {
+                Some(parent) if parent != self.root && parent != x11rb::NONE => window = parent,
+                _ => return Ok(None),
+            }
+        }
+        Ok(None)
+    }
+
+    /// Which process owns whatever is under a screen point.
+    ///
+    /// The reverse of [`Self::managed_window_at`], which starts from a process the caller already
+    /// resolved. Observation has only the point, because the user clicked wherever they clicked,
+    /// and the process is what turns that into an application AT-SPI can be asked about.
+    ///
+    /// X11 answers this and AT-SPI cannot: the accessibility bus exposes no stacking order, so
+    /// picking between two applications whose windows both cover a point would be a guess there.
+    /// Here it is a fact, read from the window tree the server maintains.
+    ///
+    /// The climb exists because `_NET_WM_PID` sits on the client's own top-level window, while the
+    /// descent ends at whichever child window the toolkit put under the pointer.
+    pub fn process_at(&self, point: (i16, i16)) -> Result<Option<u32>, BackendError> {
+        let mut window = self.window_under(point)?;
+        for _ in 0..MAX_WINDOW_TREE_STEPS {
+            if let Some(pid) = self.window_pid(window)? {
+                return Ok(Some(pid));
             }
             match self.parent_of(window)? {
                 Some(parent) if parent != self.root && parent != x11rb::NONE => window = parent,
@@ -793,7 +828,19 @@ impl X11Session {
         })
     }
 
+    /// Posts one synthetic event through the global input device.
+    ///
+    /// Every synthetic event this daemon sends passes through here, which is what makes this the
+    /// one place the self-delivery ledger has to be told about it. An XTEST event is by design
+    /// indistinguishable from a real one once the server has it -- that is the whole point of the
+    /// extension, and it is why `xdotool` output reaches `xev` -- so an observer running at the
+    /// same time would otherwise record this daemon's own clicks and keystrokes as the user's.
+    ///
+    /// Registered *before* the request is sent, so the expectation is already in place by the time
+    /// the server can generate the event. See [`crate::recording::SelfDelivery`] for what that
+    /// ordering does and does not guarantee.
     fn fake_input(&self, kind: u8, detail: u8, x: i16, y: i16) -> Result<(), BackendError> {
+        crate::recording::self_delivery().expect(kind, detail);
         self.connection
             .xtest_fake_input(kind, detail, x11rb::CURRENT_TIME, self.root, x, y, 0)
             .map_err(|error| operation("post synthetic input", error))?;
