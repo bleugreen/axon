@@ -56,8 +56,8 @@ done
 # Tracked package sources, which are exactly what both artifacts must carry. `git ls-files` also
 # keeps build leftovers such as __pycache__ out of the expectation, so an artifact that picked one
 # up fails rather than being compared against itself.
-mapfile -t PACKAGE_FILES < <(git ls-files "$PACKAGE_DIR/axon_cmd" | sed "s|^$PACKAGE_DIR/||" | sort)
-if [[ "${#PACKAGE_FILES[@]}" -eq 0 ]]; then
+git ls-files "$PACKAGE_DIR/axon_cmd" | sed "s|^$PACKAGE_DIR/||" | sort > "$WORK/package-files"
+if [[ ! -s "$WORK/package-files" ]]; then
   printf 'no tracked files under %s/axon_cmd\n' "$PACKAGE_DIR" >&2
   exit 1
 fi
@@ -74,8 +74,8 @@ compare_manifest() {
 
 # The wheel carries the package and its metadata directory, and nothing else.
 {
-  printf '%s\n' "${PACKAGE_FILES[@]}"
-  printf 'axon_cmd-%s.dist-info/METADATA\n' "$VERSION"
+  cat "$WORK/package-files"
+  printf 'axon_cmd-%s.dist-info/METADATA\n' "$VERSION"</dev/null
   printf 'axon_cmd-%s.dist-info/RECORD\n' "$VERSION"
   printf 'axon_cmd-%s.dist-info/WHEEL\n' "$VERSION"
 } | sort > "$WORK/wheel.expected"
@@ -86,7 +86,7 @@ compare_manifest "$WHEEL" "$WORK/wheel.expected" "$WORK/wheel.actual"
 # The sdist adds the files a rebuild needs. `.gitignore` is there because hatchling force-includes
 # the nearest one; sdk/python carries its own so a release does not ship the repository's.
 {
-  printf '%s\n' "${PACKAGE_FILES[@]}"
+  cat "$WORK/package-files"
   printf '.gitignore\nPKG-INFO\nREADME.md\npyproject.toml\n'
 } | sed "s|^|axon_cmd-$VERSION/|" | sort > "$WORK/sdist.expected"
 tar -tzf "$OUT/$SDIST" | sed 's|/$||' | sort > "$WORK/sdist.actual"
