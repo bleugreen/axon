@@ -30,7 +30,7 @@ use axon_core::{
 use std::{
     sync::{Arc, mpsc},
     thread::{self, JoinHandle},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 /// How many raw events may wait for enrichment before the listener starts dropping them.
@@ -113,20 +113,45 @@ fn point_evidence(
 /// here and on `RecordedInputEvent::KeyDown` is then the whole change, with no second reshaping of
 /// the observer's vocabulary.
 ///
-/// It is deliberately not read today: it costs a focused-element round trip per keystroke across
-/// D-Bus, and enrichment is already the slow half of this observer.
+/// Sensitivity is deliberately not read today: it costs a focused-element search across D-Bus per
+/// keystroke, and on this platform that search is a tree walk rather than a single query.
 struct KeyContext {
     app: RecordedAppIdentity,
 }
 
-fn key_context(
-    commands: &mpsc::Sender<Command>,
-    lookup: Option<&X11Session>,
-) -> Option<KeyContext> {
-    let pid = frontmost_process(lookup)?;
-    ask(commands, |tx| Command::RecordedIdentity(pid, tx))
-        .flatten()
-        .map(|app| KeyContext { app })
+/// How long the application behind one process id is trusted before it is asked for again.
+///
+/// The same bound the backend gives its own application-to-process map, and it exists here for a
+/// sharper reason. Naming an application costs the actor a bus enumeration -- every application
+/// root, a process id for each, and a name read -- which is affordable once per click and ruinous
+/// once per keystroke. A typing burst goes into one application, so its identity is read at the
+/// start of the burst and reused through it, while a pid change or the timeout re-reads it.
+const KEY_IDENTITY_FRESHNESS: Duration = Duration::from_secs(2);
+
+/// The application a keystroke belongs to, read at most once per burst.
+#[derive(Default)]
+struct KeyIdentity {
+    known: Option<(u32, RecordedAppIdentity, Instant)>,
+}
+
+impl KeyIdentity {
+    fn of(
+        &mut self,
+        commands: &mpsc::Sender<Command>,
+        lookup: Option<&X11Session>,
+    ) -> Option<KeyContext> {
+        let pid = frontmost_process(lookup)?;
+        if let Some((known, app, read)) = &self.known
+            && *known == pid
+            && read.elapsed() < KEY_IDENTITY_FRESHNESS
+        {
+            return Some(KeyContext { app: app.clone() });
+        }
+        let app: RecordedAppIdentity =
+            ask(commands, |tx| Command::RecordedIdentity(pid, tx)).flatten()?;
+        self.known = Some((pid, app.clone(), Instant::now()));
+        Some(KeyContext { app })
+    }
 }
 
 /// Turns one raw event into what shared core records, reading the interface as it does so.
@@ -135,6 +160,7 @@ fn enrich(
     commands: &mpsc::Sender<Command>,
     lookup: Option<&X11Session>,
     keyboard: &Keyboard,
+    identity: &mut KeyIdentity,
     raw: RawEvent,
 ) -> Option<RecordedInputEvent> {
     let timestamp_ms = raw.timestamp_ms;
@@ -144,7 +170,7 @@ fn enrich(
             let keystroke = classify_keystroke(modifiers, |level| {
                 keyboard.mapping.keysym_at(keycode, keysym_level(level))
             })?;
-            let context = key_context(commands, lookup)?;
+            let context = identity.of(commands, lookup)?;
             scope
                 .accepts(&context.app)
                 .then_some(RecordedInputEvent::KeyDown {
@@ -205,6 +231,7 @@ fn enrichment_thread(
     enriched: Arc<Enriched>,
 ) {
     let lookup = X11Session::connect();
+    let mut identity = KeyIdentity::default();
     loop {
         let batch = raw.drain(DRAIN_INTERVAL);
         if batch.dropped > 0 {
@@ -222,7 +249,14 @@ fn enrichment_thread(
             });
         }
         for event in batch.events {
-            if let Some(event) = enrich(&scope, &commands, lookup.as_ref(), &keyboard, event) {
+            if let Some(event) = enrich(
+                &scope,
+                &commands,
+                lookup.as_ref(),
+                &keyboard,
+                &mut identity,
+                event,
+            ) {
                 enriched.offer(event);
             }
         }
