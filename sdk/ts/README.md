@@ -1,28 +1,35 @@
-# @axon/sdk
+# axon-cmd
 
 A dependency-free TypeScript client for the Axon daemon. It speaks the daemon's JSON-RPC socket
 directly, and its per-tool method signatures are generated from `schema/tool-surface-v1.json`, so
 the client describes the same tool surface the daemon implements or CI fails.
 
+The Python client is published under the same name on PyPI.
+
 ## Install
 
-Not yet published to a registry. Build it from a checkout and depend on the directory:
-
 ```sh
-cd sdk/ts && bun install && bun run build
+npm install axon-cmd
 ```
 
 ```sh
-bun add file:/path/to/axon/sdk/ts     # or: npm install /path/to/axon/sdk/ts
+bun add axon-cmd
 ```
 
-The published package has zero runtime dependencies and runs on Node 20+ as well as Bun. Bun is
-only needed to build and test it.
+**This package is not the daemon.** It is a client for one, so Axon has to be installed separately
+and running before any call succeeds — see [Install Axon](../../docs/install.md). `Axon.connect()`
+is where that is checked, and it throws there with a reason rather than at the first action.
+
+Versions track the daemon: `axon-cmd 0.3.6` is generated from the 0.3.6 tool surface and warns when
+it connects to a daemon reporting something else. Pin the pair when reproducibility matters.
+
+The package has zero runtime dependencies, ships ESM with type declarations, and runs on Node 20+
+as well as Bun. Bun is only needed to build and test it from a checkout.
 
 ## Use
 
 ```ts
-import { Axon } from "@axon/sdk";
+import { Axon } from "axon-cmd";
 
 const axon = await Axon.connect();          // health handshake; throws if the daemon is not ready
 const session = axon.session("checkout");   // every call below is recorded under this session
@@ -99,3 +106,8 @@ bun run typecheck   # types, including the tests
 bun test            # against a fake daemon on a Unix socket; no daemon required
 bun run build       # emits dist/ for Node consumers
 ```
+
+From the repository root, `scripts/check-sdk-ts-package` builds and packs the tarball, asserts what
+it contains and what its manifest claims, and installs it into an empty consumer to prove the ESM
+import under both Node and Bun. It reaches no registry, and it is what a release runs before
+publishing.
