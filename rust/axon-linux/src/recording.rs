@@ -751,7 +751,7 @@ mod tests {
                 })
                 .collect();
             Snapshot::new(Application {
-                process_id: 4242,
+                process_id: Some(4242),
                 name: "Chromium".into(),
                 identifier: None,
                 windows: vec![Window {
