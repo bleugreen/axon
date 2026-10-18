@@ -1363,8 +1363,9 @@ fn finish_stops_exactly_once_and_propagates_stop_failure() {
 /// The bounded hand-off every observing backend sits behind.
 ///
 /// These belong here rather than beside one platform's hook, because the guarantee is the same
-/// wherever the events come from: a producer that must never wait, and a loss that is counted and
-/// reported instead of being swallowed.
+/// wherever the events come from: a producer that never waits on the consumer's work and never
+/// refuses an event it has room for, and a loss that is counted and reported instead of being
+/// swallowed.
 mod observed_input_queue {
     use axon_core::{ObservedInputQueue, dropped_events_warning};
     use std::time::{Duration, Instant};
