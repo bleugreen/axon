@@ -10,6 +10,17 @@
 #
 #   ./scripts/linux-recording-probe [--daemon path/to/axon-linux]
 #
+# The bench machine is bginf-halo (Fedora 43, Xfce on X11, lightdm autologin as `dev`), with
+# xdotool, xdpyinfo and Chromium (`chromium-browser`) installed; its `:0` advertises RECORD. Two
+# things about it are worth knowing before a run:
+#
+# - The Xfce screensaver will take the foreground mid-probe and the clicks are then recorded,
+#   correctly, against `xfce4-screensaver-dialog`. This probe refuses to post input unless its own
+#   window is frontmost, and the fix is the desktop's, not the probe's:
+#     xfconf-query -c xfce4-screensaver -p /saver/enabled -s false; xset s off -dpms
+# - The daemon names Chromium's AT-SPI application `Chromium`, not the page title. Set
+#   AXON_PROBE_APP if another browser or build names itself differently.
+#
 # It builds the daemon if none is given, brings up its own browser page, and cleans up after itself.
 #
 # THE ONE THING THAT MUST NOT BE SIMPLIFIED. The input being recorded is posted by xdotool, a
@@ -32,6 +43,10 @@ done
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 ask="$root/scripts/axon-socket-request"
+app_query="${AXON_PROBE_APP:-Chromium}"
+# Chromium publishes an HTML <button> as `button` on this backend; GTK names the same thing
+# `push button`. Either is the element this probe is looking for.
+button_roles='["button","push button"]'
 
 fail() { echo "FAILED: $*" >&2; exit 1; }
 note() { printf '\n=== %s\n' "$*"; }
@@ -51,7 +66,12 @@ fi
 
 # A page with two elements worth recording against: something to click and something to type into.
 # A local file rather than a network page, so the probe does not depend on anything being reachable.
-page="$(mktemp -d)/recording-probe.html"
+#
+# Under /tmp explicitly rather than wherever `mktemp` would put it: `mktemp` honours $TMPDIR, which
+# under an agent executor is long enough that Chromium's profile lock socket exceeds the Unix socket
+# path limit and the browser dies at launch (`process_singleton_posix.cc: Socket path too long`).
+scratch="$(mktemp -d /tmp/axon-probe.XXXXXX)"
+page="$scratch/recording-probe.html"
 cat > "$page" <<'HTML'
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Axon Recording Probe</title></head>
@@ -69,12 +89,12 @@ for candidate in chromium chromium-browser google-chrome; do
 done
 [ -n "$browser" ] || fail "no Chromium-family browser found; GTK4 reports zeroed AT-SPI extents on X11, so this probe wants Chromium or a GTK3 application"
 
-profile="$(mktemp -d)"
+profile="$scratch/profile"
 "$browser" --user-data-dir="$profile" --no-first-run --no-default-browser-check \
   --force-renderer-accessibility --new-window "file://$page" >/dev/null 2>&1 &
 browser_pid=$!
 
-log="$(mktemp)"
+log="$scratch/daemon.log"
 "$daemon" serve >"$log" 2>&1 &
 daemon_pid=$!
 
@@ -86,11 +106,22 @@ cleanup() {
   done
   kill -9 "$daemon_pid" >/dev/null 2>&1 || true
   kill "$browser_pid" >/dev/null 2>&1 || true
-  rm -rf "$profile"
+  rm -rf "$scratch"
 }
 trap cleanup EXIT
 
 mcp() { printf '%s\n' "$1" | "$daemon" mcp; }
+
+# `serve` returns to the shell before the daemon is answering, and `status --json` asked in that
+# window reports `daemon-not-running` -- while still listing capabilities, so waiting for the array
+# to exist proves nothing. Wait on the daemon saying it is ready.
+note "waiting for the daemon"
+for _ in $(seq 1 60); do
+  "$daemon" status --json 2>/dev/null | jq -e '.daemon.ready == true' >/dev/null 2>&1 && break
+  kill -0 "$daemon_pid" 2>/dev/null || { cat "$log"; fail "the daemon exited during startup"; }
+  sleep 0.5
+done
+"$daemon" status --json | jq -e '.daemon.ready == true' >/dev/null || { cat "$log"; fail "the daemon never reported ready"; }
 
 note "the session as the daemon reports it"
 "$daemon" status --json | jq '{
@@ -105,10 +136,12 @@ note "the session as the daemon reports it"
 note "waiting for the probe page on the accessibility bus"
 app=""
 for _ in $(seq 1 60); do
-  look="$(mcp '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{"app":"Axon Recording Probe","frames":true}}}')"
-  if printf '%s' "$look" | jq -e '
+  # `screenshot: false` because the reply is otherwise around 70 KB per poll, for nothing this
+  # probe reads.
+  look="$(mcp "$(jq -cn --arg app "$app_query" '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{"app":$app,"frames":true,"screenshot":false}}}')")"
+  if printf '%s' "$look" | jq -e --argjson roles "$button_roles" '
     .result.isError == false
-    and ([.result.structuredContent.app.windows[]?.root | .. | objects | select(.role == "push button" and (.label? // .name?) == "Press me")] | length == 1)
+    and ([.result.structuredContent.app.windows[]?.root | .. | objects | select((.role | IN($roles[])) and (.label? // .name?) == "Press me")] | length == 1)
     and ([.result.structuredContent.app.windows[]?.root | .. | objects | select(.role == "entry" and (.label? // "") == "Recording note")] | length == 1)
   ' >/dev/null 2>&1; then
     app="$(printf '%s' "$look" | jq -r '.result.structuredContent.app.name')"
@@ -122,17 +155,32 @@ echo "the daemon calls this application: $app"
 # The centres of the two elements, in screen coordinates. `look` strips frames unless asked, which
 # is why `frames: true` is above: without them there is no point to aim at.
 centre() {
-  printf '%s' "$look" | jq -r --arg role "$1" --arg label "$2" '
+  printf '%s' "$look" | jq -r --argjson roles "$1" --arg label "$2" '
     [.result.structuredContent.app.windows[]?.root | .. | objects
-     | select(.role == $role and ((.label? // .name?) == $label)) | .frame][0]
-    | if . == null then "" else "\(.x + .width / 2) \(.y + .height / 2)" end'
+     | select((.role | IN($roles[])) and ((.label? // .name?) == $label)) | .frame][0]
+    | if . == null then "" else "\(.x + .width / 2 | floor) \(.y + .height / 2 | floor)" end'
 }
-button_at="$(centre 'push button' 'Press me')"
-entry_at="$(centre entry 'Recording note')"
+button_at="$(centre "$button_roles" 'Press me')"
+entry_at="$(centre '["entry"]' 'Recording note')"
 [ -n "$button_at" ] && [ -n "$entry_at" ] || fail "the page published no frames to aim at; GTK4 on X11 reports zeroed extents, which is why this probe targets Chromium"
+
+# Input posted while something else holds the foreground is recorded, correctly, against that
+# something else -- a screensaver dialog, a notification, another window -- and would read as a
+# backend that misattributes clicks. So the probe window is raised and then confirmed frontmost
+# before every recording, rather than assumed to be.
+probe_window_frontmost() {
+  xdotool search --name 'Axon Recording Probe' windowactivate --sync >/dev/null 2>&1 || true
+  local active
+  active="$(xdotool getactivewindow getwindowname 2>/dev/null || echo '<none>')"
+  case "$active" in
+    *'Axon Recording Probe'*) ;;
+    *) fail "the frontmost window is '$active', not the probe page; a screensaver or another window has the foreground (see this script's header)" ;;
+  esac
+}
 
 note "recording, with the input coming from xdotool rather than from the daemon"
 for scope in allApplications application; do
+  probe_window_frontmost
   case "$scope" in
     allApplications) scope_params='{"scope":"allApplications"}' ;;
     application) scope_params="$(jq -cn --arg app "$app" '{"scope":"application","app":{"name":$app}}')" ;;
