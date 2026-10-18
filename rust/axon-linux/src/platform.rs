@@ -2118,9 +2118,7 @@ impl Actor {
         object: &ObjectRefOwned,
         window_title: Option<&str>,
     ) -> RecordedElementEvidence {
-        self.describe(object)
-            .await
-            .into_evidence(window_title)
+        self.describe(object).await.into_evidence(window_title)
     }
 
     /// The properties an element is identified by, read the way `node` reads them.

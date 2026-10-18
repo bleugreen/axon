@@ -710,7 +710,11 @@ mod tests {
             ) -> Result<Option<Snapshot>, BackendError> {
                 Ok(Some(self.snapshot.clone()))
             }
-            fn settle(&mut self, _: usize, _: &str) -> Result<RecordedSettleEvidence, BackendError> {
+            fn settle(
+                &mut self,
+                _: usize,
+                _: &str,
+            ) -> Result<RecordedSettleEvidence, BackendError> {
                 Ok(RecordedSettleEvidence::default())
             }
         }
