@@ -408,8 +408,9 @@ events with a close conceptual fit to AX.
   core's `ObservedInputQueue`, which Linux uses too. It refuses an event only
   when it is full, never because the enrichment thread happens to hold its lock:
   the consumer holds that lock only to swap the backlog out, so the producer waits
-  a moment at most. An earlier `try_lock` producer counted every contended offer
-  as a drop and lost half a click under ordinary load.
+  a moment at most. A producer that gave up on a contended lock instead would
+  lose half a click under ordinary load, because the consumer drains
+  continuously and a press and its release arrive back to back.
 - The daemon must not record its own delivery, and the flag that looks like it
   answers this does not. Every `SendInput` from every process sets
   `LLKHF_INJECTED`, so filtering on it would discard assistive technology,
