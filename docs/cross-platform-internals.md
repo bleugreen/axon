@@ -544,6 +544,22 @@ asked for first, since that is the frame the event arrived in, and a provider th
 answers only in window coordinates is asked again relative to its own frame rather
 than being written off.
 
+A recorded event becomes a semantic target only if shared core can find its
+element again: it compares each evidence candidate field by field against a fresh
+capture, and anything that disagrees falls back to a screen point without an error.
+So the evidence and the capture node are built from one mapping,
+`ElementDescription` in `rust/axon-linux/src/recording.rs`, rather than from two
+that could drift apart. That mapping fixes two decisions. AT-SPI publishes one name
+where this project has a title and a label; capture puts it in `label`, and the
+evidence vocabulary has no label, so a matched candidate carries no title. The
+exception is a sensitive candidate, which shared core never matches and which keeps
+the name to label the secret argument it becomes. And a candidate carries no value,
+because the evidence is read at event time while the snapshot it is matched against
+is captured when the recording is next pumped, after the user may have typed into
+the very field they clicked. The identifier, a bus name and object path, already
+names the element exactly. The value a `setValue` is authored from is read
+separately, from the focused element when its burst is flushed.
+
 **Excluding this daemon's own delivery has no per-event channel to use.** Windows
 stamps `INPUT.dwExtraInfo` and reads it straight back off the hook. A core X11
 event has no equivalent field, and an XTEST-injected event is by design
