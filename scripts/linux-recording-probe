@@ -67,9 +67,7 @@ fi
 # A page with two elements worth recording against: something to click and something to type into.
 # A local file rather than a network page, so the probe does not depend on anything being reachable.
 #
-# Under /tmp explicitly rather than wherever `mktemp` would put it: `mktemp` honours $TMPDIR, which
-# under an agent executor is long enough that Chromium's profile lock socket exceeds the Unix socket
-# path limit and the browser dies at launch (`process_singleton_posix.cc: Socket path too long`).
+# Kept when the probe fails, because the daemon log in it is the one diagnostic a failed run leaves.
 scratch="$(mktemp -d /tmp/axon-probe.XXXXXX)"
 page="$scratch/recording-probe.html"
 cat > "$page" <<'HTML'
@@ -89,8 +87,12 @@ for candidate in chromium chromium-browser google-chrome; do
 done
 [ -n "$browser" ] || fail "no Chromium-family browser found; GTK4 reports zeroed AT-SPI extents on X11, so this probe wants Chromium or a GTK3 application"
 
+# `TMPDIR=/tmp` on the browser itself, not just a short profile path. Chromium creates its singleton
+# socket under its own $TMPDIR and links it from the profile, and under an agent executor $TMPDIR is
+# long enough to exceed the Unix socket path limit: the browser dies at launch with
+# `process_singleton_posix.cc: Socket path too long`.
 profile="$scratch/profile"
-"$browser" --user-data-dir="$profile" --no-first-run --no-default-browser-check \
+TMPDIR=/tmp "$browser" --user-data-dir="$profile" --no-first-run --no-default-browser-check \
   --force-renderer-accessibility --new-window "file://$page" >/dev/null 2>&1 &
 browser_pid=$!
 
@@ -99,6 +101,7 @@ log="$scratch/daemon.log"
 daemon_pid=$!
 
 cleanup() {
+  local status=$?
   "$daemon" shutdown >/dev/null 2>&1 || true
   for _ in $(seq 1 40); do
     kill -0 "$daemon_pid" 2>/dev/null || break
@@ -106,11 +109,24 @@ cleanup() {
   done
   kill -9 "$daemon_pid" >/dev/null 2>&1 || true
   kill "$browser_pid" >/dev/null 2>&1 || true
-  rm -rf "$scratch"
+  if [ "$status" -eq 0 ]; then
+    rm -rf "$scratch"
+  else
+    echo "kept $scratch for diagnosis; the daemon log is $log" >&2
+  fi
 }
 trap cleanup EXIT
 
 mcp() { printf '%s\n' "$1" | "$daemon" mcp; }
+
+# Every answer is checked before anything is read out of it. A transport error (`.error`) or a
+# tool-level failure (`.result.isError`) otherwise reads as an empty result, and an empty result is
+# exactly what several of the assertions below would mistake for success.
+answered() {
+  local what="$1" response="$2"
+  printf '%s' "$response" | jq -e '(.error == null) and ((.result.isError // false) == false)' >/dev/null 2>&1 \
+    || { printf '%s\n' "$response" | jq '.' 2>/dev/null || printf '%s\n' "$response"; fail "$what"; }
+}
 
 # `serve` returns to the shell before the daemon is answering, and `status --json` asked in that
 # window reports `daemon-not-running` -- while still listing capabilities, so waiting for the array
@@ -178,17 +194,25 @@ probe_window_frontmost() {
   esac
 }
 
+# Emptied before each recording rather than during it, so clearing it is not itself recorded. Without
+# this the second scope's burst is appended to the first's and records a doubled value.
+clear_entry() {
+  xdotool mousemove ${entry_at%% *} ${entry_at##* } click 1
+  xdotool key --clearmodifiers ctrl+a BackSpace
+  sleep 0.3
+}
+
 note "recording, with the input coming from xdotool rather than from the daemon"
 for scope in allApplications application; do
   probe_window_frontmost
+  clear_entry
   case "$scope" in
     allApplications) scope_params='{"scope":"allApplications"}' ;;
     application) scope_params="$(jq -cn --arg app "$app" '{"scope":"application","app":{"name":$app}}')" ;;
   esac
 
   started="$("$ask" "$(jq -cn --argjson scope "$scope_params" '{"jsonrpc":"2.0","id":1,"method":"recording.start","params":{"scope":$scope}}')")"
-  printf '%s' "$started" | jq -e '.result.sessionId' >/dev/null \
-    || { printf '%s\n' "$started"; fail "recording.start refused for scope $scope"; }
+  answered "recording.start refused for scope $scope" "$started"
 
   # A separate process, and the whole point of the lane. `--clearmodifiers` so a stuck modifier on
   # the desktop does not turn the typed burst into a chord.
@@ -200,21 +224,26 @@ for scope in allApplications application; do
   sleep 0.6
 
   status="$("$ask" '{"jsonrpc":"2.0","id":2,"method":"recording.status","params":{}}')"
+  answered "recording.status failed" "$status"
   printf '%s' "$status" | jq -e '.result.recording == true' >/dev/null || fail "the session stopped on its own"
 
   stopped="$("$ask" '{"jsonrpc":"2.0","id":3,"method":"recording.stop","params":{}}')"
+  answered "recording.stop failed" "$stopped"
   printf '%s' "$stopped" | jq '{actionCount: .result.actionCount, script: .result.script}'
   count="$(printf '%s' "$stopped" | jq -r '.result.actionCount // 0')"
-  [ "$count" -ge 2 ] || fail "scope $scope recorded $count actions; the click and the typed burst should both be there"
+  [ "$count" -eq 3 ] || fail "scope $scope recorded $count actions; two clicks and one typed burst were posted"
 
   script="$(printf '%s' "$stopped" | jq -r '.result.script')"
   printf '%s' "$script" | grep -q 'locator' || fail "scope $scope recorded no semantic target, only points"
+  printf '%s' "$script" | grep -q 'point' && fail "scope $scope fell back to a point target for at least one action"
+  printf '%s' "$script" | grep -q 'axon recorded thisaxon' && fail "scope $scope recorded a doubled value; the entry was not cleared"
+  printf '%s' "$script" | grep -q 'dropped' && fail "scope $scope reports that the observer dropped events"
   # axn/213's shape: identity only. A recorded locator that carried the value or the frame would be
   # describing the moment rather than the element.
   printf '%s' "$script" | grep -Eq '^\s+(frame|nearbyText):' && fail "a recorded locator carried state, not identity"
 
   if [ "$scope" = application ]; then
-    printf '%s' "$script" > /tmp/axon-linux-recording.axn
+    printf '%s\n' "$script" > "$scratch/recorded.axn"
   fi
 done
 echo "both scopes recorded the same flow, which is what tells an identity disagreement apart from a broken observer"
@@ -226,49 +255,77 @@ note "replaying what was recorded"
 # it is not specific to this platform, and it is deliberately not fixed here. What this asserts
 # instead is what the recording is actually about: every action dispatched, and every recorded
 # target resolved to exactly one element.
-run_recorded() {
-  jq -cn --arg script "$(cat /tmp/axon-linux-recording.axn)" --argjson dry "$1" \
-    '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"script":$script,"dryRun":$dry,"continueOnError":true}}}' \
-    | "$daemon" mcp
+#
+# `run` takes an artifact by `path` (or inline `actions`), never as a string.
+run_artifact() {
+  mcp "$(jq -cn --arg path "$1" --argjson dry "$2" \
+    '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"path":$path,"dryRun":$dry,"continueOnError":true}}}')"
 }
 
-for dry in true false; do
-  replayed="$(run_recorded "$dry")"
-  printf '%s' "$replayed" | jq --argjson dry "$dry" '{dryRun: $dry, actions: [.result.structuredContent.actions[]? | {id, tool, dispatchSuccess, resolution: .resolution.status}]}'
-  printf '%s' "$replayed" | jq -e '
-    (.result.structuredContent.actions | length) >= 2
-    and all(.result.structuredContent.actions[]; .resolution.status == "unique")
-  ' >/dev/null || fail "a recorded target did not resolve uniquely on replay (dryRun=$dry)"
-  if [ "$dry" = false ]; then
-    printf '%s' "$replayed" | jq -e 'all(.result.structuredContent.actions[]; .dispatchSuccess == true)' >/dev/null \
-      || fail "a recorded action did not dispatch on live replay"
-  fi
-done
+# What each traced action did, in the shape the run reports it.
+traced() {
+  printf '%s' "$1" | jq '[.result.structuredContent.batch.trace[]? | {index, actionId, tool, success, resolution: .targetResolution.status, dispatchSuccess: .result.dispatchSuccess, error}]'
+}
 
-note "saving a slice of live history and replaying that too"
-saved="$("$ask" "$(jq -cn --arg app "$app" '{"jsonrpc":"2.0","id":4,"method":"save","params":{"app":$app}}')")"
-printf '%s' "$saved" | jq '{actionCount: .result.actionCount, script: .result.script}'
-printf '%s' "$saved" | jq -e '.result.actionCount >= 1' >/dev/null \
-  || { printf '%s\n' "$saved"; fail "save exported nothing from live history"; }
+# A dry run resolves nothing and dispatches nothing, so all it can say is that every action was
+# accepted. Resolution and dispatch are asserted on the live run.
+dry="$(run_artifact "$scratch/recorded.axn" true)"
+answered "the dry run of the recorded artifact failed" "$dry"
+traced "$dry"
+printf '%s' "$dry" | jq -e '
+  (.result.structuredContent.batch.trace | length) == 3
+  and all(.result.structuredContent.batch.trace[]; .success == true)
+' >/dev/null || fail "the dry run did not accept all three recorded actions"
 
-saved_script="$(printf '%s' "$saved" | jq -r '.result.script')"
-replayed="$(jq -cn --arg script "$saved_script" \
-  '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"script":$script,"continueOnError":true}}}' \
-  | "$daemon" mcp)"
-printf '%s' "$replayed" | jq '{actions: [.result.structuredContent.actions[]? | {id, tool, dispatchSuccess, verified: .verification.verified, observed: .verification.observed}]}'
-printf '%s' "$replayed" | jq -e 'all(.result.structuredContent.actions[]; .dispatchSuccess == true)' >/dev/null \
-  || fail "a saved action did not dispatch on replay"
+probe_window_frontmost
+clear_entry
+live="$(run_artifact "$scratch/recorded.axn" false)"
+answered "the live replay of the recorded artifact failed" "$live"
+traced "$live"
+printf '%s' "$live" | jq -e '
+  (.result.structuredContent.batch.trace | length) == 3
+  and all(.result.structuredContent.batch.trace[]; .targetResolution.status == "unique")
+' >/dev/null || fail "a recorded target did not resolve to exactly one element on live replay"
+printf '%s' "$live" | jq -e 'all(.result.structuredContent.batch.trace[]; .result.dispatchSuccess == true)' >/dev/null \
+  || fail "a recorded action did not dispatch on live replay"
+
+note "saving live history and replaying that too"
+# `save` exports one history session, and MCP calls that name none are kept under `default`; the
+# live replay above is what it holds. Written to a file because `run` reads an artifact by path.
+saved="$("$ask" "$(jq -cn --arg path "$scratch/saved.axn" '{"jsonrpc":"2.0","id":4,"method":"save","params":{"path":$path}}')")"
+answered "save failed" "$saved"
+printf '%s' "$saved" | jq '{actionCount: .result.actionCount, recordCount: .result.recordCount, script: .result.script}'
+printf '%s' "$saved" | jq -e '.result.actionCount >= 1' >/dev/null || fail "save exported nothing from live history"
+[ -s "$scratch/saved.axn" ] || printf '%s\n' "$(printf '%s' "$saved" | jq -r '.result.script')" > "$scratch/saved.axn"
+
+probe_window_frontmost
+clear_entry
+replayed="$(run_artifact "$scratch/saved.axn" false)"
+answered "the live replay of the saved artifact failed" "$replayed"
+traced "$replayed"
+printf '%s' "$replayed" | jq -e '
+  (.result.structuredContent.batch.trace | length) >= 1
+  and all(.result.structuredContent.batch.trace[]; .result.dispatchSuccess == true)
+' >/dev/null || fail "a saved action did not dispatch on replay"
 
 note "the daemon's own delivery is not in the recording"
-# The other half of the exclusion, live. A recording started and immediately stopped around the
-# daemon's own click must come back empty: if it does not, every action an agent takes during a
-# recording is being attributed to the user.
-"$ask" '{"jsonrpc":"2.0","id":5,"method":"recording.start","params":{"scope":{"scope":"allApplications"}}}' >/dev/null
-mcp "$(jq -cn --arg app "$app" --argjson x "${button_at%% *}" --argjson y "${button_at##* }" \
-  '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"click","arguments":{"app":$app,"point":{"x":$x,"y":$y},"deliveryPolicy":"foregroundPermitted"}}}')" >/dev/null || true
+# The other half of the exclusion, live. A recording started and stopped around the daemon's own
+# click must come back empty: if it does not, every action an agent takes during a recording is
+# being attributed to the user. The click is asserted to have dispatched first, because an empty
+# recording around a click that never happened proves nothing.
+probe_window_frontmost
+own_started="$("$ask" '{"jsonrpc":"2.0","id":5,"method":"recording.start","params":{"scope":{"scope":"allApplications"}}}')"
+answered "recording.start refused for the own-delivery check" "$own_started"
+clicked="$(mcp "$(jq -cn --arg app "$app" --argjson x "${button_at%% *}" --argjson y "${button_at##* }" \
+  '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"click","arguments":{"target":{"app":$app,"coordinateSpace":"screen","point":{"x":$x,"y":$y}},"deliveryPolicy":"foregroundPermitted"}}}')")"
 sleep 0.6
 own="$("$ask" '{"jsonrpc":"2.0","id":6,"method":"recording.stop","params":{}}')"
-printf '%s' "$own" | jq '{actionCount: .result.actionCount}'
+answered "the daemon's own click failed" "$clicked"
+printf '%s' "$clicked" | jq '{dispatchSuccess: .result.structuredContent.dispatchSuccess, delivery: .result.structuredContent.delivery}'
+printf '%s' "$clicked" | jq -e '.result.structuredContent.dispatchSuccess == true' >/dev/null \
+  || fail "the daemon's own click did not dispatch, so an empty recording around it would prove nothing"
+answered "recording.stop failed for the own-delivery check" "$own"
+printf '%s' "$own" | jq '{actionCount: .result.actionCount, script: .result.script}'
 printf '%s' "$own" | jq -e '(.result.actionCount // 0) == 0' >/dev/null \
   || fail "the daemon recorded its own click as the user's"
 
