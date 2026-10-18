@@ -448,9 +448,7 @@ impl KnownApplications {
     /// action inside the application under test.
     pub fn recall(&self, pid: u32, scope: &RecordingScope) -> Option<RecordedAppIdentity> {
         self.named.get(&pid).cloned().or_else(|| match scope {
-            RecordingScope::Application { app } if app.process_id == Some(pid) => {
-                Some(app.clone())
-            }
+            RecordingScope::Application { app } if app.process_id == Some(pid) => Some(app.clone()),
             _ => None,
         })
     }

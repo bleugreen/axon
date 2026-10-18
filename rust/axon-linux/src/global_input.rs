@@ -136,7 +136,10 @@ fn point_evidence(
             return Ok(Evidence::Read(evidence));
         }
         Ok(None) => format!("no application on the accessibility bus belongs to process {pid}"),
-        Err(error) => format!("reading the interface at ({}, {}) failed: {error}", point.0, point.1),
+        Err(error) => format!(
+            "reading the interface at ({}, {}) failed: {error}",
+            point.0, point.1
+        ),
     };
     let app = known
         .recall(pid, scope)
@@ -207,9 +210,9 @@ impl KeyIdentity {
             Err(error) => format!("naming the application of process {pid} failed: {error}"),
         };
         // Not cached: the next keystroke asks again, so one slow answer does not decide a burst.
-        let app = known
-            .recall(pid, scope)
-            .ok_or_else(|| format!("{reason}, and this session has not named that process before"))?;
+        let app = known.recall(pid, scope).ok_or_else(|| {
+            format!("{reason}, and this session has not named that process before")
+        })?;
         Ok((KeyContext { app }, Some(reason)))
     }
 }
@@ -226,7 +229,12 @@ enum Enrichment {
 }
 
 impl Enrichment {
-    fn scoped(scope: &RecordingScope, event: RecordedInputEvent, app: &RecordedAppIdentity, degraded: Option<String>) -> Self {
+    fn scoped(
+        scope: &RecordingScope,
+        event: RecordedInputEvent,
+        app: &RecordedAppIdentity,
+        degraded: Option<String>,
+    ) -> Self {
         match (scope.accepts(app), degraded) {
             (false, _) => Self::Ignored,
             (true, None) => Self::Recorded(event),
@@ -258,11 +266,16 @@ impl Enricher<'_> {
             RawInput::Key { keycode, state } => {
                 let modifiers = ModifierState::from_mask(state, self.keyboard.masks);
                 let Some(keystroke) = classify_keystroke(modifiers, |level| {
-                    self.keyboard.mapping.keysym_at(keycode, keysym_level(level))
+                    self.keyboard
+                        .mapping
+                        .keysym_at(keycode, keysym_level(level))
                 }) else {
                     return Enrichment::Ignored;
                 };
-                match self.identity.of(self.commands, self.lookup, self.scope, &mut self.known) {
+                match self
+                    .identity
+                    .of(self.commands, self.lookup, self.scope, &mut self.known)
+                {
                     Ok((context, degraded)) => Enrichment::scoped(
                         self.scope,
                         RecordedInputEvent::KeyDown {
@@ -273,7 +286,9 @@ impl Enricher<'_> {
                         &context.app,
                         degraded,
                     ),
-                    Err(reason) => Enrichment::Lost(format!("a keystroke was not recorded: {reason}")),
+                    Err(reason) => {
+                        Enrichment::Lost(format!("a keystroke was not recorded: {reason}"))
+                    }
                 }
             }
             RawInput::Button { down, point } => {
@@ -340,9 +355,18 @@ impl Enricher<'_> {
         }
     }
 
-    fn evidence(&mut self, point: (i16, i16)) -> Result<(RecordedTargetEvidence, Option<String>), String> {
+    fn evidence(
+        &mut self,
+        point: (i16, i16),
+    ) -> Result<(RecordedTargetEvidence, Option<String>), String> {
         Ok(
-            match point_evidence(self.commands, self.lookup, self.scope, &mut self.known, point)? {
+            match point_evidence(
+                self.commands,
+                self.lookup,
+                self.scope,
+                &mut self.known,
+                point,
+            )? {
                 Evidence::Read(evidence) => (evidence, None),
                 Evidence::PointOnly(evidence, reason) => (evidence, Some(reason)),
             },
@@ -400,9 +424,7 @@ fn enrichment_thread(
                     eprintln!("axon-linux: {reason}");
                     enriched.offer(RecordedInputEvent::Notification {
                         app: scope.identity(),
-                        notification: format!(
-                            "{reason}; it may be missing from this recording"
-                        ),
+                        notification: format!("{reason}; it may be missing from this recording"),
                         role: None,
                         timestamp_ms: now_ms(),
                     });
