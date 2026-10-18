@@ -254,7 +254,8 @@ pub fn wheel_delta(mouse_data: u32, horizontal: bool) -> (f64, f64) {
 
 /// The bounded hand-off from the hook callback to the enrichment thread.
 ///
-/// The discipline it enforces -- a producer that never waits, a drop count that is always reported,
+/// The discipline it enforces -- a producer that never waits on the consumer's work and drops only
+/// when the queue is full, a drop count that is always reported,
 /// and a queue that survives one session because a low-level hook callback is handed no context
 /// pointer and can reach only a static -- is the same on every platform, so it is stated once in
 /// shared core. Only the raw event differs.
