@@ -1836,16 +1836,18 @@ impl Actor {
                         .await?,
                 );
             }
-            Ok(Node {
+            // The naming fields come from the same mapping recording evidence is built from, so a
+            // recorded target is matched against a capture that describes the element in the same
+            // words.
+            let described = crate::recording::ElementDescription {
                 role,
-                subrole: None,
-                name: name.clone(),
-                title: None,
-                label: name,
-                value,
+                name,
                 description,
-                identifier: Some(identity(&object)),
+                identifier: identity(&object),
                 actions,
+            };
+            Ok(Node {
+                value,
                 frame,
                 editable,
                 focused: state.map(|state| state.contains(State::Focused)),
@@ -1857,6 +1859,7 @@ impl Actor {
                     depth_limit_reached,
                     dropped > 0,
                 ),
+                ..described.into_node()
             })
         })
     }
@@ -2115,9 +2118,20 @@ impl Actor {
         object: &ObjectRefOwned,
         window_title: Option<&str>,
     ) -> RecordedElementEvidence {
-        let mut evidence = RecordedElementEvidence {
-            identifier: Some(identity(object)),
-            window_title: window_title.map(str::to_owned),
+        self.describe(object)
+            .await
+            .into_evidence(window_title)
+    }
+
+    /// The properties an element is identified by, read the way `node` reads them.
+    ///
+    /// Never its value: see [`crate::recording::ElementDescription::into_evidence`] for why a
+    /// candidate does not carry one, and [`Self::focused_value`] for where the value a recording
+    /// does need is read. A provider that will not answer leaves only the identifier, which is
+    /// still enough for an evidence record that authors as a point.
+    async fn describe(&self, object: &ObjectRefOwned) -> crate::recording::ElementDescription {
+        let mut described = crate::recording::ElementDescription {
+            identifier: identity(object),
             ..Default::default()
         };
         let Ok(proxy) = timeout(
@@ -2126,44 +2140,51 @@ impl Actor {
         )
         .await
         else {
-            return evidence;
+            return described;
         };
-        evidence.role = timeout("role", proxy.get_role_name())
+        described.role = timeout("role", proxy.get_role_name())
             .await
             .unwrap_or_default();
-        // `title` and not `label`, because that is where `node` puts an AT-SPI name when it builds
-        // the snapshot this evidence will be matched against, and `node_matches` compares the two
-        // field by field. Splitting the one name AT-SPI publishes across both would match nothing.
-        let name = timeout("name", proxy.name())
+        described.name = timeout("name", proxy.name())
             .await
             .ok()
             .filter(|name| !name.is_empty());
-        evidence.title = name;
-        evidence.description = timeout("description", proxy.description())
+        described.description = timeout("description", proxy.description())
             .await
             .ok()
             .filter(|description| !description.is_empty());
-        evidence.sensitive =
-            crate::recording::is_sensitive(&evidence.role, evidence.description.as_deref());
-        let Ok(proxies) = timeout("interfaces", proxy.proxies()).await else {
-            return evidence;
-        };
-        if let Ok(action) = timeout("action interface", proxies.action()).await {
-            evidence.actions = timeout("actions", action.get_actions())
+        if let Ok(proxies) = timeout("interfaces", proxy.proxies()).await
+            && let Ok(action) = timeout("action interface", proxies.action()).await
+        {
+            described.actions = timeout("actions", action.get_actions())
                 .await
                 .map(|actions| actions.into_iter().map(|action| action.name).collect())
                 .unwrap_or_default();
         }
-        // Read only after the element has been classified, and skipped entirely when it is
-        // sensitive. The rule the observer sensitivity contract states is that a credential is
-        // never *read*, not that it is read and then dropped -- see `axon_core::evidence_value`,
-        // which states the same rule where the read is synchronous.
-        if !evidence.sensitive
-            && let Ok(text) = timeout("text interface", proxies.text()).await
-        {
-            evidence.value = timeout("text", text.get_text(0, -1)).await.ok();
+        described
+    }
+
+    /// The complete text of the focused element, which is what a `setValue` is authored from.
+    ///
+    /// Read when a typed burst is flushed, the same moment shared core captures the snapshot that
+    /// burst's target is resolved against. Through the Text interface, as `node` reads a value.
+    ///
+    /// Never read from a sensitive element. The rule the observer sensitivity contract states is
+    /// that a credential is never *read*, not that it is read and then dropped -- see
+    /// `axon_core::evidence_value`, which states the same rule where the read is synchronous.
+    async fn focused_value(&self, object: &ObjectRefOwned, sensitive: bool) -> Option<String> {
+        if sensitive {
+            return None;
         }
-        evidence
+        let proxy = timeout(
+            "accessible proxy",
+            object.as_accessible_proxy(&self.connection),
+        )
+        .await
+        .ok()?;
+        let proxies = timeout("interfaces", proxy.proxies()).await.ok()?;
+        let text = timeout("text interface", proxies.text()).await.ok()?;
+        timeout("text", text.get_text(0, -1)).await.ok()
     }
 
     /// The ancestry a recording carries, nearest first, capped at [`RECORDED_ANCESTRY`].
@@ -2380,8 +2401,9 @@ impl Actor {
         let candidates = self
             .ancestry_evidence(&chain, window_title.as_deref())
             .await;
+        let sensitive = candidates.first().is_some_and(|nearest| nearest.sensitive);
         Ok(Some(RecordedFocusedEvidence {
-            value: candidates.first().and_then(|nearest| nearest.value.clone()),
+            value: self.focused_value(&focused, sensitive).await,
             target: RecordedTargetEvidence {
                 app,
                 // The centre of the focused element, so the point fallback a sensitive or
