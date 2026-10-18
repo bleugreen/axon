@@ -1398,6 +1398,51 @@ mod observed_input_queue {
         assert_eq!(queue.depth(), 1);
     }
 
+    /// A drop means the queue was full, never that the consumer happened to be draining.
+    ///
+    /// The enrichment thread drains continuously while input arrives, and a press and its release
+    /// land back to back. A producer that gave up whenever the consumer held the lock would lose
+    /// half a click under ordinary load and report it as an overflow -- with a queue of thousands
+    /// holding three events.
+    #[test]
+    fn a_queue_with_room_takes_every_event_while_it_is_being_drained() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        const EVENTS: u64 = 200_000;
+        let queue: Arc<ObservedInputQueue<u64>> =
+            Arc::new(ObservedInputQueue::with_capacity(EVENTS as usize));
+        let producing = Arc::new(AtomicBool::new(true));
+        let consumer = {
+            let queue = Arc::clone(&queue);
+            let producing = Arc::clone(&producing);
+            std::thread::spawn(move || {
+                let (mut received, mut dropped) = (Vec::new(), 0);
+                loop {
+                    let finished = !producing.load(Ordering::Acquire);
+                    let batch = queue.drain(Duration::ZERO);
+                    received.extend(batch.events);
+                    dropped += batch.dropped;
+                    if finished {
+                        return (received, dropped);
+                    }
+                }
+            })
+        };
+        let refused = (0..EVENTS).filter(|event| !queue.offer(*event)).count();
+        producing.store(false, Ordering::Release);
+        let (received, dropped) = consumer.join().unwrap();
+
+        assert_eq!(refused, 0, "no event was refused while the queue had room");
+        assert_eq!(dropped, 0);
+        assert_eq!(
+            received,
+            (0..EVENTS).collect::<Vec<_>>(),
+            "every event arrived, in order"
+        );
+    }
+
     #[test]
     fn a_stopped_queue_stops_waiting() {
         let queue: ObservedInputQueue<u64> = ObservedInputQueue::with_capacity(8);
