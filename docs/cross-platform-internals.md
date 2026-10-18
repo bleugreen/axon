@@ -404,7 +404,12 @@ events with a close conceptual fit to AX.
   queues, onto a bounded queue whose overflow is reported rather than swallowed,
   and an enrichment thread reads the interface immediately afterwards through a
   clone of the existing MTA actor's command channel. There is one UI Automation
-  client per process and observation does not add a second.
+  client per process and observation does not add a second. The queue is shared
+  core's `ObservedInputQueue`, which Linux uses too. It refuses an event only
+  when it is full, never because the enrichment thread happens to hold its lock:
+  the consumer holds that lock only to swap the backlog out, so the producer waits
+  a moment at most. An earlier `try_lock` producer counted every contended offer
+  as a drop and lost half a click under ordinary load.
 - The daemon must not record its own delivery, and the flag that looks like it
   answers this does not. Every `SendInput` from every process sets
   `LLKHF_INJECTED`, so filtering on it would discard assistive technology,
@@ -524,6 +529,11 @@ the observer rebuilding that state from the key stream. The protocol asks for tw
 connections and gets them — one to create and later disable the context, one
 blocked in `RecordEnableContext` on a listener thread that must keep reading,
 because a recording client which stops draining backs the stream up in the server.
+`recording.start` returns only once the server has answered the enable with its
+`StartOfData` reply, so input posted the moment it returns is observed. Each
+session owns its raw queue: a listener that misses the end of its stream is
+detached at stop rather than allowed to wedge the request, and a queue shared
+across sessions would hand what it went on writing to the next recording.
 
 Evidence is read on a second thread, not on the listener and not at `poll` time.
 That is the same constraint Windows has for the same reason: a `MouseDown` carries
@@ -543,6 +553,17 @@ deepest hit, so reaching a leaf means asking repeatedly. Screen coordinates are
 asked for first, since that is the frame the event arrived in, and a provider that
 answers only in window coordinates is asked again relative to its own frame rather
 than being written off.
+
+No event the user made disappears without a trace. Reading the evidence can fail
+for reasons unrelated to the user: a provider elsewhere on the bus slow to answer,
+or an application whose window was raised before it registered. A pointer or key
+event whose interface cannot be read is still recorded, as a point target, when its
+process belongs to an application this session has already named, or to the
+scoped application itself. One whose application cannot be named at all is
+reported in the daemon log and as a notification on the recording, saying why. An
+application lookup by process also compares process identities before reading
+any names, so one application that will not answer fails only a lookup that
+could have matched it.
 
 A recorded event becomes a semantic target only if shared core can find its
 element again: it compares each evidence candidate field by field against a fresh
