@@ -751,16 +751,21 @@ pub struct ObservedInputBatch<T> {
     pub high_water: usize,
 }
 
-/// A bounded, non-blocking hand-off from a native input callback to the thread that enriches it.
+/// A bounded hand-off from a native input callback to the thread that enriches it.
 ///
 /// Generic over the raw event because every platform's is different -- a `KBDLLHOOKSTRUCT` field
 /// set on Windows, an X11 core event on Linux -- while the discipline around it is not. That
 /// discipline is the whole reason this type exists rather than a `VecDeque` behind a mutex:
 ///
-/// - **The producer never waits.** A Windows low-level hook that takes longer than
-///   `LowLevelHooksTimeout` is removed from the chain without being asked; an XRecord data
-///   connection that stops reading backs up in the server. So [`Self::offer`] gives up immediately
-///   if it cannot have the lock or the queue is full.
+/// - **The producer never waits on the consumer's work.** A Windows low-level hook that takes
+///   longer than `LowLevelHooksTimeout` is removed from the chain without being asked; an XRecord
+///   data connection that stops reading backs up in the server. So [`Self::offer`] refuses an
+///   event when the queue is full rather than waiting for room, and every consumer-side critical
+///   section is O(1) -- a drain swaps the backlog out and builds its batch after releasing the
+///   lock -- so taking the lock costs the producer a moment, never a batch.
+/// - **It never refuses an event it has room for.** A producer that gave up whenever the consumer
+///   happened to hold the lock would lose half a click under ordinary load, because the enrichment
+///   thread drains continuously and a press and its release land back to back.
 /// - **What it gives up is counted, never silent.** A recording that quietly lost actions is worse
 ///   than one that says it did, so the drop count rides out on the next drain and becomes a warning
 ///   on the recording itself.
@@ -791,13 +796,11 @@ impl<T> ObservedInputQueue<T> {
         }
     }
 
-    /// Hands one event over if that can be done without waiting. Returns whether it was taken.
+    /// Hands one event over, or counts it as dropped when the queue is full. Returns whether it was
+    /// taken.
     pub fn offer(&self, event: T) -> bool {
         use std::sync::atomic::Ordering;
-        let Ok(mut events) = self.events.try_lock() else {
-            self.dropped.fetch_add(1, Ordering::Relaxed);
-            return false;
-        };
+        let mut events = self.events.lock().expect(NEVER_POISONED);
         if events.len() >= self.capacity {
             self.dropped.fetch_add(1, Ordering::Relaxed);
             return false;
@@ -821,8 +824,10 @@ impl<T> ObservedInputQueue<T> {
                 .expect(NEVER_POISONED)
                 .0;
         }
+        let taken = std::mem::take(&mut *events);
+        drop(events);
         ObservedInputBatch {
-            events: events.drain(..).collect(),
+            events: taken.into(),
             dropped: self.dropped.swap(0, Ordering::Relaxed),
             high_water: self.high_water.load(Ordering::Relaxed),
         }
@@ -842,7 +847,8 @@ impl<T> ObservedInputQueue<T> {
     /// Returns the queue to the state a fresh session expects.
     pub fn reset(&self) {
         use std::sync::atomic::Ordering;
-        self.events.lock().expect(NEVER_POISONED).clear();
+        let abandoned = std::mem::take(&mut *self.events.lock().expect(NEVER_POISONED));
+        drop(abandoned);
         self.dropped.store(0, Ordering::Relaxed);
         self.high_water.store(0, Ordering::Relaxed);
         self.stopped.store(false, Ordering::Release);
