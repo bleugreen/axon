@@ -268,6 +268,10 @@ fn enrichment_thread(
 
 struct Session {
     record: RecordSession,
+    /// This session's raw queue, and only this session's. A listener that missed the end of its
+    /// stream is detached rather than joined at stop, and can go on writing; a queue shared across
+    /// sessions would deliver what it wrote to the next recording, and reopen itself for it.
+    raw: Arc<RawQueue>,
     enrichment: Option<JoinHandle<()>>,
 }
 
@@ -276,10 +280,6 @@ pub struct LinuxGlobalInputObserver {
     /// connection per process is the discipline; the observer borrows the existing one rather than
     /// opening a second.
     commands: mpsc::Sender<Command>,
-    /// Owned rather than a process-global, unlike the Windows observer's. A low-level Windows hook
-    /// is handed no context pointer and can only reach a static; a RECORD listener is an ordinary
-    /// thread this observer spawned, so the queue can simply belong to the session that uses it.
-    raw: Arc<RawQueue>,
     enriched: Arc<Enriched>,
     session: Option<Session>,
 }
@@ -288,7 +288,6 @@ impl LinuxGlobalInputObserver {
     pub fn new(commands: mpsc::Sender<Command>) -> Self {
         Self {
             commands,
-            raw: Arc::new(RawQueue::with_capacity(RAW_CAPACITY)),
             enriched: Arc::new(Enriched::with_capacity(usize::MAX)),
             session: None,
         }
@@ -308,23 +307,26 @@ impl LinuxGlobalInputObserver {
                 "a global input observer session is already active",
             ));
         }
-        self.raw.reset();
+        // Owned rather than a process-global, unlike the Windows observer's: a low-level Windows
+        // hook is handed no context pointer and can only reach a static, while a RECORD listener is
+        // an ordinary thread this observer spawned, so its queue can belong to its session.
+        let raw = Arc::new(RawQueue::with_capacity(RAW_CAPACITY));
         self.enriched.reset();
         // Armed before the listener exists, so no synthetic event this daemon posts can slip
         // through between observation starting and the exclusion being in place.
         self_delivery().arm();
 
-        let record = RecordSession::start(Arc::clone(&self.raw)).inspect_err(|_| {
+        let record = RecordSession::start(Arc::clone(&raw)).inspect_err(|_| {
             self_delivery().disarm();
         })?;
 
         let scope = scope.clone();
         let commands = self.commands.clone();
-        let raw = Arc::clone(&self.raw);
+        let session_raw = Arc::clone(&raw);
         let enriched = Arc::clone(&self.enriched);
         let enrichment = thread::Builder::new()
             .name("axon-global-input-evidence".into())
-            .spawn(move || enrichment_thread(scope, commands, keyboard, raw, enriched))
+            .spawn(move || enrichment_thread(scope, commands, keyboard, session_raw, enriched))
             .map_err(|error| {
                 self_delivery().disarm();
                 operation(format!("could not create evidence thread: {error}"))
@@ -332,6 +334,7 @@ impl LinuxGlobalInputObserver {
 
         self.session = Some(Session {
             record,
+            raw,
             enrichment: Some(enrichment),
         });
         Ok(())
@@ -353,7 +356,7 @@ impl LinuxGlobalInputObserver {
         session.record.stop();
         // Stopped only once the listener is gone, so the last events it queued are enriched rather
         // than abandoned: the enrichment thread drains once more before it returns.
-        self.raw.stop();
+        session.raw.stop();
         if let Some(enrichment) = session.enrichment.take() {
             let _ = enrichment.join();
         }
