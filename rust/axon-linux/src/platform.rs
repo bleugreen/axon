@@ -1517,6 +1517,12 @@ impl Actor {
         Ok(self.select(q).await?.map(|(object, _)| identity(&object)))
     }
     /// `Ok(None)` is "nothing matched", which is a different answer from a failure to look.
+    ///
+    /// One application that will not say its name fails only a lookup it could have answered. A
+    /// process query compares process identities first and reads the name of the match alone; a
+    /// name query skips an unreadable application and reports the failure only when nothing else
+    /// matched exactly, since the unreadable one might then have been the answer. Failing the whole
+    /// lookup on the first slow provider made every recorded click while it was slow disappear.
     async fn select(&self, q: &AppQuery) -> Result<Option<(ObjectRefOwned, String)>, BackendError> {
         let identities = if q.process_id.is_some() {
             self.identities().await?
@@ -1524,19 +1530,24 @@ impl Actor {
             Vec::new()
         };
         let mut partial = None;
+        let mut unread = None;
         for object in self.roots().await? {
-            let proxy = timeout(
-                "application proxy",
-                object.as_accessible_proxy(&self.connection),
-            )
-            .await?;
-            let name = timeout("application name", proxy.name()).await?;
             let object_identity = identity(&object);
             let process_match = q.process_id.is_some_and(|wanted| {
                 identities.iter().any(|candidate| {
                     candidate.identity == object_identity && candidate.process_id == wanted
                 })
             });
+            if q.process_id.is_some() && !process_match {
+                continue;
+            }
+            let name = match self.application_name(&object).await {
+                Ok(name) => name,
+                Err(error) => {
+                    unread.get_or_insert(error);
+                    continue;
+                }
+            };
             let id_match = q
                 .identifier
                 .as_deref()
@@ -1559,7 +1570,19 @@ impl Actor {
                 partial = Some((object, name));
             }
         }
-        Ok(partial)
+        match unread {
+            Some(error) => Err(error),
+            None => Ok(partial),
+        }
+    }
+
+    async fn application_name(&self, object: &ObjectRefOwned) -> Result<String, BackendError> {
+        let proxy = timeout(
+            "application proxy",
+            object.as_accessible_proxy(&self.connection),
+        )
+        .await?;
+        timeout("application name", proxy.name()).await
     }
     async fn capture(
         &mut self,
