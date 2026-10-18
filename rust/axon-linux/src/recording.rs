@@ -6,9 +6,11 @@
 //! module raw events and forward what it decides they mean.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
-use axon_core::{Node, RecordedElementEvidence, RecordedKeystroke};
+use axon_core::{
+    Node, RecordedAppIdentity, RecordedElementEvidence, RecordedKeystroke, RecordingScope,
+};
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     sync::{
         Mutex, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -418,6 +420,42 @@ pub fn is_sensitive(role: &str, description: Option<&str>) -> bool {
         || description.is_some_and(|description| description.to_lowercase().contains("password"))
 }
 
+/// The applications a recording session has already named, by process.
+///
+/// What lets an event whose evidence could not be read still be recorded. Naming the application
+/// under a point is an AT-SPI conversation that can fail for reasons nothing to do with the user --
+/// one provider on the bus slow to answer, an application whose window was raised before it
+/// registered -- and an event lost to that is a recorded flow with a step missing and no sign of
+/// it. An application this session has already named, or the one the session is scoped to, is
+/// enough to keep the event as a point target instead.
+#[derive(Debug, Default)]
+pub struct KnownApplications {
+    named: HashMap<u32, RecordedAppIdentity>,
+}
+
+impl KnownApplications {
+    pub fn remember(&mut self, app: &RecordedAppIdentity) {
+        if let Some(pid) = app.process_id {
+            self.named.insert(pid, app.clone());
+        }
+    }
+
+    /// The application behind a process when it cannot be asked for, or `None` when nothing this
+    /// session knows names it.
+    ///
+    /// Never a guess: an unnamed process is not attributed to the scoped application merely
+    /// because the session is scoped, since that would record a click on some other window as an
+    /// action inside the application under test.
+    pub fn recall(&self, pid: u32, scope: &RecordingScope) -> Option<RecordedAppIdentity> {
+        self.named.get(&pid).cloned().or_else(|| match scope {
+            RecordingScope::Application { app } if app.process_id == Some(pid) => {
+                Some(app.clone())
+            }
+            _ => None,
+        })
+    }
+}
+
 /// What one AT-SPI element says about itself, in the fields a capture and a recording both describe
 /// it by.
 ///
@@ -665,6 +703,56 @@ pub fn self_delivery() -> &'static SelfDelivery {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_application_is_recalled_only_from_what_the_session_actually_knows() {
+        let chromium = RecordedAppIdentity {
+            name: "Chromium".into(),
+            bundle_identifier: None,
+            process_id: Some(4242),
+        };
+        let mut known = KnownApplications::default();
+        assert_eq!(known.recall(4242, &RecordingScope::AllApplications), None);
+
+        known.remember(&chromium);
+        assert_eq!(
+            known.recall(4242, &RecordingScope::AllApplications),
+            Some(chromium.clone())
+        );
+        assert_eq!(known.recall(7, &RecordingScope::AllApplications), None);
+
+        let scoped = RecordingScope::Application {
+            app: RecordedAppIdentity {
+                name: "Mousepad".into(),
+                bundle_identifier: None,
+                process_id: Some(99),
+            },
+        };
+        let fresh = KnownApplications::default();
+        assert_eq!(
+            fresh.recall(99, &scoped).map(|app| app.name),
+            Some("Mousepad".into()),
+            "the scoped application's own process is known before anything is asked"
+        );
+        assert_eq!(
+            fresh.recall(7, &scoped),
+            None,
+            "another process is not assumed to be the scoped application"
+        );
+        assert_eq!(
+            fresh.recall(
+                99,
+                &RecordingScope::Application {
+                    app: RecordedAppIdentity {
+                        name: "Mousepad".into(),
+                        ..Default::default()
+                    }
+                }
+            ),
+            None,
+            "a scope named without a process names no process"
+        );
+    }
 
     /// A recorded click on an element is only worth anything if shared core can find that element
     /// again in a capture. Driven through the public recorder rather than its private matching
