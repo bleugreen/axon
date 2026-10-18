@@ -18,8 +18,8 @@
 
 use super::Command;
 use crate::recording::{
-    ModifierState, RawEvent, RawInput, RawQueue, classify_keystroke, keysym_level, self_delivery,
-    wheel_delta,
+    KnownApplications, ModifierState, RawEvent, RawInput, RawQueue, classify_keystroke,
+    keysym_level, self_delivery, wheel_delta,
 };
 use crate::x11::{Keyboard, X11Session};
 use crate::xrecord::RecordSession;
@@ -65,17 +65,21 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-/// Asks the AT-SPI actor one question and waits for its answer.
+/// Asks the AT-SPI actor one question and waits for its answer, keeping the reason it failed.
 ///
-/// A failed read is not a failed recording: the caller decides what an absent answer means, which
-/// is usually "record the event with less evidence" rather than "lose the event".
+/// A failed read is not a failed recording: the caller decides what it costs, which is "record the
+/// event with less evidence" wherever that is possible. The reason is kept because it is the only
+/// account anyone gets of why a recorded step is thinner than it should be.
 fn ask<T>(
     commands: &mpsc::Sender<Command>,
     make: impl FnOnce(mpsc::Sender<Result<T, BackendError>>) -> Command,
-) -> Option<T> {
+) -> Result<T, String> {
+    const ACTOR_GONE: &str = "the accessibility actor is no longer answering";
     let (tx, rx) = mpsc::channel();
-    commands.send(make(tx)).ok()?;
-    rx.recv().ok()?.ok()
+    commands.send(make(tx)).map_err(|_| ACTOR_GONE.to_owned())?;
+    rx.recv()
+        .map_err(|_| ACTOR_GONE.to_owned())?
+        .map_err(|error| error.to_string())
 }
 
 /// Which process owns what is under a screen point, or which owns the foreground.
@@ -84,24 +88,67 @@ fn ask<T>(
 /// and no foreground, so an application resolved there would be a guess. The enrichment thread
 /// therefore keeps a connection of its own -- it runs on its own thread and cannot borrow the
 /// backend's -- and asks the actor about a process it has already established.
-fn process_at(lookup: Option<&X11Session>, point: (i16, i16)) -> Option<u32> {
-    lookup?.process_at(point).ok().flatten()
+fn process_at(lookup: Option<&X11Session>, point: (i16, i16)) -> Result<u32, String> {
+    let lookup = lookup.ok_or(NO_LOOKUP)?;
+    match lookup.process_at(point) {
+        Ok(Some(pid)) => Ok(pid),
+        Ok(None) => Err(format!(
+            "no window under ({}, {}) names the process that owns it",
+            point.0, point.1
+        )),
+        Err(error) => Err(format!(
+            "reading the window under ({}, {}) failed: {error}",
+            point.0, point.1
+        )),
+    }
 }
 
-fn frontmost_process(lookup: Option<&X11Session>) -> Option<u32> {
-    lookup?.active_window_pid().ok().flatten()
+fn frontmost_process(lookup: Option<&X11Session>) -> Result<u32, String> {
+    match lookup.ok_or(NO_LOOKUP)?.active_window_pid() {
+        Ok(Some(pid)) => Ok(pid),
+        Ok(None) => Err("the active window names no process".into()),
+        Err(error) => Err(format!("reading the active window failed: {error}")),
+    }
+}
+
+const NO_LOOKUP: &str = "the evidence thread has no connection to the X server";
+
+/// One event's evidence, or the reason it could not be read.
+enum Evidence {
+    Read(RecordedTargetEvidence),
+    /// The application is known but the interface around the point could not be read, so the
+    /// event authors as a point target in that application.
+    PointOnly(RecordedTargetEvidence, String),
 }
 
 fn point_evidence(
     commands: &mpsc::Sender<Command>,
     lookup: Option<&X11Session>,
+    scope: &RecordingScope,
+    known: &mut KnownApplications,
     point: (i16, i16),
-) -> Option<RecordedTargetEvidence> {
+) -> Result<Evidence, String> {
     let pid = process_at(lookup, point)?;
-    ask(commands, |tx| {
-        Command::PointEvidence(pid, (f64::from(point.0), f64::from(point.1)), tx)
-    })
-    .flatten()
+    let at = (f64::from(point.0), f64::from(point.1));
+    let reason = match ask(commands, |tx| Command::PointEvidence(pid, at, tx)) {
+        Ok(Some(evidence)) => {
+            known.remember(&evidence.app);
+            return Ok(Evidence::Read(evidence));
+        }
+        Ok(None) => format!("no application on the accessibility bus belongs to process {pid}"),
+        Err(error) => format!("reading the interface at ({}, {}) failed: {error}", point.0, point.1),
+    };
+    let app = known
+        .recall(pid, scope)
+        .ok_or_else(|| format!("{reason}, and this session has not named that process before"))?;
+    Ok(Evidence::PointOnly(
+        RecordedTargetEvidence {
+            app,
+            point: RecordedPoint { x: at.0, y: at.1 },
+            candidates: Vec::new(),
+        },
+        reason,
+    ))
 }
 
 /// What the observer knows about the application a keystroke was delivered to.
@@ -131,94 +178,175 @@ const KEY_IDENTITY_FRESHNESS: Duration = Duration::from_secs(2);
 /// The application a keystroke belongs to, read at most once per burst.
 #[derive(Default)]
 struct KeyIdentity {
-    known: Option<(u32, RecordedAppIdentity, Instant)>,
+    current: Option<(u32, RecordedAppIdentity, Instant)>,
 }
 
 impl KeyIdentity {
+    /// The typing application, and why it is less certain than it should be when it is.
     fn of(
         &mut self,
         commands: &mpsc::Sender<Command>,
         lookup: Option<&X11Session>,
-    ) -> Option<KeyContext> {
+        scope: &RecordingScope,
+        known: &mut KnownApplications,
+    ) -> Result<(KeyContext, Option<String>), String> {
         let pid = frontmost_process(lookup)?;
-        if let Some((known, app, read)) = &self.known
-            && *known == pid
+        if let Some((current, app, read)) = &self.current
+            && *current == pid
             && read.elapsed() < KEY_IDENTITY_FRESHNESS
         {
-            return Some(KeyContext { app: app.clone() });
+            return Ok((KeyContext { app: app.clone() }, None));
         }
-        let app: RecordedAppIdentity =
-            ask(commands, |tx| Command::RecordedIdentity(pid, tx)).flatten()?;
-        self.known = Some((pid, app.clone(), Instant::now()));
-        Some(KeyContext { app })
+        let reason = match ask(commands, |tx| Command::RecordedIdentity(pid, tx)) {
+            Ok(Some(app)) => {
+                known.remember(&app);
+                self.current = Some((pid, app.clone(), Instant::now()));
+                return Ok((KeyContext { app }, None));
+            }
+            Ok(None) => format!("no application on the accessibility bus belongs to process {pid}"),
+            Err(error) => format!("naming the application of process {pid} failed: {error}"),
+        };
+        // Not cached: the next keystroke asks again, so one slow answer does not decide a burst.
+        let app = known
+            .recall(pid, scope)
+            .ok_or_else(|| format!("{reason}, and this session has not named that process before"))?;
+        Ok((KeyContext { app }, Some(reason)))
     }
 }
 
-/// Turns one raw event into what shared core records, reading the interface as it does so.
-fn enrich(
-    scope: &RecordingScope,
-    commands: &mpsc::Sender<Command>,
-    lookup: Option<&X11Session>,
-    keyboard: &Keyboard,
-    identity: &mut KeyIdentity,
-    raw: RawEvent,
-) -> Option<RecordedInputEvent> {
-    let timestamp_ms = raw.timestamp_ms;
-    match raw.input {
-        RawInput::Key { keycode, state } => {
-            let modifiers = ModifierState::from_mask(state, keyboard.masks);
-            let keystroke = classify_keystroke(modifiers, |level| {
-                keyboard.mapping.keysym_at(keycode, keysym_level(level))
-            })?;
-            let context = identity.of(commands, lookup)?;
-            scope
-                .accepts(&context.app)
-                .then_some(RecordedInputEvent::KeyDown {
-                    app: context.app,
-                    keystroke,
-                    timestamp_ms,
-                })
+/// What became of one raw event.
+enum Enrichment {
+    Recorded(RecordedInputEvent),
+    /// Recorded with less evidence than it should have had, for this reason.
+    Degraded(RecordedInputEvent, String),
+    /// Not something a recording carries: a modifier on its own, or an event outside the scope.
+    Ignored,
+    /// Something the user did that this observer could not record, for this reason.
+    Lost(String),
+}
+
+impl Enrichment {
+    fn scoped(scope: &RecordingScope, event: RecordedInputEvent, app: &RecordedAppIdentity, degraded: Option<String>) -> Self {
+        match (scope.accepts(app), degraded) {
+            (false, _) => Self::Ignored,
+            (true, None) => Self::Recorded(event),
+            (true, Some(reason)) => Self::Degraded(event, reason),
         }
-        RawInput::Button { down, point } => {
-            let evidence = point_evidence(commands, lookup, point)?;
-            if !scope.accepts(&evidence.app) {
-                return None;
-            }
-            Some(if down {
-                RecordedInputEvent::MouseDown {
-                    evidence,
-                    timestamp_ms,
+    }
+}
+
+/// The context the evidence thread enriches with, held for one session.
+struct Enricher<'a> {
+    scope: &'a RecordingScope,
+    commands: &'a mpsc::Sender<Command>,
+    lookup: Option<&'a X11Session>,
+    keyboard: &'a Keyboard,
+    identity: KeyIdentity,
+    known: KnownApplications,
+}
+
+impl Enricher<'_> {
+    /// Turns one raw event into what shared core records, reading the interface as it does so.
+    ///
+    /// A user's event is never dropped without saying so. Where the interface could not be read it
+    /// is still recorded, against an application this session already knows, as a point; and where
+    /// not even the application can be named it comes back as [`Enrichment::Lost`] with the reason,
+    /// which the caller logs and writes into the recording.
+    fn enrich(&mut self, raw: RawEvent) -> Enrichment {
+        let timestamp_ms = raw.timestamp_ms;
+        match raw.input {
+            RawInput::Key { keycode, state } => {
+                let modifiers = ModifierState::from_mask(state, self.keyboard.masks);
+                let Some(keystroke) = classify_keystroke(modifiers, |level| {
+                    self.keyboard.mapping.keysym_at(keycode, keysym_level(level))
+                }) else {
+                    return Enrichment::Ignored;
+                };
+                match self.identity.of(self.commands, self.lookup, self.scope, &mut self.known) {
+                    Ok((context, degraded)) => Enrichment::scoped(
+                        self.scope,
+                        RecordedInputEvent::KeyDown {
+                            app: context.app.clone(),
+                            keystroke,
+                            timestamp_ms,
+                        },
+                        &context.app,
+                        degraded,
+                    ),
+                    Err(reason) => Enrichment::Lost(format!("a keystroke was not recorded: {reason}")),
                 }
-            } else {
-                RecordedInputEvent::MouseUp {
-                    evidence,
-                    timestamp_ms,
-                }
-            })
-        }
-        // Scoping a motion is shared core's job: it only reads one between a `MouseDown` it already
-        // accepted and that press's `MouseUp`, so re-deriving an application here would cost a
-        // hit test per pointer sample to answer a question that has already been answered.
-        RawInput::Motion { point } => Some(RecordedInputEvent::MouseDragged {
-            at: RecordedPoint {
-                x: f64::from(point.0),
-                y: f64::from(point.1),
-            },
-            timestamp_ms,
-        }),
-        RawInput::Wheel { button, point } => {
-            let (delta_x, delta_y) = wheel_delta(button)?;
-            let evidence = point_evidence(commands, lookup, point)?;
-            if !scope.accepts(&evidence.app) {
-                return None;
             }
-            Some(RecordedInputEvent::Scroll {
-                evidence,
-                delta_x,
-                delta_y,
+            RawInput::Button { down, point } => {
+                let (evidence, degraded) = match self.evidence(point) {
+                    Ok(found) => found,
+                    Err(reason) => {
+                        let what = if down { "press" } else { "release" };
+                        return Enrichment::Lost(format!(
+                            "a pointer {what} at ({}, {}) was not recorded: {reason}",
+                            point.0, point.1
+                        ));
+                    }
+                };
+                let app = evidence.app.clone();
+                let event = if down {
+                    RecordedInputEvent::MouseDown {
+                        evidence,
+                        timestamp_ms,
+                    }
+                } else {
+                    RecordedInputEvent::MouseUp {
+                        evidence,
+                        timestamp_ms,
+                    }
+                };
+                Enrichment::scoped(self.scope, event, &app, degraded)
+            }
+            // Scoping a motion is shared core's job: it only reads one between a `MouseDown` it
+            // already accepted and that press's `MouseUp`, so re-deriving an application here would
+            // cost a hit test per pointer sample to answer a question that has been answered.
+            RawInput::Motion { point } => Enrichment::Recorded(RecordedInputEvent::MouseDragged {
+                at: RecordedPoint {
+                    x: f64::from(point.0),
+                    y: f64::from(point.1),
+                },
                 timestamp_ms,
-            })
+            }),
+            RawInput::Wheel { button, point } => {
+                let Some((delta_x, delta_y)) = wheel_delta(button) else {
+                    return Enrichment::Ignored;
+                };
+                let (evidence, degraded) = match self.evidence(point) {
+                    Ok(found) => found,
+                    Err(reason) => {
+                        return Enrichment::Lost(format!(
+                            "a scroll at ({}, {}) was not recorded: {reason}",
+                            point.0, point.1
+                        ));
+                    }
+                };
+                let app = evidence.app.clone();
+                Enrichment::scoped(
+                    self.scope,
+                    RecordedInputEvent::Scroll {
+                        evidence,
+                        delta_x,
+                        delta_y,
+                        timestamp_ms,
+                    },
+                    &app,
+                    degraded,
+                )
+            }
         }
+    }
+
+    fn evidence(&mut self, point: (i16, i16)) -> Result<(RecordedTargetEvidence, Option<String>), String> {
+        Ok(
+            match point_evidence(self.commands, self.lookup, self.scope, &mut self.known, point)? {
+                Evidence::Read(evidence) => (evidence, None),
+                Evidence::PointOnly(evidence, reason) => (evidence, Some(reason)),
+            },
+        )
     }
 }
 
@@ -231,7 +359,14 @@ fn enrichment_thread(
     enriched: Arc<Enriched>,
 ) {
     let lookup = X11Session::connect();
-    let mut identity = KeyIdentity::default();
+    let mut enricher = Enricher {
+        scope: &scope,
+        commands: &commands,
+        lookup: lookup.as_ref(),
+        keyboard: &keyboard,
+        identity: KeyIdentity::default(),
+        known: KnownApplications::default(),
+    };
     loop {
         let batch = raw.drain(DRAIN_INTERVAL);
         if batch.dropped > 0 {
@@ -249,15 +384,29 @@ fn enrichment_thread(
             });
         }
         for event in batch.events {
-            if let Some(event) = enrich(
-                &scope,
-                &commands,
-                lookup.as_ref(),
-                &keyboard,
-                &mut identity,
-                event,
-            ) {
-                enriched.offer(event);
+            match enricher.enrich(event) {
+                Enrichment::Recorded(event) => {
+                    enriched.offer(event);
+                }
+                // The recording already says the step fell back to a point; the log says why.
+                Enrichment::Degraded(event, reason) => {
+                    eprintln!("axon-linux: recorded with point evidence only: {reason}");
+                    enriched.offer(event);
+                }
+                Enrichment::Ignored => {}
+                // Said in both places for the same reason a drop is: the log reaches an operator
+                // even before anything was recorded, and the notification stays with the artifact.
+                Enrichment::Lost(reason) => {
+                    eprintln!("axon-linux: {reason}");
+                    enriched.offer(RecordedInputEvent::Notification {
+                        app: scope.identity(),
+                        notification: format!(
+                            "{reason}; it may be missing from this recording"
+                        ),
+                        role: None,
+                        timestamp_ms: now_ms(),
+                    });
+                }
             }
         }
         if raw.stopped() {
