@@ -6,7 +6,7 @@
 //! module raw events and forward what it decides they mean.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
-use axon_core::RecordedKeystroke;
+use axon_core::{Node, RecordedElementEvidence, RecordedKeystroke};
 use std::{
     collections::VecDeque,
     sync::{
@@ -418,6 +418,87 @@ pub fn is_sensitive(role: &str, description: Option<&str>) -> bool {
         || description.is_some_and(|description| description.to_lowercase().contains("password"))
 }
 
+/// What one AT-SPI element says about itself, in the fields a capture and a recording both describe
+/// it by.
+///
+/// One reading builds both, and agreement between them is the reason it exists. Shared core turns a
+/// recorded event into a semantic target by comparing each evidence candidate field by field against
+/// a fresh capture, so a field that evidence spells one way and capture another matches nothing --
+/// and the failure is silent: every click still records, as a bare screen point. Two hand-written
+/// mappings of the same AT-SPI properties can drift apart that way with neither noticing; one
+/// mapping cannot.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ElementDescription {
+    pub role: String,
+    /// The AT-SPI accessible name. On this platform that is usually the element's visible label.
+    pub name: Option<String>,
+    pub description: Option<String>,
+    /// The bus name and object path: exact, and stable for as long as the element exists.
+    pub identifier: String,
+    pub actions: Vec<String>,
+}
+
+impl ElementDescription {
+    pub fn is_sensitive(&self) -> bool {
+        is_sensitive(&self.role, self.description.as_deref())
+    }
+
+    /// The capture node, with every field a capture adds beyond this description left empty for
+    /// the walk to fill in.
+    ///
+    /// AT-SPI publishes one name where this project has both a title and a label, and capture puts
+    /// it in `label`.
+    pub fn into_node(self) -> Node {
+        Node {
+            role: self.role,
+            subrole: None,
+            name: self.name.clone(),
+            title: None,
+            label: self.name,
+            value: None,
+            description: self.description,
+            identifier: Some(self.identifier),
+            actions: self.actions,
+            frame: None,
+            editable: false,
+            focused: None,
+            enabled: None,
+            children: Vec::new(),
+            child_count: None,
+            truncation_reason: None,
+        }
+    }
+
+    /// The evidence a recording carries for this element.
+    ///
+    /// Two fields are withheld from a candidate shared core will match, and each for a reason:
+    ///
+    /// - **`title`**, because capture leaves a node's title empty and puts the name in `label`, for
+    ///   which the evidence vocabulary has no field. A candidate carrying the name as its title would
+    ///   match no node at all. A sensitive candidate keeps it, because shared core never matches one
+    ///   -- it refuses to build a target from a credential field -- and the field's name is the one
+    ///   handle the person replaying has for the secret argument it becomes.
+    /// - **`value`**, because it is read at event time while the snapshot it is compared with is
+    ///   captured when the recording is next pumped, which may be after the user has typed into the
+    ///   very field they clicked. The identifier already names the element exactly, so the value
+    ///   could only add a way to fail. The `setValue` payload is read separately, from the focused
+    ///   element at the moment its burst is flushed.
+    pub fn into_evidence(self, window_title: Option<&str>) -> RecordedElementEvidence {
+        let sensitive = self.is_sensitive();
+        RecordedElementEvidence {
+            role: self.role,
+            subrole: None,
+            identifier: Some(self.identifier),
+            title: if sensitive { self.name } else { None },
+            value: None,
+            description: self.description,
+            actions: self.actions,
+            window_title: window_title.map(str::to_owned),
+            sensitive,
+        }
+    }
+}
+
 /// How long an unmatched expectation may suppress input before it is abandoned.
 ///
 /// The X server generates a synthetic event as it processes the request that asked for it, so a
@@ -584,6 +665,203 @@ pub fn self_delivery() -> &'static SelfDelivery {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A recorded click on an element is only worth anything if shared core can find that element
+    /// again in a capture. Driven through the public recorder rather than its private matching
+    /// predicate, so it fails for any reason a real recording would degrade to a screen point.
+    mod evidence_resolves_against_capture {
+        use super::*;
+        use axon_core::{
+            Application, BackendError, GlobalInputObserver, OwnedUserActionRecorder,
+            RecordedAppIdentity, RecordedFocusedEvidence, RecordedInputEvent, RecordedPoint,
+            RecordedSettleEvidence, RecordedTargetEvidence, RecordedUserAction,
+            RecordingEvidenceProvider, RecordingScope, Snapshot, Window,
+        };
+        use std::collections::VecDeque;
+
+        struct Provider {
+            events: VecDeque<Vec<RecordedInputEvent>>,
+            focused: Option<RecordedFocusedEvidence>,
+            snapshot: Snapshot,
+        }
+
+        impl GlobalInputObserver for Provider {
+            fn start(&mut self, _: &RecordingScope) -> Result<(), BackendError> {
+                Ok(())
+            }
+            fn poll(&mut self, _: Duration) -> Result<Vec<RecordedInputEvent>, BackendError> {
+                Ok(self.events.pop_front().unwrap_or_default())
+            }
+            fn stop(&mut self) -> Result<(), BackendError> {
+                Ok(())
+            }
+            fn is_recording(&self) -> bool {
+                true
+            }
+        }
+
+        impl RecordingEvidenceProvider for Provider {
+            fn read_focused(&mut self) -> Result<Option<RecordedFocusedEvidence>, BackendError> {
+                Ok(self.focused.clone())
+            }
+            fn capture_snapshot(
+                &mut self,
+                _: &RecordedAppIdentity,
+            ) -> Result<Option<Snapshot>, BackendError> {
+                Ok(Some(self.snapshot.clone()))
+            }
+            fn settle(&mut self, _: usize, _: &str) -> Result<RecordedSettleEvidence, BackendError> {
+                Ok(RecordedSettleEvidence::default())
+            }
+        }
+
+        fn chromium() -> RecordedAppIdentity {
+            RecordedAppIdentity {
+                name: "Chromium".into(),
+                bundle_identifier: None,
+                process_id: Some(4242),
+            }
+        }
+
+        fn described(role: &str, name: &str, path: &str) -> ElementDescription {
+            ElementDescription {
+                role: role.into(),
+                name: Some(name.into()),
+                description: None,
+                identifier: format!(":1.42{path}"),
+                actions: vec!["click".into()],
+            }
+        }
+
+        /// The window a capture of `elements` produces, with each node given the value it holds
+        /// *when the snapshot is taken* -- which is later than the evidence was read.
+        fn captured(elements: Vec<(ElementDescription, Option<&str>)>) -> Snapshot {
+            let mut root = ElementDescription {
+                role: "frame".into(),
+                name: Some("Axon Recording Probe".into()),
+                identifier: ":1.42/org/a11y/atspi/accessible/1".into(),
+                ..Default::default()
+            }
+            .into_node();
+            root.children = elements
+                .into_iter()
+                .map(|(element, value)| Node {
+                    value: value.map(str::to_owned),
+                    ..element.into_node()
+                })
+                .collect();
+            Snapshot::new(Application {
+                process_id: 4242,
+                name: "Chromium".into(),
+                identifier: None,
+                windows: vec![Window {
+                    title: root.name.clone(),
+                    root,
+                }],
+            })
+        }
+
+        fn at(element: &ElementDescription) -> RecordedTargetEvidence {
+            RecordedTargetEvidence {
+                app: chromium(),
+                point: RecordedPoint { x: 100.0, y: 200.0 },
+                candidates: vec![element.clone().into_evidence(Some("Axon Recording Probe"))],
+            }
+        }
+
+        fn record(provider: Provider) -> Vec<RecordedUserAction> {
+            let mut recorder =
+                OwnedUserActionRecorder::start(provider, RecordingScope::AllApplications).unwrap();
+            recorder.poll(Duration::ZERO).unwrap();
+            recorder
+                .finish()
+                .unwrap()
+                .into_iter()
+                .filter_map(|group| group.action)
+                .collect()
+        }
+
+        fn is_semantic(target: &serde_json::Value) -> bool {
+            target.get("locator").is_some() && target.get("point").is_none()
+        }
+
+        #[test]
+        fn a_click_and_a_typed_burst_both_resolve_to_the_elements_they_hit() {
+            let button = described("button", "Press me", "/org/a11y/atspi/accessible/7");
+            let entry = described("entry", "Recording note", "/org/a11y/atspi/accessible/9");
+            let click = |element: &ElementDescription| {
+                [
+                    RecordedInputEvent::MouseDown {
+                        evidence: at(element),
+                        timestamp_ms: 1,
+                    },
+                    RecordedInputEvent::MouseUp {
+                        evidence: at(element),
+                        timestamp_ms: 2,
+                    },
+                ]
+            };
+            let mut events: Vec<_> = click(&button).into_iter().chain(click(&entry)).collect();
+            events.push(RecordedInputEvent::KeyDown {
+                app: chromium(),
+                keystroke: RecordedKeystroke::Text {
+                    text: "axon recorded this".into(),
+                },
+                timestamp_ms: 3,
+            });
+
+            let actions = record(Provider {
+                events: VecDeque::from([events]),
+                focused: Some(RecordedFocusedEvidence {
+                    target: at(&entry),
+                    value: Some("axon recorded this".into()),
+                }),
+                // Captured after the burst, as a pump on `recording.stop` would: the entry already
+                // holds the text that was typed after it was clicked, which no event-time read of it
+                // could have known.
+                snapshot: captured(vec![
+                    (button, Some("Press me")),
+                    (entry, Some("axon recorded this")),
+                ]),
+            });
+
+            assert_eq!(actions.len(), 3, "{actions:#?}");
+            for action in &actions {
+                let target = match action {
+                    RecordedUserAction::Click { target } => target,
+                    RecordedUserAction::SetValue { target, value, .. } => {
+                        assert_eq!(value, "axon recorded this");
+                        target
+                    }
+                    other => panic!("unexpected action {other:?}"),
+                };
+                assert!(
+                    is_semantic(target),
+                    "every action resolves to an element rather than a point: {target}"
+                );
+            }
+        }
+
+        #[test]
+        fn a_password_field_keeps_its_name_for_the_secret_and_nothing_else() {
+            let field = ElementDescription {
+                role: "password text".into(),
+                ..described("", "Password", "/org/a11y/atspi/accessible/11")
+            };
+            let evidence = field.clone().into_evidence(None);
+            assert!(evidence.sensitive);
+            assert_eq!(evidence.value, None, "a credential is never carried");
+            assert_eq!(evidence.title.as_deref(), Some("Password"));
+
+            let ordinary = described("entry", "Password hint", "/org/a11y/atspi/accessible/12")
+                .into_evidence(None);
+            assert!(!ordinary.sensitive);
+            assert_eq!(
+                ordinary.title, None,
+                "capture has no title to match an ordinary element's against"
+            );
+        }
+    }
 
     /// A US layout stub standing in for `GetKeyboardMapping`: two keysyms per keycode, the
     /// unshifted one and the shifted one, in the order the protocol reports them.
