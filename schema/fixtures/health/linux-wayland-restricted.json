@@ -86,20 +86,18 @@
     {
       "capability": "hitTest",
       "usable": false,
-      "reason": "not-implemented",
-      "restriction": "AT-SPI point lookup is not implemented"
+      "reason": "wayland-restricted",
+      "restriction": "this is a Wayland session: the compositor does not permit unrestricted synthetic input, and X11 cannot read or set the Wayland foreground even where XWayland is running alongside"
     },
     {
       "capability": "serializeHistory",
-      "usable": false,
-      "reason": "not-implemented",
-      "restriction": "live history serialization is not implemented"
+      "usable": true
     },
     {
       "capability": "observeGlobalInput",
       "usable": false,
-      "reason": "not-implemented",
-      "restriction": "global input observation is not implemented"
+      "reason": "wayland-restricted",
+      "restriction": "this is a Wayland session: the compositor delivers input only to the surface it is aimed at, and there is no listen-only global input protocol to ask it for the rest -- by design rather than by omission"
     }
   ]
 }
