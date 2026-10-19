@@ -238,6 +238,10 @@ for scope in allApplications application; do
   printf '%s' "$script" | grep -q 'point fallback' && fail "scope $scope fell back to a point target for at least one action"
   printf '%s' "$script" | grep -q 'was not recorded' && fail "scope $scope reports an event the observer could not record"
   printf '%s' "$script" | grep -q 'axon recorded thisaxon' && fail "scope $scope recorded a doubled value; the entry was not cleared"
+  # Chromium's inputs expose AT-SPI Text but not EditableText: the burst has to be keystrokes, since
+  # a `type` (setValue) step into one is refused on replay as "target is not editable".
+  printf '%s' "$script" | grep -q 'tool: type' && fail "scope $scope authored a setValue step into a field this backend cannot write"
+  printf '%s' "$script" | grep -q 'tool: keyboard' || fail "scope $scope recorded no keyboard step for the typed burst"
   printf '%s' "$script" | grep -q 'dropped' && fail "scope $scope reports that the observer dropped events"
   # axn/213's shape: identity only. A recorded locator that carried the value or the frame would be
   # describing the moment rather than the element.
@@ -278,17 +282,71 @@ printf '%s' "$dry" | jq -e '
   and all(.result.structuredContent.batch.trace[]; .success == true)
 ' >/dev/null || fail "the dry run did not accept all three recorded actions"
 
-probe_window_frontmost
-clear_entry
-live="$(run_artifact "$scratch/recorded.axn" false)"
-answered "the live replay of the recorded artifact failed" "$live"
-traced "$live"
-printf '%s' "$live" | jq -e '
-  (.result.structuredContent.batch.trace | length) == 3
-  and all(.result.structuredContent.batch.trace[]; .targetResolution.status == "unique")
-' >/dev/null || fail "a recorded target did not resolve to exactly one element on live replay"
-printf '%s' "$live" | jq -e 'all(.result.structuredContent.batch.trace[]; .result.dispatchSuccess == true)' >/dev/null \
-  || fail "a recorded action did not dispatch on live replay"
+# What the entry holds now, read back through the daemon rather than trusted from a dispatch result:
+# a keystroke Chromium silently discards still dispatches successfully.
+entry_value() {
+  mcp "$(jq -cn --arg app "$app" '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{"app":$app,"screenshot":false}}}')" \
+    | jq -r '[.result.structuredContent.app.windows[]?.root | .. | objects
+              | select(.role == "entry" and (.label? // "") == "Recording note") | .value // ""][0] // ""'
+}
+
+expect_entry() {
+  local want="$1" what="$2" seen=""
+  for _ in $(seq 1 10); do
+    seen="$(entry_value)"
+    [ "$seen" = "$want" ] && { echo "the entry holds '$seen'"; return 0; }
+    sleep 0.3
+  done
+  fail "$what: the entry holds '$seen', not '$want'"
+}
+
+# The same artifact with `deliveryPolicy: foregroundPermitted` stated on every action, which is how
+# an artifact asks for it: `run` has no policy argument, and a recorded action states none, so each
+# replays under the default `backgroundOnly`. serde_yaml writes the top-level sequence unindented and
+# each action's `id` first, so every action begins with `- id:` at column 0 under `actions:`; if that
+# ever stops being true the daemon refuses the copy as invalid rather than running something else.
+foreground_copy() {
+  awk '/^[A-Za-z]/ { section = $0 } { print } section == "actions:" && /^- / { print "  deliveryPolicy: foregroundPermitted" }' "$1" > "$2"
+}
+
+# Replays an artifact live and leaves the answer in $replayed.
+#
+# As recorded first, because that is the claim: a recording replays. A refusal under the recorded
+# `backgroundOnly` policy is reported as exactly that and then retried once with foreground delivery
+# permitted -- which is the daemon's own delivery during replay, so the self-delivery exclusion has
+# nothing to say about it -- so the evidence records both what background replay does and whether
+# the steps themselves are sound.
+replay_live() {
+  local artifact="$1" label="$2"
+  probe_window_frontmost
+  clear_entry
+  replayed="$(run_artifact "$artifact" false)"
+  answered "the live replay of the $label failed" "$replayed"
+  traced "$replayed"
+  if printf '%s' "$replayed" | jq -e 'any(.result.structuredContent.batch.trace[];
+        ((.result.refusal // null) != null) or ((.error // "") | test("backgroundOnly|refus"; "i")))' >/dev/null; then
+    echo "the $label: an action was refused under the recorded backgroundOnly policy (above); replaying it once more with foregroundPermitted on every action"
+    foreground_copy "$artifact" "$artifact.foreground"
+    probe_window_frontmost
+    clear_entry
+    replayed="$(run_artifact "$artifact.foreground" false)"
+    answered "the foreground replay of the $label failed" "$replayed"
+    traced "$replayed"
+  fi
+  # A step with a target must resolve it to exactly one element. A keyboard step has no target to
+  # resolve, which is why this is not asked of every step.
+  printf '%s' "$replayed" | jq -e '
+    ([.result.structuredContent.batch.trace[] | select(.targetResolution != null)] | length) >= 1
+    and all(.result.structuredContent.batch.trace[]; .targetResolution == null or .targetResolution.status == "unique")
+  ' >/dev/null || fail "a target in the $label did not resolve to exactly one element on live replay"
+  printf '%s' "$replayed" | jq -e 'all(.result.structuredContent.batch.trace[]; .result.dispatchSuccess == true)' >/dev/null \
+    || fail "an action in the $label did not dispatch on live replay"
+  expect_entry 'axon recorded this' "the typed step of the $label did not land"
+}
+
+replay_live "$scratch/recorded.axn" "recorded artifact"
+printf '%s' "$replayed" | jq -e '(.result.structuredContent.batch.trace | length) == 3' >/dev/null \
+  || fail "the recorded artifact did not replay all three actions"
 
 note "saving live history and replaying that too"
 # `save` exports one history session, and MCP calls that name none are kept under `default`; the
@@ -299,15 +357,7 @@ printf '%s' "$saved" | jq '{actionCount: .result.actionCount, recordCount: .resu
 printf '%s' "$saved" | jq -e '.result.actionCount >= 1' >/dev/null || fail "save exported nothing from live history"
 [ -s "$scratch/saved.axn" ] || printf '%s\n' "$(printf '%s' "$saved" | jq -r '.result.script')" > "$scratch/saved.axn"
 
-probe_window_frontmost
-clear_entry
-replayed="$(run_artifact "$scratch/saved.axn" false)"
-answered "the live replay of the saved artifact failed" "$replayed"
-traced "$replayed"
-printf '%s' "$replayed" | jq -e '
-  (.result.structuredContent.batch.trace | length) >= 1
-  and all(.result.structuredContent.batch.trace[]; .result.dispatchSuccess == true)
-' >/dev/null || fail "a saved action did not dispatch on replay"
+replay_live "$scratch/saved.axn" "saved artifact"
 
 note "the daemon's own delivery is not in the recording"
 # The other half of the exclusion, live. A recording started and stopped around the daemon's own
