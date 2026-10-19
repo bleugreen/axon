@@ -914,6 +914,14 @@ pub trait RecordingEvidenceProvider: GlobalInputObserver {
 #[derive(Clone, Debug, PartialEq)]
 pub struct RecordedFocusedEvidence {
     pub target: RecordedTargetEvidence,
+    /// The complete value of the focused element, **only when this backend's `set_value` can
+    /// write it back** to that element -- not merely when the value can be read.
+    ///
+    /// A `Some` here authors the burst as `setValue`; `None` authors it as keyboard text. The two
+    /// questions come apart on every platform: AT-SPI exposes `Text` on inputs that lack
+    /// `EditableText`, and UI Automation reports `ValuePattern.Value` on elements whose
+    /// `IsReadOnly` is set. A provider that reported a readable but unwritable value would record a
+    /// step its own backend can never replay. Never set for a sensitive element.
     pub value: Option<String>,
 }
 

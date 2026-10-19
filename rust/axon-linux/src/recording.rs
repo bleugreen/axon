@@ -454,6 +454,17 @@ impl KnownApplications {
     }
 }
 
+/// Whether a burst typed into the focused element is authored from its value, as `setValue`,
+/// rather than as keystrokes.
+///
+/// Only when this backend could write that value back. Replay sets a value through AT-SPI
+/// `EditableText`, and an element that exposes `Text` without it -- every input in Chromium and
+/// Firefox web content -- reads perfectly well and cannot be set, so a value authored from it would
+/// be a step this backend can never replay. Never for a sensitive element, whose value is not read.
+pub fn authors_value(sensitive: bool, editable: bool) -> bool {
+    editable && !sensitive
+}
+
 /// What one AT-SPI element says about itself, in the fields a capture and a recording both describe
 /// it by.
 ///
@@ -930,6 +941,50 @@ mod tests {
                     "every action resolves to an element rather than a point: {target}"
                 );
             }
+        }
+
+        /// A Chromium input exposes `Text` but not `EditableText`: its value can be read and not
+        /// set. A burst into it has to come back as keystrokes, which replay can deliver, rather
+        /// than as a `setValue` it would refuse with "target is not editable".
+        #[test]
+        fn a_burst_into_a_field_this_backend_cannot_write_records_keystrokes() {
+            let entry = described("entry", "Recording note", "/org/a11y/atspi/accessible/9");
+            let burst = |editable: bool| {
+                record(Provider {
+                    events: VecDeque::from([vec![RecordedInputEvent::KeyDown {
+                        app: chromium(),
+                        keystroke: RecordedKeystroke::Text {
+                            text: "axon recorded this".into(),
+                        },
+                        timestamp_ms: 1,
+                    }]]),
+                    focused: Some(RecordedFocusedEvidence {
+                        target: at(&entry),
+                        value: authors_value(false, editable)
+                            .then(|| "axon recorded this".to_owned()),
+                    }),
+                    snapshot: captured(vec![(entry.clone(), Some("axon recorded this"))]),
+                })
+            };
+
+            assert!(
+                matches!(
+                    burst(false).as_slice(),
+                    [RecordedUserAction::TypeText { text, .. }] if text == "axon recorded this"
+                ),
+                "readable but not writable: keystrokes"
+            );
+            assert!(
+                matches!(
+                    burst(true).as_slice(),
+                    [RecordedUserAction::SetValue { value, .. }] if value == "axon recorded this"
+                ),
+                "writable: the value"
+            );
+            assert!(
+                !authors_value(true, true),
+                "a sensitive field's value is never authored, however writable"
+            );
         }
 
         #[test]
