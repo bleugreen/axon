@@ -108,12 +108,26 @@ cleanup() {
     sleep 0.25
   done
   kill -9 "$daemon_pid" >/dev/null 2>&1 || true
+  # Chromium goes on writing its profile for a moment after it is told to stop, and its helper
+  # processes outlive it briefly, so removing the scratch directory straight away races them and
+  # fails with "Directory not empty". Wait for the browser, then retry the removal a few times.
   kill "$browser_pid" >/dev/null 2>&1 || true
+  for _ in $(seq 1 40); do
+    kill -0 "$browser_pid" 2>/dev/null || break
+    sleep 0.25
+  done
   if [ "$status" -eq 0 ]; then
-    rm -rf "$scratch"
+    for _ in $(seq 1 10); do
+      rm -rf "$scratch" 2>/dev/null && break
+      sleep 0.5
+    done
+    [ -e "$scratch" ] && echo "note: could not remove $scratch; the browser was still writing to it" >&2
   else
     echo "kept $scratch for diagnosis; the daemon log is $log" >&2
   fi
+  # The probe's verdict is decided before cleanup runs, and nothing here may change it: a pass whose
+  # tidying-up stumbled is still a pass, and a failure is still a failure.
+  exit "$status"
 }
 trap cleanup EXIT
 
