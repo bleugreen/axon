@@ -2185,10 +2185,13 @@ impl Actor {
         described
     }
 
-    /// The complete text of the focused element, which is what a `setValue` is authored from.
+    /// The complete text of the focused element, which is what a `setValue` is authored from, or
+    /// `None` to have the burst authored as keystrokes.
     ///
     /// Read when a typed burst is flushed, the same moment shared core captures the snapshot that
-    /// burst's target is resolved against. Through the Text interface, as `node` reads a value.
+    /// burst's target is resolved against. Through the Text interface, as `node` reads a value --
+    /// but only from an element exposing `EditableText`, the interface [`Self::set`] writes through,
+    /// for the reason [`crate::recording::authors_value`] gives.
     ///
     /// Never read from a sensitive element. The rule the observer sensitivity contract states is
     /// that a credential is never *read*, not that it is read and then dropped -- see
@@ -2204,6 +2207,12 @@ impl Actor {
         .await
         .ok()?;
         let proxies = timeout("interfaces", proxy.proxies()).await.ok()?;
+        let editable = timeout("editable text interface", proxies.editable_text())
+            .await
+            .is_ok();
+        if !crate::recording::authors_value(sensitive, editable) {
+            return None;
+        }
         let text = timeout("text interface", proxies.text()).await.ok()?;
         timeout("text", text.get_text(0, -1)).await.ok()
     }
