@@ -317,7 +317,11 @@ jobs:
 
   rust-windows:
     name: Rust Windows
-    runs-on: [self-hosted, axon-live-windows]
+    # Hosted, not the Windows bench: nothing here touches a desktop. The recovery rehearsal stubs
+    # every machine seam, the axon-win suite is headless, and clippy and the release build need only
+    # a Windows target. Tying the merge gate to a desktop that can be unenrolled leaves every pull
+    # request queued until GitHub cancels the run.
+    runs-on: windows-latest
     steps:
       - name: Check out Axon
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
