@@ -21,11 +21,13 @@ several cases the order it did things in, because a restore that silently takes 
 the whole hazard.
 
 A constraint on every scenario added here, not merely a property that happens to hold today: the
-probe script must reach the machine only through those seams. The `Test` workflow's Windows job runs
-on the same machine as the live lane and shares no concurrency group with it, so a scenario that
-reached a real `Get-ScheduledTask`, `Stop-Process`, or `axon-win` would be doing so on somebody's
-desktop, possibly mid-live-run. The seam census below fails the run when the probe script grows a
-seam this file does not stub, rather than letting the new one through to the real machine.
+probe script must reach the machine only through those seams, wherever this file runs. The stages
+it drives are the ones .github/scripts/windows-live-probe.ps1 runs for real on an enrolled Windows
+desktop, and this file runs on whatever machine invokes it -- the `Test` workflow's Windows job, or
+a developer's own desktop -- so a scenario that reached a real `Get-ScheduledTask`, `Stop-Process`,
+or `axon-win` would park, start, or kill daemons on that machine. The seam census below fails the
+run when the probe script grows a seam this file does not stub, rather than letting the new one
+through to the real machine.
 
 And a warning for whoever extends this. The only way to know a scenario asserts anything is to break
 the stage and watch it fail. Verify that the mutation landed before reading its verdict: a mutation
@@ -108,7 +110,7 @@ if ($phantom.Count -ne 0) {
 # The census above audits the seam region. This audits everything else, which is what makes the
 # constraint in the docstring the one actually enforced: a helper added next to a stage that reached
 # for `Stop-Process` or `Get-ScheduledTask` inline would otherwise pass through untouched and drive
-# a real desktop during the pull-request job that runs this file.
+# the real machine running this file.
 $probeAst = [System.Management.Automation.Language.Parser]::ParseFile($ProbeScript, [ref] $null, [ref] $null)
 $functions = $probeAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)
 
@@ -640,8 +642,8 @@ function Remove-ProbeKeyboardResult {
 }
 
 # The recording seams. Every one of them either registers a scheduled task, opens the daemon's
-# named pipe, or writes a file, so a scenario that reached the real ones would drive somebody's
-# desktop from a pull-request job. The recording diagnostic and acceptance are stubbed whole rather
+# named pipe, or writes a file, so a scenario that reached the real ones would drive the real
+# machine running this file. The recording diagnostic and acceptance are stubbed whole rather
 # than composed from the stubs beneath them, the same way `Invoke-KeyboardDiagnostic` is: what the
 # recovery scenarios exercise is what a *failing* stage leaves behind, and neither of these runs at
 # all in the branches this file rehearses.

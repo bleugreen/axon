@@ -931,10 +931,12 @@ thing; native tests establish that each backend can deliver it.
 ## Continuous integration lanes
 
 The `Test` workflow is the merge gate. Its deterministic Swift and Rust jobs run
-for pull requests and pushes to `main` on the enrolled macOS, Linux, and Windows
-self-hosted runners. Each job selects both `self-hosted` and the runner's
-dedicated `axon-live-*` label, so GitHub cannot silently route it to a hosted
-machine or to the wrong operating system.
+for pull requests and pushes to `main`. The Rust jobs run on GitHub-hosted
+macOS, Linux, and Windows runners because none of them touches a desktop; the
+Windows job matters regardless, because it is the only lint pass that can see
+code behind `#[cfg(windows)]`. The Swift job runs on the enrolled macOS desktop
+and selects both `self-hosted` and its dedicated `axon-live-mac` label, so
+GitHub cannot silently route it to a hosted machine.
 
 The Linux job also runs the hermetic X11 foreground test under `Xvfb`. That test
 brings its own miniature EWMH window manager rather than depending on an
@@ -962,6 +964,9 @@ it can inspect afterwards, so a scenario can assert which branch ran, what it
 said, and what order it did things in. The probe script keeps those functions
 together in a marked region and the harness fails when it finds one it does not
 stub, because a seam nobody stubbed is a scenario reaching a real desktop.
+Unlike the macOS rehearsal, this one needs no particular machine: the live lane
+and the hosted Windows runner both interpret the stages with PowerShell 7, and
+the stubs mean the job never reaches whatever machine it runs on.
 
 The separate `Live desktop verification` workflow is a reporting lane. It runs
 only after a push to `main` or an explicit manual dispatch, never for a pull
