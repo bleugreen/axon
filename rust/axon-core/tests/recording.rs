@@ -138,7 +138,10 @@ fn name_only_application_scope_preserves_unicode_click_and_text_in_artifact() {
         );
         assert_eq!(artifact.actions[1].tool, "keyboard");
         assert_eq!(artifact.actions[1].params["app"], json!(title));
-        assert_eq!(artifact.actions[1].params["text"], json!("axon recorded this"));
+        assert_eq!(
+            artifact.actions[1].params["text"],
+            json!("axon recorded this")
+        );
     }
     assert_eq!(reparsed, document);
 }
