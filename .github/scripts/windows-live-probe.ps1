@@ -421,8 +421,10 @@ function Invoke-RecordingAcceptance {
     # exactly the shape of the macOS failure in axn/207, and worth catching here rather than as an
     # empty artifact.
     $recordedAppName = [string]$captured.app.name
-    if ([string]::IsNullOrWhiteSpace($recordedAppName)) {
-        throw 'the captured Edge application exposed no name to scope a recording by'
+    if (-not $recordedAppName.StartsWith((Get-RecordingProbeTitle), [StringComparison]::Ordinal)) {
+        throw ("the captured Edge title did not preserve the Unicode fixture title: expected prefix " +
+            (Format-ProbeCodePoints (Get-RecordingProbeTitle)) + '; actual ' +
+            (Format-ProbeCodePoints $recordedAppName))
     }
 
     # `identifier` is the DOM id, which Chromium does publish as the UI Automation AutomationId.
@@ -471,89 +473,56 @@ function Invoke-RecordingAcceptance {
             -ActivateProcessId ([int]$Browser.ProcessId)
     }
 
-    $unscoped, $scoped = $recordings
-    if ([int]$unscoped.actionCount -lt 1) {
-        throw 'the recording observed no actions from an independent process posting a click and a typed burst, with no scope filtering it'
-    }
-    if ([int]$scoped.actionCount -lt 1) {
-        throw ("an unscoped recording observed $($unscoped.actionCount) actions but scoping to " +
-            "'$recordedAppName' observed none: the name the observer reads for an event and the " +
-            'name the caller scoped by disagree (the axn/207 failure shape)')
-    }
-    $stopped = $scoped.stopped
-    $script = [string]$stopped.result.script
-
-    if ([int]$stopped.result.actionCount -lt 1) {
-        throw 'the recording observed no actions from an independent process posting a click and a typed burst'
-    }
-    # A recording whose steps carry only points is a recording that saw the input and could not say
-    # what it hit, which is the hollow outcome the AXN-26 native-vocabulary ruling exists to refuse.
-    if ($script -notmatch 'locator:') {
-        throw 'the recording authored no semantic target with a locator'
-    }
-    # axn/213: what persists is identity, not the state of the moment. `value` and `frame` in a
-    # persisted locator would pin a recording to the instant it was taken.
-    foreach ($stateful in @('frame:', 'nearbyText:')) {
-        if ($script -match $stateful) {
-            throw "the recorded locator persisted state-pinning field '$stateful'"
+    foreach ($recording in $recordings) {
+        $label = $recording.Label
+        $script = [string]$recording.stopped.result.script
+        if ($script -notmatch 'locator:') {
+            throw "recording [$label] authored no semantic target with a locator"
         }
-    }
-
-    # A recorded artifact carries no delivery policy, deliberately: what a recording says is what
-    # the user did, and how a replay is allowed to deliver it is the replaying caller's decision.
-    # `AxnAction` flattens unrecognised keys into each action's dispatch params, so supplying it
-    # here is that decision being made rather than the artifact being doctored. Without it the live
-    # replay is refused -- correctly -- because a click on a `Chrome_WidgetWin_1` window has no
-    # probe-verified background rung, and this leg would then pass while nothing was delivered.
-    $replayable = ($script -split "`n" | ForEach-Object {
-        $_
-        if ($_ -match '^\s+tool:') { '  deliveryPolicy: foregroundPermitted' }
-    }) -join "`n"
-    $scriptPath = Join-Path $LiveDirectory 'recording-acceptance.axn'
-    Set-Content -LiteralPath $scriptPath -Encoding utf8 -Value $replayable
-    try {
-        foreach ($dryRun in @($true, $false)) {
-            $replay = Invoke-AxonMcp -Request (@{
-                jsonrpc = '2.0'; id = 1; method = 'tools/call'
-                # `continueOnError` for the same reason the per-action assertion below reads
-                # `dispatchSuccess`: a `click` declares no postcondition, so the runner scores it
-                # as unsuccessful and, left to itself, stops the batch there. Every recorded
-                # artifact containing a click would then replay exactly one action. The batch is
-                # allowed to finish and each action is judged on its own evidence instead.
-                params = @{
-                    name = 'run'
-                    arguments = @{ path = $scriptPath; dryRun = $dryRun; continueOnError = $true }
-                }
-            } | ConvertTo-Json -Compress -Depth 10)
-            $batch = $replay.result.structuredContent.batch
-            Write-Note "recording acceptance replay dryRun=$dryRun : $($batch | ConvertTo-Json -Compress -Depth 30)"
-            if ($replay.result.isError -ne $false) {
-                throw "replaying the recording with dryRun=$dryRun errored: $($replay | ConvertTo-Json -Compress -Depth 30)"
+        foreach ($stateful in @('frame:', 'nearbyText:')) {
+            if ($script -match $stateful) {
+                throw "recording [$label] persisted state-pinning field '$stateful'"
             }
-            if (@($batch.trace).Count -lt [int]$stopped.result.actionCount) {
-                throw 'the replay executed fewer actions than the recording authored'
-            }
-            # Asserted per action, and on the right field. `success` is *goal* success, and `click`
-            # declares no postcondition -- the tool surface says so in as many words -- so demanding
-            # it here would require a guarantee this project deliberately does not make, and the
-            # foreground acceptance above asserts `dispatchSuccess` for exactly that reason. What a
-            # recording is on trial for is narrower and checkable: did the target it wrote down
-            # still resolve uniquely, and did the action reach the application.
-            foreach ($step in @($batch.trace)) {
-                $resolution = $step.targetResolution.status
-                if ($resolution -and $resolution -ne 'unique') {
-                    throw "recorded target for $($step.actionId) did not resolve uniquely on replay (dryRun=$dryRun): $($step | ConvertTo-Json -Compress -Depth 20)"
-                }
-                $delivered = if ($dryRun) { $step.success } else { $step.result.dispatchSuccess }
-                if ($delivered -ne $true) {
-                    throw "recorded action $($step.actionId) was not delivered on replay (dryRun=$dryRun): $($step | ConvertTo-Json -Compress -Depth 20)"
-                }
-            }
-            Wait-BrowserTransition
         }
-    }
-    finally {
-        Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue
+
+        # Delivery policy belongs to the replaying caller, not to the recorded artifact.
+        $replayable = ($script -split "`n" | ForEach-Object {
+            $_
+            if ($_ -match '^\s+tool:') { '  deliveryPolicy: foregroundPermitted' }
+        }) -join "`n"
+        $scriptPath = Join-Path $LiveDirectory 'recording-acceptance.axn'
+        Set-Content -LiteralPath $scriptPath -Encoding utf8 -Value $replayable
+        try {
+            $dryBatch = $null
+            foreach ($dryRun in @($true, $false)) {
+                $replay = Invoke-AxonMcp -Request (@{
+                    jsonrpc = '2.0'; id = 1; method = 'tools/call'
+                    params = @{
+                        name = 'run'
+                        # Continue after a click's unverified goal success, but require actual
+                        # delivery and unique resolution separately for every real action.
+                        arguments = @{ path = $scriptPath; dryRun = $dryRun; continueOnError = $true }
+                    }
+                } | ConvertTo-Json -Compress -Depth 10)
+                $batch = $replay.result.structuredContent.batch
+                Write-Note "recording [$label] replay dryRun=$dryRun : $($batch | ConvertTo-Json -Compress -Depth 30)"
+                if ($replay.result.isError -ne $false -or $null -eq $batch) {
+                    throw "recording [$label] replay dryRun=$dryRun errored: $($replay | ConvertTo-Json -Compress -Depth 30)"
+                }
+                if ($dryRun) {
+                    Assert-RecordingDryRun -Batch $batch -ActionCount $recording.actionCount `
+                        -AppName $recordedAppName -Text $typed -Label $label
+                    $dryBatch = $batch
+                }
+                else {
+                    Assert-RecordingReplay -Batch $batch -DryBatch $dryBatch -Label $label
+                }
+                Wait-BrowserTransition
+            }
+        }
+        finally {
+            Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue
+        }
     }
 
     # The other half of the artifact story: `save` exports a slice of live action history as a
@@ -944,12 +913,13 @@ function Start-ProbeBrowser {
     # The recording acceptance needs something to click and something to type into, which no other
     # probe page has: `start.html` has a link but no field, and a recording whose only action is a
     # click never exercises the focused-value read that authors a `type` step.
-    Set-Content -LiteralPath (Join-Path $pages 'record.html') -Encoding utf8 -Value @'
-<!doctype html><title>Axon Recording Probe</title>
+    $recordingTitle = Get-RecordingProbeTitle
+    Set-Content -LiteralPath (Join-Path $pages 'record.html') -Encoding utf8 -Value @"
+<!doctype html><meta charset="utf-8"><title>$recordingTitle</title>
 <main><h1>Axon Recording Probe</h1>
 <input id="note" type="text" aria-label="Recording note" />
 <p><a href="complete.html">Continue</a></p></main>
-'@
+"@
     $url = ([uri](Join-Path $pages 'start.html')).AbsoluteUri
     $readyUrl = ([uri](Join-Path $pages 'ready.html')).AbsoluteUri
     $recordUrl = ([uri](Join-Path $pages 'record.html')).AbsoluteUri
@@ -1211,6 +1181,91 @@ function Clear-ParkState {
 }
 
 #endregion
+
+function Get-RecordingProbeTitle {
+    'Axon Recording Probe' + [char]0x200B + ' Unicode'
+}
+
+function Format-ProbeCodePoints {
+    param([AllowEmptyString()][string] $Value)
+    $points = foreach ($rune in $Value.EnumerateRunes()) { 'U+{0:X4}' -f $rune.Value }
+    $bytes = [Text.Encoding]::UTF8.GetBytes($Value) | ForEach-Object { '{0:X2}' -f $_ }
+    "codepoints=[$($points -join ' ')] utf8=[$($bytes -join ' ')]"
+}
+
+function Assert-RecordingDryRun {
+    # AxnRunner exposes parsed dispatch parameters in dry-run trace.result, not a rendered YAML
+    # string. Attached locators have already been registered and stripped from those parameters.
+    param(
+        [Parameter(Mandatory)] $Batch,
+        [Parameter(Mandatory)][int] $ActionCount,
+        [Parameter(Mandatory)][string] $AppName,
+        [Parameter(Mandatory)][string] $Text,
+        [Parameter(Mandatory)][string] $Label
+    )
+    $steps = @($Batch.trace)
+    if ($Batch.dryRun -ne $true -or $ActionCount -lt 2 -or $steps.Count -ne $ActionCount) {
+        throw "recording [$Label] dry-run must contain every authored action and both input kinds (authored=$ActionCount, trace=$($steps.Count))"
+    }
+    $clicks = 0
+    $values = @()
+    for ($index = 0; $index -lt $steps.Count; $index++) {
+        $step = $steps[$index]
+        if ($null -eq $step.index -or $step.index -ne $index -or $step.success -ne $true) {
+            throw "recording [$Label] dry-run action $index is missing, out of order, or unsuccessful"
+        }
+        if ($step.tool -cnotin @('click', 'type')) {
+            throw "recording [$Label] authored unexpected tool '$($step.tool)' instead of semantic click/type actions"
+        }
+        $target = $step.result.target
+        if ($target.app -isnot [string] -or
+            -not [string]::Equals($target.app, $AppName, [StringComparison]::Ordinal)) {
+            throw ("recording [$Label] action $index app identity mismatch: expected " +
+                (Format-ProbeCodePoints $AppName) + '; actual ' +
+                (Format-ProbeCodePoints ([string]$target.app)))
+        }
+        if ($target.name -isnot [string] -or [string]::IsNullOrWhiteSpace($target.name)) {
+            throw "recording [$Label] action $index has no semantic target name"
+        }
+        if ($step.tool -ceq 'click') { $clicks++ }
+        else { $values += $step.result.value }
+    }
+    if ($clicks -lt 1 -or $values.Count -lt 1 -or $values[-1] -isnot [string] -or
+        -not [string]::Equals($values[-1], $Text, [StringComparison]::Ordinal)) {
+        throw ("recording [$Label] must contain an independent click and the complete typed text: expected " +
+            (Format-ProbeCodePoints $Text) + '; typed values=' + ($values | ConvertTo-Json -Compress))
+    }
+}
+
+function Assert-RecordingReplay {
+    param(
+        [Parameter(Mandatory)] $Batch,
+        [Parameter(Mandatory)] $DryBatch,
+        [Parameter(Mandatory)][string] $Label
+    )
+    $steps = @($Batch.trace)
+    $expected = @($DryBatch.trace)
+    if ($Batch.dryRun -ne $false -or $steps.Count -ne $expected.Count) {
+        throw "recording [$Label] real replay did not execute every dry-run action"
+    }
+    for ($index = 0; $index -lt $steps.Count; $index++) {
+        $step = $steps[$index]
+        if ($null -eq $step.index -or $step.index -ne $expected[$index].index -or
+            $step.tool -cne $expected[$index].tool -or
+            $step.actionId -cne $expected[$index].actionId) {
+            throw "recording [$Label] replay action $index differs from the parsed artifact"
+        }
+        # Dry-run deliberately has no targetResolution. Real dispatch must provide it; absence
+        # cannot count as unique resolution, even when dispatchSuccess is true.
+        if ($step.targetResolution.status -cne 'unique') {
+            throw "recording [$Label] action $index did not resolve uniquely: $($step | ConvertTo-Json -Compress -Depth 30)"
+        }
+        # click has no postcondition, so goal success is not the delivery guarantee.
+        if ($step.result.dispatchSuccess -ne $true) {
+            throw "recording [$Label] action $index was not delivered: $($step | ConvertTo-Json -Compress -Depth 30)"
+        }
+    }
+}
 
 function Find-ProbeNodes {
     <# Every node in a captured tree matching a predicate, depth first.
