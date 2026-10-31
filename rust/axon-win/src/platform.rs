@@ -700,9 +700,13 @@ mod tests {
             )
             .unwrap();
         assert_eq!(state.capture_window, Some(pixel::bits(hwnd)));
-        let field = state.elements.iter().find(|element| {
-            unsafe { element.CurrentAutomationId() }.is_ok_and(|id| id.to_string() == "note")
-        }).expect("probe note field in capture");
+        let field = state
+            .elements
+            .iter()
+            .find(|element| {
+                unsafe { element.CurrentAutomationId() }.is_ok_and(|id| id.to_string() == "note")
+            })
+            .expect("probe note field in capture");
         unsafe { field.SetFocus() }.expect("focus probe note field");
         let rect = unsafe { field.CurrentBoundingRectangle() }.unwrap();
         let point = (
