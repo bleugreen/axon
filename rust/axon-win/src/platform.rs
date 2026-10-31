@@ -629,7 +629,7 @@ fn normalize_virtual_desktop_point(
 mod tests {
     use super::{child_page_range, normalize_virtual_desktop_point, scroll_steps};
 
-    // Run only in the interactive desktop, with the probe's HWND and field point supplied.
+    // Run only in the interactive desktop, with the probe's HWND supplied.
     #[test]
     #[ignore = "requires a probe-owned Edge window in the interactive desktop"]
     fn probe_application_identity_boundaries() {
@@ -663,10 +663,6 @@ mod tests {
         }
         let number = |key| std::env::var(key).expect(key).parse::<usize>().expect(key);
         let hwnd = HWND(number("AXON_IDENTITY_PROBE_HWND") as *mut c_void);
-        let point = (
-            number("AXON_IDENTITY_PROBE_X") as f64,
-            number("AXON_IDENTITY_PROBE_Y") as f64,
-        );
         let session = crate::lifecycle::current_session();
         assert!(
             session.interactive && session.graphical,
@@ -704,6 +700,15 @@ mod tests {
             )
             .unwrap();
         assert_eq!(state.capture_window, Some(pixel::bits(hwnd)));
+        let field = state.elements.iter().find(|element| {
+            unsafe { element.CurrentAutomationId() }.is_ok_and(|id| id.to_string() == "note")
+        }).expect("probe note field in capture");
+        unsafe { field.SetFocus() }.expect("focus probe note field");
+        let rect = unsafe { field.CurrentBoundingRectangle() }.unwrap();
+        let point = (
+            f64::from(rect.left + (rect.right - rect.left) / 2),
+            f64::from(rect.top + (rect.bottom - rect.top) / 2),
+        );
         string_hex("capture", &snapshot.app.name);
         let scope = axon_core::RecordingScope::Application {
             app: RecordedAppIdentity {
