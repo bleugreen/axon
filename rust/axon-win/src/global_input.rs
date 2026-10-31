@@ -443,39 +443,10 @@ fn point_evidence(
 
 /// Whether an event belongs to the session's scope.
 fn accepts(scope: &RecordingScope, app: &RecordedAppIdentity) -> bool {
-    super::identity_probe("before-accepts-event", &app.name, app.process_id);
-    if let RecordingScope::Application { app: wanted } = scope {
-        super::identity_probe("before-accepts-scope", &wanted.name, wanted.process_id);
-    }
     match scope {
         RecordingScope::AllApplications => true,
         RecordingScope::Application { app: wanted } => wanted.matches_runtime(app),
     }
-}
-
-#[cfg(test)]
-pub(super) fn diagnose_scope_acceptance(
-    label: &str,
-    scope: &RecordingScope,
-    app: &RecordedAppIdentity,
-) {
-    let hex = |s: &str| {
-        s.chars()
-            .map(|c| format!("{:04X}", c as u32))
-            .collect::<Vec<_>>()
-            .join(" ")
-    };
-    let RecordingScope::Application { app: wanted } = scope else {
-        panic!("name-only scope required")
-    };
-    assert!(wanted.process_id.is_none() && wanted.bundle_identifier.is_none());
-    eprintln!(
-        "{label} before-accepts scope={} event={} pid={:?} accepted={}",
-        hex(&wanted.name),
-        hex(&app.name),
-        app.process_id,
-        accepts(scope, app)
-    );
 }
 
 /// Drains raw events and reads the interface around each one, at event time.

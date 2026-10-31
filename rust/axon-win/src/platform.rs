@@ -85,26 +85,6 @@ use windows::{
     core::{BSTR, Interface, Ref, Result as WinResult, implement},
 };
 
-// Temporary probe-only instrumentation; removed after the live boundary measurement.
-fn identity_probe(label: &str, name: &str, pid: Option<u32>) {
-    if !name.starts_with("Axon Recording Probe") {
-        return;
-    }
-    use std::io::Write;
-    if let Ok(mut log) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(r"C:\ProgramData\Axon\live\identity-boundaries.log")
-    {
-        let _ = writeln!(
-            log,
-            "{label} pid={pid:?} name={} utf8={:02X?}",
-            name.escape_unicode(),
-            name.as_bytes()
-        );
-    }
-}
-
 const MAX_DEPTH: usize = 18;
 const MAX_CHILDREN: usize = 200;
 const MAX_NODES: usize = 2_000;
@@ -649,127 +629,13 @@ fn normalize_virtual_desktop_point(
 mod tests {
     use super::{child_page_range, normalize_virtual_desktop_point, scroll_steps};
 
-    // Run only in the interactive desktop, with the probe's HWND supplied.
     #[test]
-    #[ignore = "requires a probe-owned Edge window in the interactive desktop"]
-    fn probe_application_identity_boundaries() {
-        use super::*;
-
-        fn string_hex(label: &str, value: &str) {
-            let points: Vec<_> = value.chars().map(|c| format!("{:04X}", c as u32)).collect();
-            let bytes: Vec<_> = value
-                .as_bytes()
-                .iter()
-                .map(|b| format!("{b:02X}"))
-                .collect();
-            eprintln!(
-                "{label} codepoints={} utf8={}",
-                points.join(" "),
-                bytes.join(" ")
-            );
-        }
-        fn element_hex(label: &str, element: &IUIAutomationElement) {
-            let name = unsafe { element.CurrentName() }.expect("probe name available");
-            let units: Vec<_> = name.iter().map(|u| format!("{u:04X}")).collect();
-            eprintln!(
-                "{label} hwnd={:X} pid={:?} bstr={}",
-                unsafe { element.CurrentNativeWindowHandle() }
-                    .unwrap_or_default()
-                    .0 as usize,
-                automation_process_id(element),
-                units.join(" ")
-            );
-            string_hex(label, &name.to_string());
-        }
-        let number = |key| std::env::var(key).expect(key).parse::<usize>().expect(key);
-        let hwnd = HWND(number("AXON_IDENTITY_PROBE_HWND") as *mut c_void);
-        let session = crate::lifecycle::current_session();
-        assert!(
-            session.interactive && session.graphical,
-            "interactive desktop required"
-        );
-        let mut state = UiaState::new(|_| {}).unwrap();
-        let matches: Vec<_> = state
-            .top_level()
-            .unwrap()
-            .into_iter()
-            .filter(|e| unsafe { e.CurrentNativeWindowHandle() }.ok() == Some(hwnd))
-            .collect();
-        assert_eq!(
-            matches.len(),
-            1,
-            "exactly one root child must own the probe HWND"
-        );
-        let enumerated = &matches[0];
-        let title = unsafe { enumerated.CurrentName() }.unwrap().to_string();
-        assert!(
-            title.starts_with("Axon Recording Probe"),
-            "refuse to log a non-probe title"
-        );
-        element_hex("root-child", enumerated);
-        let from_handle = unsafe { state.automation.ElementFromHandle(hwnd) }.unwrap();
-        element_hex("from-handle", &from_handle);
-        let snapshot = state
-            .capture(
-                AppQuery {
-                    name: Some(title.clone()),
-                    process_id: None,
-                    identifier: None,
-                },
-                CaptureBounds::default(),
-            )
-            .unwrap();
-        assert_eq!(state.capture_window, Some(pixel::bits(hwnd)));
-        let field = state
-            .elements
-            .iter()
-            .find(|element| {
-                unsafe { element.CurrentAutomationId() }.is_ok_and(|id| id.to_string() == "note")
-            })
-            .expect("probe note field in capture");
-        unsafe { field.SetFocus() }.expect("focus probe note field");
-        let rect = unsafe { field.CurrentBoundingRectangle() }.unwrap();
-        let point = (
-            f64::from(rect.left + (rect.right - rect.left) / 2),
-            f64::from(rect.top + (rect.bottom - rect.top) / 2),
-        );
-        string_hex("capture", &snapshot.app.name);
-        let scope = axon_core::RecordingScope::Application {
-            app: RecordedAppIdentity {
-                name: snapshot.app.name.clone(),
-                bundle_identifier: None,
-                process_id: None,
-            },
-        };
-        for (label, element) in [
-            ("pointer", state.element_at(point).unwrap()),
-            (
-                "focused",
-                unsafe { state.automation.GetFocusedElement() }.unwrap(),
-            ),
-        ] {
-            let host = state.host_window(&element).unwrap().unwrap();
-            let root = unsafe { GetAncestor(host, GA_ROOT) };
-            assert_eq!(root, hwnd, "evidence must belong to the probe window");
-            eprintln!(
-                "{label} host={:X} root={:X} element-pid={:?}",
-                host.0 as usize,
-                root.0 as usize,
-                automation_process_id(&element)
-            );
-            let (app, window_title) = state.recorded_identity(&element).unwrap();
-            string_hex(label, &app.name);
-            assert_eq!(window_title.as_deref(), Some(app.name.as_str()));
-            global_input::diagnose_scope_acceptance(label, &scope, &app);
-        }
-        let foreground = unsafe { GetForegroundWindow() };
-        assert_eq!(unsafe { GetAncestor(foreground, GA_ROOT) }, hwnd);
-        eprintln!("foreground hwnd={:X}", foreground.0 as usize);
-        let app = state.foreground_identity().unwrap();
-        string_hex("keyboard", &app.name);
-        global_input::diagnose_scope_acceptance("keyboard", &scope, &app);
-        let after = unsafe { enumerated.CurrentName() }.unwrap().to_string();
-        assert_eq!(after, title, "title changed during provider comparison");
+    fn application_bstr_conversion_preserves_unicode_exactly() {
+        let title = "Axon Recording Probe\u{200b} - Microsoft\u{200b} Edge";
+        let name = super::BSTR::from(title);
+        assert_eq!(&*name, title.encode_utf16().collect::<Vec<_>>().as_slice());
+        assert_eq!(name.to_string().as_bytes(), title.as_bytes());
+        assert_ne!(name.to_string(), title.replace('\u{200b}', "?"));
     }
 
     #[test]
@@ -1413,11 +1279,6 @@ impl UiaState {
             .ok()
             .map(|name| name.to_string())
             .filter(|name| !name.is_empty())?;
-        identity_probe(
-            "recorded-identity",
-            &name,
-            automation_process_id(&top_level),
-        );
         Some((
             RecordedAppIdentity {
                 name: name.clone(),
@@ -1552,16 +1413,14 @@ impl UiaState {
             return None;
         }
         let element = unsafe { self.automation.ElementFromHandle(window) }.ok()?;
-        let app = RecordedAppIdentity {
+        Some(RecordedAppIdentity {
             name: unsafe { element.CurrentName() }
                 .ok()
                 .map(|name| name.to_string())
                 .filter(|name| !name.is_empty())?,
             bundle_identifier: None,
             process_id: automation_process_id(&element),
-        };
-        identity_probe("foreground-identity", &app.name, app.process_id);
-        Some(app)
+        })
     }
 
     /// Binds one click to one window, or names why it cannot be bound.
@@ -1719,7 +1578,6 @@ impl UiaState {
             identifier: None,
             windows: vec![Window { title, root }],
         });
-        identity_probe("capture", &snapshot.app.name, snapshot.app.process_id);
         self.snapshot = Some(snapshot.clone());
         Ok(snapshot)
     }
