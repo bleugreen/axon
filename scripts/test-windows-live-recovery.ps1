@@ -274,7 +274,7 @@ $ParkStopTimeoutSeconds = 1
 # park for a stop -- is the behaviour under test.
 
 $ExpectedVersion = (Get-Content (Join-Path $RepositoryRoot 'VERSION')).Trim()
-$DesktopInstallDirectory = 'C:\Users\mitch\AppData\Local\Axon\0.4.0\axon-win-0.4.0-windows-x86_64'
+$DesktopInstallDirectory = 'C:\Users\dev\AppData\Local\Axon\0.4.0\axon-win-0.4.0-windows-x86_64'
 $DesktopInstallPath = Join-Path $DesktopInstallDirectory 'axon-win-daemon.exe'
 $DesktopCliPath = Join-Path $DesktopInstallDirectory 'axon-win.exe'
 $DesktopPid = 4388

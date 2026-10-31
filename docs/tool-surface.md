@@ -476,7 +476,7 @@ version: 2
 args:
   - name: user_name
     type: string
-    default: Mitch
+    default: Ada
 actions:
   - tool: type
     target:
