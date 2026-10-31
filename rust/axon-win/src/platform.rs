@@ -1250,20 +1250,12 @@ impl UiaState {
         Ok(None)
     }
 
-    /// How this backend names the application an event belongs to, plus its window's title.
+    /// Names an event's application from the nearest native host's root HWND UIA element.
     ///
-    /// The name is read from the top-level window element, which is the same element `enumerate`
-    /// reads and therefore the same string it reports. That is the entire requirement:
-    /// `UserActionRecorder::target` writes this name into the artifact's `app` field and replay
-    /// resolves against it, so a recorded action has to call an application what `look` calls it.
-    /// axn/207 was exactly this divergence on macOS, where capture handed a bundle identifier to a
-    /// resolver comparing process ids and every recording came back with nothing in it.
-    ///
-    /// `bundle_identifier` stays `None`, and that is a statement rather than an omission: this
-    /// backend has no durable application identity to put there. It spells one as a process id,
-    /// which cannot outlive the session, and names one by its window title, which lasts only as
-    /// long as the window keeps it. Minting a third identity here would make recordings replay
-    /// against nothing else in the daemon.
+    /// Capture acquires its top-level element through desktop-child enumeration instead. Both
+    /// paths must preserve the title's Unicode spelling: name-only recording scopes and authored
+    /// application targets compare against the name returned by capture. The process id is
+    /// runtime-only; this backend has no durable bundle identifier.
     fn recorded_identity(
         &self,
         element: &IUIAutomationElement,

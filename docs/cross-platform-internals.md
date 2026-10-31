@@ -968,6 +968,21 @@ Unlike the macOS rehearsal, this one needs no particular machine: the live lane
 and the hosted Windows runner both interpret the stages with PowerShell 7, and
 the stubs mean the job never reaches whatever machine it runs on.
 
+The Windows probe sets both PowerShell's native-input encoding and the console
+output encoding to UTF-8 without a byte-order mark. The SSH relay can inherit an
+OEM console code page even under PowerShell 7. Decoding Axon's UTF-8 native
+output with that code page changes application names before they become
+recording scopes; rendering the resulting text through the same code page can
+conceal the corruption in a job log.
+
+Recording acceptance therefore uses a fixture title with an explicit U+200B
+and compares parsed application targets to the capture-derived name without
+normalization. Both unscoped and name-only scoped recordings must contain the
+independent click and complete text, then pass dry-run and real replay checks.
+Codepoint and UTF-8 diagnostics make identity failures independent of terminal
+rendering. `scripts/test-windows-recording-acceptance.ps1` rehearses these
+assertions and the native encoding boundary; the recovery harness runs it too.
+
 The separate `Live desktop verification` workflow is a reporting lane. It runs
 only after a push to `main` or an explicit manual dispatch, never for a pull
 request. Its self-hosted jobs use dedicated `axon-live-*` labels and serialize
