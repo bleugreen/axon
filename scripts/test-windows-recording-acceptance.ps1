@@ -36,7 +36,25 @@ function Invoke-OneRecording {
     $index = $script:Scopes.Count - 1
     # The daemon parses the actual YAML in the live lane. Here the marker selects the equivalent
     # parsed trace fixture, so these tests exercise acceptance logic, not a second YAML parser.
-    $artifact = "# fixture-$index`nversion: 2`nactions:`n- tool: click`n  target:`n    locator: {}`n"
+    $quotedName = $script:CapturedName | ConvertTo-Json -Compress -EscapeHandling EscapeNonAscii
+    $artifact = @"
+# fixture-$index
+version: 2
+actions:
+- id: click-1
+  tool: click
+  target:
+    app: $quotedName
+    name: recording-note
+    locator: {role: Edit}
+- id: type-1
+  tool: type
+  target:
+    app: $quotedName
+    name: recording-note
+    locator: {role: Edit}
+  value: axon recorded this
+"@
     if ($script:Fault -eq 'locator' -and $index -eq $script:FaultScope) {
         $artifact = $artifact.Replace('locator:', 'point:')
     }
@@ -80,6 +98,7 @@ function Invoke-AxonMcp {
     $source = Get-Content -LiteralPath $arguments.path -Raw -Encoding utf8
     $index = if ($source.Contains('# fixture-0')) { 0 } else { 1 }
     $script:Runs += "$index/$($arguments.dryRun)"
+    Check ([regex]::Matches($source, 'deliveryPolicy: foregroundPermitted').Count -eq 2) 'both replay actions need caller delivery policy'
     Check ($arguments.continueOnError -eq $true) 'click must not truncate the replay'
     $dry = @{
         dryRun = $true
