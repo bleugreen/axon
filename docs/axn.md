@@ -9,10 +9,10 @@ version: 2
 args:
   - name: assignee
     type: string
-    default: Mitch
+    default: Ada
   - name: assignee_email
     type: email
-    default: mitch@example.com
+    default: ada@example.com
 actions:
   - tool: type
     target: {app: Example, name: form/assignee}

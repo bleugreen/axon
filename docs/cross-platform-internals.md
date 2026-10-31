@@ -1178,11 +1178,19 @@ unattended configuration. Confirm the runner is online and carries `self-hosted`
 system and architecture labels, and its dedicated `axon-live-*` label before
 dispatching the workflow.
 
-The Windows service remains under `NETWORK SERVICE`. Re-enrollment also
-requires recreating its localhost SSH key and installing that public key for the
-desktop user with a forced command that runs only
-`C:\\ProgramData\\Axon\\live-probe.cmd`; disable forwarding and pseudo-terminal
-allocation with the authorized-key `restrict` option. That file's source is
+The Windows service runs as `NETWORK SERVICE` with install directory
+`C:\actions-runner-axon`. Keep that directory: the relay hardcodes the runner's
+checkout as `C:\actions-runner-axon\_work\axon\axon\...`. Re-enrollment also
+requires recreating the localhost SSH key at
+`C:\actions-runner-axon\.ssh\axon-live-probe` and installing its public key for
+the **desktop user**, the account logged in at the console, which is `dev` on
+every bench machine. The key does not belong to the service account. Because `dev`
+is an administrator, sshd reads the entry from
+`C:\ProgramData\ssh\administrators_authorized_keys` and not from the profile. The
+entry forces `C:\ProgramData\Axon\live-probe.cmd` and carries the `restrict`
+option, which disables forwarding and pseudo-terminal allocation.
+`.github/scripts/invoke-windows-live-stage.ps1` names the same user in its
+`dev@localhost` destination, so the two change together. The relay's source is
 `.github/scripts/windows-live-relay.cmd`. It lives on the machine rather than
 being read from the workspace, so changing what the key dispatches to takes
 machine access — but what each stage then runs is the probe script from the
@@ -1193,10 +1201,11 @@ stage names, and it expands the requested one with delayed expansion, because a
 value substituted before `cmd` tokenizes the line lets an `&` in it run as a
 separate command before the allowlist is ever consulted. A runner whose copy
 predates the staged lane refuses every stage with exit code 126, which the
-workflow reports by name. Deploy it whenever either file changes. Give the private key only
-to `NETWORK SERVICE` and `SYSTEM`, pin the localhost host key in the runner's
-`known_hosts`, and verify an arbitrary SSH command is rejected before enabling
-the runner. This narrow relay is necessary because Windows services run in
+workflow reports by name. Deploy it whenever either file changes. Set the private
+key's ACL to `SYSTEM:F`, `Administrators:F`, and `NETWORK SERVICE:R`, with
+inheritance removed. Pin the localhost host key with
+`ssh-keyscan -t ed25519 localhost > C:\actions-runner-axon\.ssh\known_hosts`.
+Before enabling the runner, verify that an arbitrary SSH command is rejected. This narrow relay is necessary because Windows services run in
 session 0 while UI Automation and the daemon's scheduled task must run as the
 logged-in desktop user.
 

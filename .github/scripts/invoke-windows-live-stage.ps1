@@ -34,7 +34,7 @@ $arguments = @(
     '-o', 'ConnectTimeout=5',
     '-o', 'StrictHostKeyChecking=yes',
     '-o', 'UserKnownHostsFile=C:\actions-runner-axon\.ssh\known_hosts',
-    'mitch@localhost',
+    'dev@localhost',
     $Stage
 )
 
