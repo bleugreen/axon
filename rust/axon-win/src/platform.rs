@@ -629,6 +629,84 @@ fn normalize_virtual_desktop_point(
 mod tests {
     use super::{child_page_range, normalize_virtual_desktop_point, scroll_steps};
 
+    // Run only in the interactive desktop, with the probe's HWND and field point supplied.
+    #[test]
+    #[ignore = "requires a probe-owned Edge window in the interactive desktop"]
+    fn probe_application_identity_boundaries() {
+        use super::*;
+
+        fn string_hex(label: &str, value: &str) {
+            let points: Vec<_> = value.chars().map(|c| format!("{:04X}", c as u32)).collect();
+            let bytes: Vec<_> = value.as_bytes().iter().map(|b| format!("{b:02X}")).collect();
+            eprintln!("{label} codepoints={} utf8={}", points.join(" "), bytes.join(" "));
+        }
+        fn element_hex(label: &str, element: &IUIAutomationElement) {
+            let name = unsafe { element.CurrentName() }.expect("probe name available");
+            let units: Vec<_> = name.as_wide().iter().map(|u| format!("{u:04X}")).collect();
+            eprintln!(
+                "{label} hwnd={:X} pid={:?} bstr={}",
+                unsafe { element.CurrentNativeWindowHandle() }.unwrap_or_default().0 as usize,
+                automation_process_id(element),
+                units.join(" ")
+            );
+            string_hex(label, &name.to_string());
+        }
+        let number = |key| std::env::var(key).expect(key).parse::<usize>().expect(key);
+        let hwnd = HWND(number("AXON_IDENTITY_PROBE_HWND") as *mut c_void);
+        let point = (
+            number("AXON_IDENTITY_PROBE_X") as f64,
+            number("AXON_IDENTITY_PROBE_Y") as f64,
+        );
+        let session = crate::lifecycle::current_session();
+        assert!(session.interactive && session.graphical, "interactive desktop required");
+        let mut state = UiaState::new(|_| {}).unwrap();
+        let matches: Vec<_> = state.top_level().unwrap().into_iter().filter(|e| {
+            unsafe { e.CurrentNativeWindowHandle() }.ok() == Some(hwnd)
+        }).collect();
+        assert_eq!(matches.len(), 1, "exactly one root child must own the probe HWND");
+        let enumerated = &matches[0];
+        let title = unsafe { enumerated.CurrentName() }.unwrap().to_string();
+        assert!(title.starts_with("Axon Recording Probe"), "refuse to log a non-probe title");
+        element_hex("root-child", enumerated);
+        let from_handle = unsafe { state.automation.ElementFromHandle(hwnd) }.unwrap();
+        element_hex("from-handle", &from_handle);
+        let snapshot = state.capture(
+            AppQuery { name: Some(title.clone()), ..Default::default() },
+            CaptureBounds::default(),
+        ).unwrap();
+        assert_eq!(state.capture_window, Some(pixel::bits(hwnd)));
+        string_hex("capture", &snapshot.application.name);
+        let scope = axon_core::RecordingScope::Application {
+            app: RecordedAppIdentity {
+                name: snapshot.application.name.clone(),
+                bundle_identifier: None,
+                process_id: None,
+            },
+        };
+        for (label, element) in [
+            ("pointer", state.element_at(point).unwrap()),
+            ("focused", unsafe { state.automation.GetFocusedElement() }.unwrap()),
+        ] {
+            let host = state.host_window(&element).unwrap().unwrap();
+            let root = unsafe { GetAncestor(host, GA_ROOT) };
+            assert_eq!(root, hwnd, "evidence must belong to the probe window");
+            eprintln!("{label} host={:X} root={:X} element-pid={:?}",
+                host.0 as usize, root.0 as usize, automation_process_id(&element));
+            let (app, window_title) = state.recorded_identity(&element).unwrap();
+            string_hex(label, &app.name);
+            assert_eq!(window_title.as_deref(), Some(app.name.as_str()));
+            global_input::diagnose_scope_acceptance(label, &scope, &app);
+        }
+        let foreground = unsafe { GetForegroundWindow() };
+        assert_eq!(unsafe { GetAncestor(foreground, GA_ROOT) }, hwnd);
+        eprintln!("foreground hwnd={:X}", foreground.0 as usize);
+        let app = state.foreground_identity().unwrap();
+        string_hex("keyboard", &app.name);
+        global_input::diagnose_scope_acceptance("keyboard", &scope, &app);
+        let after = unsafe { enumerated.CurrentName() }.unwrap().to_string();
+        assert_eq!(after, title, "title changed during provider comparison");
+    }
+
     #[test]
     fn virtual_desktop_normalization_accounts_for_negative_origin_and_endpoints() {
         let origin = (-1920, -1080);
