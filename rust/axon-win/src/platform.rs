@@ -637,15 +637,25 @@ mod tests {
 
         fn string_hex(label: &str, value: &str) {
             let points: Vec<_> = value.chars().map(|c| format!("{:04X}", c as u32)).collect();
-            let bytes: Vec<_> = value.as_bytes().iter().map(|b| format!("{b:02X}")).collect();
-            eprintln!("{label} codepoints={} utf8={}", points.join(" "), bytes.join(" "));
+            let bytes: Vec<_> = value
+                .as_bytes()
+                .iter()
+                .map(|b| format!("{b:02X}"))
+                .collect();
+            eprintln!(
+                "{label} codepoints={} utf8={}",
+                points.join(" "),
+                bytes.join(" ")
+            );
         }
         fn element_hex(label: &str, element: &IUIAutomationElement) {
             let name = unsafe { element.CurrentName() }.expect("probe name available");
             let units: Vec<_> = name.as_wide().iter().map(|u| format!("{u:04X}")).collect();
             eprintln!(
                 "{label} hwnd={:X} pid={:?} bstr={}",
-                unsafe { element.CurrentNativeWindowHandle() }.unwrap_or_default().0 as usize,
+                unsafe { element.CurrentNativeWindowHandle() }
+                    .unwrap_or_default()
+                    .0 as usize,
                 automation_process_id(element),
                 units.join(" ")
             );
@@ -658,22 +668,40 @@ mod tests {
             number("AXON_IDENTITY_PROBE_Y") as f64,
         );
         let session = crate::lifecycle::current_session();
-        assert!(session.interactive && session.graphical, "interactive desktop required");
+        assert!(
+            session.interactive && session.graphical,
+            "interactive desktop required"
+        );
         let mut state = UiaState::new(|_| {}).unwrap();
-        let matches: Vec<_> = state.top_level().unwrap().into_iter().filter(|e| {
-            unsafe { e.CurrentNativeWindowHandle() }.ok() == Some(hwnd)
-        }).collect();
-        assert_eq!(matches.len(), 1, "exactly one root child must own the probe HWND");
+        let matches: Vec<_> = state
+            .top_level()
+            .unwrap()
+            .into_iter()
+            .filter(|e| unsafe { e.CurrentNativeWindowHandle() }.ok() == Some(hwnd))
+            .collect();
+        assert_eq!(
+            matches.len(),
+            1,
+            "exactly one root child must own the probe HWND"
+        );
         let enumerated = &matches[0];
         let title = unsafe { enumerated.CurrentName() }.unwrap().to_string();
-        assert!(title.starts_with("Axon Recording Probe"), "refuse to log a non-probe title");
+        assert!(
+            title.starts_with("Axon Recording Probe"),
+            "refuse to log a non-probe title"
+        );
         element_hex("root-child", enumerated);
         let from_handle = unsafe { state.automation.ElementFromHandle(hwnd) }.unwrap();
         element_hex("from-handle", &from_handle);
-        let snapshot = state.capture(
-            AppQuery { name: Some(title.clone()), ..Default::default() },
-            CaptureBounds::default(),
-        ).unwrap();
+        let snapshot = state
+            .capture(
+                AppQuery {
+                    name: Some(title.clone()),
+                    ..Default::default()
+                },
+                CaptureBounds::default(),
+            )
+            .unwrap();
         assert_eq!(state.capture_window, Some(pixel::bits(hwnd)));
         string_hex("capture", &snapshot.app.name);
         let scope = axon_core::RecordingScope::Application {
@@ -685,13 +713,20 @@ mod tests {
         };
         for (label, element) in [
             ("pointer", state.element_at(point).unwrap()),
-            ("focused", unsafe { state.automation.GetFocusedElement() }.unwrap()),
+            (
+                "focused",
+                unsafe { state.automation.GetFocusedElement() }.unwrap(),
+            ),
         ] {
             let host = state.host_window(&element).unwrap().unwrap();
             let root = unsafe { GetAncestor(host, GA_ROOT) };
             assert_eq!(root, hwnd, "evidence must belong to the probe window");
-            eprintln!("{label} host={:X} root={:X} element-pid={:?}",
-                host.0 as usize, root.0 as usize, automation_process_id(&element));
+            eprintln!(
+                "{label} host={:X} root={:X} element-pid={:?}",
+                host.0 as usize,
+                root.0 as usize,
+                automation_process_id(&element)
+            );
             let (app, window_title) = state.recorded_identity(&element).unwrap();
             string_hex(label, &app.name);
             assert_eq!(window_title.as_deref(), Some(app.name.as_str()));

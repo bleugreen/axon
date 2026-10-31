@@ -455,11 +455,23 @@ pub(super) fn diagnose_scope_acceptance(
     scope: &RecordingScope,
     app: &RecordedAppIdentity,
 ) {
-    let hex = |s: &str| s.chars().map(|c| format!("{:04X}", c as u32)).collect::<Vec<_>>().join(" ");
-    let RecordingScope::Application { app: wanted } = scope else { panic!("name-only scope required") };
+    let hex = |s: &str| {
+        s.chars()
+            .map(|c| format!("{:04X}", c as u32))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let RecordingScope::Application { app: wanted } = scope else {
+        panic!("name-only scope required")
+    };
     assert!(wanted.process_id.is_none() && wanted.bundle_identifier.is_none());
-    eprintln!("{label} before-accepts scope={} event={} pid={:?} accepted={}",
-        hex(&wanted.name), hex(&app.name), app.process_id, accepts(scope, app));
+    eprintln!(
+        "{label} before-accepts scope={} event={} pid={:?} accepted={}",
+        hex(&wanted.name),
+        hex(&app.name),
+        app.process_id,
+        accepts(scope, app)
+    );
 }
 
 /// Drains raw events and reads the interface around each one, at event time.
