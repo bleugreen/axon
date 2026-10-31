@@ -650,7 +650,7 @@ mod tests {
         }
         fn element_hex(label: &str, element: &IUIAutomationElement) {
             let name = unsafe { element.CurrentName() }.expect("probe name available");
-            let units: Vec<_> = name.as_wide().iter().map(|u| format!("{u:04X}")).collect();
+            let units: Vec<_> = name.iter().map(|u| format!("{u:04X}")).collect();
             eprintln!(
                 "{label} hwnd={:X} pid={:?} bstr={}",
                 unsafe { element.CurrentNativeWindowHandle() }
@@ -697,7 +697,8 @@ mod tests {
             .capture(
                 AppQuery {
                     name: Some(title.clone()),
-                    ..Default::default()
+                    process_id: None,
+                    identifier: None,
                 },
                 CaptureBounds::default(),
             )
