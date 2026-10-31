@@ -35,10 +35,13 @@ fn application_scope_prefers_runtime_pid_over_bundle_and_name() {
     wanted.process_id = Some(41);
     let mut wrong_process = wanted.clone();
     wrong_process.process_id = Some(42);
+    let mut same_process = wanted.clone();
+    same_process.name = "Renamed Notes".into();
+    same_process.bundle_identifier = Some("com.example.renamed".into());
     let state = Rc::new(RefCell::new(FakeRecorderState {
         polls: VecDeque::from([vec![
             text(wrong_process, "outside"),
-            text(wanted.clone(), "inside"),
+            text(same_process, "inside"),
         ]]),
         ..Default::default()
     }));
@@ -53,6 +56,129 @@ fn application_scope_prefers_runtime_pid_over_bundle_and_name() {
     assert!(
         matches!(&groups[0].action, Some(RecordedUserAction::TypeText { text, .. }) if text == "inside")
     );
+}
+
+#[test]
+fn name_only_application_scope_preserves_unicode_click_and_text_in_artifact() {
+    let title = "Recording probe - Microsoft\u{200b} Edge";
+    let wanted = RecordedAppIdentity {
+        name: title.into(),
+        bundle_identifier: None,
+        process_id: None,
+    };
+    let canonical = RecordedAppIdentity {
+        process_id: Some(42),
+        ..wanted.clone()
+    };
+    let divergent = RecordedAppIdentity {
+        name: "Recording probe - Microsoft? Edge".into(),
+        ..canonical.clone()
+    };
+    let mut events = vec![
+        RecordedInputEvent::MouseDown {
+            evidence: point_evidence(divergent.clone(), 90.0, 90.0),
+            timestamp_ms: 10,
+        },
+        RecordedInputEvent::MouseUp {
+            evidence: point_evidence(divergent.clone(), 90.0, 90.0),
+            timestamp_ms: 20,
+        },
+        text(divergent, "outside"),
+        RecordedInputEvent::MouseDown {
+            evidence: point_evidence(canonical.clone(), 10.0, 20.0),
+            timestamp_ms: 30,
+        },
+        RecordedInputEvent::MouseUp {
+            evidence: point_evidence(canonical.clone(), 10.0, 20.0),
+            timestamp_ms: 40,
+        },
+    ];
+    events.extend(
+        "axon recorded this"
+            .chars()
+            .map(|character| text(canonical.clone(), &character.to_string())),
+    );
+    let state = Rc::new(RefCell::new(FakeRecorderState {
+        polls: VecDeque::from([events]),
+        ..Default::default()
+    }));
+    let mut recorder = OwnedUserActionRecorder::start(
+        FakeRecordingProvider(state),
+        RecordingScope::Application { app: wanted },
+    )
+    .unwrap();
+
+    recorder.poll(Duration::ZERO).unwrap();
+    let groups = recorder.finish().unwrap();
+
+    assert_eq!(groups.len(), 2, "only the Unicode-named app is in scope");
+    assert!(
+        matches!(&groups[0].action, Some(RecordedUserAction::Click { target })
+            if target["app"] == json!(title)
+                && target["point"] == json!({"x": 10.0, "y": 20.0}))
+    );
+    assert!(
+        matches!(&groups[1].action, Some(RecordedUserAction::TypeText { app, text })
+            if app == title && text == "axon recorded this")
+    );
+
+    let document = UserRecordingTranslator::new()
+        .axn_document(&groups, Vec::new(), &RedactionMarkerTaint)
+        .expect("scoped recorder output satisfies the replay contract");
+    let yaml = axon_core::AxnCodec::to_yaml(&document).expect("recording serializes");
+    let reparsed = axon_core::AxnCodec::parse(&yaml).expect("recording reparses");
+
+    for artifact in [&document, &reparsed] {
+        assert_eq!(artifact.actions.len(), 2);
+        assert_eq!(artifact.actions[0].tool, "click");
+        assert_eq!(artifact.actions[0].params["target"]["app"], json!(title));
+        assert_eq!(
+            artifact.actions[0].params["target"]["point"],
+            json!({"x": 10.0, "y": 20.0})
+        );
+        assert_eq!(artifact.actions[1].tool, "keyboard");
+        assert_eq!(artifact.actions[1].params["app"], json!(title));
+        assert_eq!(artifact.actions[1].params["text"], json!("axon recorded this"));
+    }
+    assert_eq!(reparsed, document);
+}
+
+#[test]
+fn application_scope_falls_back_to_name_when_only_one_side_has_a_pid() {
+    for (wanted_pid, event_pid) in [(None, Some(42)), (Some(42), None)] {
+        let wanted = RecordedAppIdentity {
+            name: "Microsoft\u{200b} Edge".into(),
+            bundle_identifier: None,
+            process_id: wanted_pid,
+        };
+        let matching = RecordedAppIdentity {
+            process_id: event_pid,
+            ..wanted.clone()
+        };
+        let other = RecordedAppIdentity {
+            name: "Microsoft? Edge".into(),
+            ..matching.clone()
+        };
+        let state = Rc::new(RefCell::new(FakeRecorderState {
+            polls: VecDeque::from([vec![text(other, "outside"), text(matching, "inside")]]),
+            ..Default::default()
+        }));
+        let mut recorder = OwnedUserActionRecorder::start(
+            FakeRecordingProvider(state),
+            RecordingScope::Application { app: wanted },
+        )
+        .unwrap();
+
+        recorder.poll(Duration::ZERO).unwrap();
+        let groups = recorder.finish().unwrap();
+
+        assert_eq!(groups.len(), 1, "PID pair: {wanted_pid:?}, {event_pid:?}");
+        assert!(
+            matches!(&groups[0].action, Some(RecordedUserAction::TypeText { text, .. })
+                if text == "inside"),
+            "PID pair: {wanted_pid:?}, {event_pid:?}"
+        );
+    }
 }
 
 #[derive(Clone)]
