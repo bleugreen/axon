@@ -85,6 +85,21 @@ use windows::{
     core::{BSTR, Interface, Ref, Result as WinResult, implement},
 };
 
+// Temporary probe-only instrumentation; removed after the live boundary measurement.
+fn identity_probe(label: &str, name: &str, pid: Option<u32>) {
+    if !name.starts_with("Axon Recording Probe") {
+        return;
+    }
+    use std::io::Write;
+    if let Ok(mut log) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(r"C:\ProgramData\Axon\live\identity-boundaries.log")
+    {
+        let _ = writeln!(log, "{label} pid={pid:?} name={} utf8={:02X?}", name.escape_unicode(), name.as_bytes());
+    }
+}
+
 const MAX_DEPTH: usize = 18;
 const MAX_CHILDREN: usize = 200;
 const MAX_NODES: usize = 2_000;
@@ -1393,6 +1408,7 @@ impl UiaState {
             .ok()
             .map(|name| name.to_string())
             .filter(|name| !name.is_empty())?;
+        identity_probe("recorded-identity", &name, automation_process_id(&top_level));
         Some((
             RecordedAppIdentity {
                 name: name.clone(),
@@ -1527,14 +1543,16 @@ impl UiaState {
             return None;
         }
         let element = unsafe { self.automation.ElementFromHandle(window) }.ok()?;
-        Some(RecordedAppIdentity {
+        let app = RecordedAppIdentity {
             name: unsafe { element.CurrentName() }
                 .ok()
                 .map(|name| name.to_string())
                 .filter(|name| !name.is_empty())?,
             bundle_identifier: None,
             process_id: automation_process_id(&element),
-        })
+        };
+        identity_probe("foreground-identity", &app.name, app.process_id);
+        Some(app)
     }
 
     /// Binds one click to one window, or names why it cannot be bound.
@@ -1692,6 +1710,7 @@ impl UiaState {
             identifier: None,
             windows: vec![Window { title, root }],
         });
+        identity_probe("capture", &snapshot.app.name, snapshot.app.process_id);
         self.snapshot = Some(snapshot.clone());
         Ok(snapshot)
     }

@@ -443,6 +443,10 @@ fn point_evidence(
 
 /// Whether an event belongs to the session's scope.
 fn accepts(scope: &RecordingScope, app: &RecordedAppIdentity) -> bool {
+    super::identity_probe("before-accepts-event", &app.name, app.process_id);
+    if let RecordingScope::Application { app: wanted } = scope {
+        super::identity_probe("before-accepts-scope", &wanted.name, wanted.process_id);
+    }
     match scope {
         RecordingScope::AllApplications => true,
         RecordingScope::Application { app: wanted } => wanted.matches_runtime(app),
