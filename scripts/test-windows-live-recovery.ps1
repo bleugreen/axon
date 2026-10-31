@@ -1740,3 +1740,6 @@ if ($script:Failures.Count -ne 0) {
 }
 
 Write-Host "$script:ScenarioCount scenarios passed"
+
+# Isolated recording acceptance tests share this existing script-test entry point.
+& (Join-Path $PSScriptRoot 'test-windows-recording-acceptance.ps1') -ProbeScript $ProbeScript
