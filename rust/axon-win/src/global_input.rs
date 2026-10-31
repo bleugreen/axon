@@ -949,11 +949,16 @@ mod tests {
                 for command in rx {
                     match command {
                         Command::PointEvidence(point, reply) => {
-                            reply.send(Ok(Some(RecordedTargetEvidence {
-                                app: app.clone(),
-                                point: RecordedPoint { x: point.0, y: point.1 },
-                                candidates: vec![],
-                            }))).unwrap();
+                            reply
+                                .send(Ok(Some(RecordedTargetEvidence {
+                                    app: app.clone(),
+                                    point: RecordedPoint {
+                                        x: point.0,
+                                        y: point.1,
+                                    },
+                                    candidates: vec![],
+                                })))
+                                .unwrap();
                         }
                         Command::ForegroundIdentity(reply) => {
                             reply.send(Ok(Some(app.clone()))).unwrap();
@@ -964,11 +969,19 @@ mod tests {
             });
             let mut modifiers = ModifierState::default();
             for down in [true, false] {
-                let event = enrich(&scope, &tx, &mut modifiers, RawEvent {
-                    input: RawInput::Button { down, point: (10, 20) },
-                    timestamp_ms: 1,
-                    extra_info: 0,
-                });
+                let event = enrich(
+                    &scope,
+                    &tx,
+                    &mut modifiers,
+                    RawEvent {
+                        input: RawInput::Button {
+                            down,
+                            point: (10, 20),
+                        },
+                        timestamp_ms: 1,
+                        extra_info: 0,
+                    },
+                );
                 assert_eq!(event.is_some(), accepted);
                 if let Some(event) = event {
                     let evidence = match event {
@@ -979,19 +992,30 @@ mod tests {
                     assert_eq!(evidence.app.name.as_bytes(), canonical.as_bytes());
                 }
             }
-            let event = enrich(&scope, &tx, &mut modifiers, RawEvent {
-                // VK_PACKET is independent of the test machine's keyboard layout.
-                input: RawInput::Key { virtual_key: 0xE7, scan_code: u32::from('a'), up: false },
-                timestamp_ms: 2,
-                extra_info: 0,
-            });
+            let event = enrich(
+                &scope,
+                &tx,
+                &mut modifiers,
+                RawEvent {
+                    // VK_PACKET is independent of the test machine's keyboard layout.
+                    input: RawInput::Key {
+                        virtual_key: 0xE7,
+                        scan_code: u32::from('a'),
+                        up: false,
+                    },
+                    timestamp_ms: 2,
+                    extra_info: 0,
+                },
+            );
             assert_eq!(event.is_some(), accepted);
             if let Some(event) = event {
                 let RecordedInputEvent::KeyDown { app, keystroke, .. } = event else {
                     panic!("wrong key event");
                 };
                 assert_eq!(app.name.as_bytes(), canonical.as_bytes());
-                assert!(matches!(keystroke, axon_core::RecordedKeystroke::Text { text } if text == "a"));
+                assert!(
+                    matches!(keystroke, axon_core::RecordedKeystroke::Text { text } if text == "a")
+                );
             }
             drop(tx);
             actor.join().unwrap();
