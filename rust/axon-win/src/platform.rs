@@ -96,7 +96,12 @@ fn identity_probe(label: &str, name: &str, pid: Option<u32>) {
         .append(true)
         .open(r"C:\ProgramData\Axon\live\identity-boundaries.log")
     {
-        let _ = writeln!(log, "{label} pid={pid:?} name={} utf8={:02X?}", name.escape_unicode(), name.as_bytes());
+        let _ = writeln!(
+            log,
+            "{label} pid={pid:?} name={} utf8={:02X?}",
+            name.escape_unicode(),
+            name.as_bytes()
+        );
     }
 }
 
@@ -1408,7 +1413,11 @@ impl UiaState {
             .ok()
             .map(|name| name.to_string())
             .filter(|name| !name.is_empty())?;
-        identity_probe("recorded-identity", &name, automation_process_id(&top_level));
+        identity_probe(
+            "recorded-identity",
+            &name,
+            automation_process_id(&top_level),
+        );
         Some((
             RecordedAppIdentity {
                 name: name.clone(),
