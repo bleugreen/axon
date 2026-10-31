@@ -1,7 +1,8 @@
 #Requires -Version 7
 <#
 Exercises the real Windows recording acceptance with parsed run-response fixtures and stubbed
-RPC/input seams. No daemon, browser, scheduled task, or native input is reached.
+RPC/input seams, plus the probe's native UTF-8 transport using a controlled child pwsh process.
+No daemon, browser, scheduled task, or desktop input is reached.
 Usage: pwsh -NoProfile -File scripts/test-windows-recording-acceptance.ps1
 #>
 [CmdletBinding()]
@@ -26,6 +27,94 @@ function Check {
     param([bool] $Condition, [string] $Message)
     if (-not $Condition) { throw $Message }
 }
+
+# Execute only the production's top-level encoding assignments, not its desktop bootstrap.
+$encodingAssignments = @($ast.EndBlock.Statements | Where-Object {
+    $_ -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+    $_.Left.Extent.Text -in @('[Console]::OutputEncoding', '$OutputEncoding')
+})
+$nativePeer = @'
+$ErrorActionPreference = 'Stop'
+$utf8 = [Text.UTF8Encoding]::new($false)
+[Console]::InputEncoding = $utf8
+[Console]::OutputEncoding = $utf8
+$reader = [IO.StreamReader]::new([Console]::OpenStandardInput(), $utf8, $false)
+$request = $reader.ReadToEnd() | ConvertFrom-Json
+$response = @{
+    request = $request.title
+    response = 'native' + [char]0x200B + 'response'
+} | ConvertTo-Json -Compress
+$bytes = $utf8.GetBytes($response + [Environment]::NewLine)
+[Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length)
+'@
+$encodedPeer = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($nativePeer))
+$pwsh = (Get-Process -Id $PID).Path
+$transportTitle = 'request' + [char]0x200B + 'title'
+$transportResponse = 'native' + [char]0x200B + 'response'
+$cp437 = [Text.Encoding]::GetEncoding(437)
+$mojibake = [string][char]0x0393 + [char]0x00C7 + [char]0x00EF
+Check ($cp437.GetString([byte[]]@(0xE2, 0x80, 0x8B)) -ceq $mojibake) 'CP437 negative control must reproduce U+0393 U+00C7 U+00EF'
+
+function Invoke-NativeTransportRoundtrip {
+    param([Text.Encoding] $PipelineEncoding, [string[]] $Omit)
+    $originalConsoleEncoding = [Console]::OutputEncoding
+    $originalOutputEncoding = $OutputEncoding
+    try {
+        [Console]::OutputEncoding = $cp437
+        $OutputEncoding = $PipelineEncoding
+        foreach ($assignment in $encodingAssignments) {
+            if ($assignment.Left.Extent.Text -notin $Omit) {
+                . ([scriptblock]::Create($assignment.Extent.Text))
+            }
+        }
+        # Keep this a PowerShell string-to-native pipeline, as in Invoke-AxonMcp. ProcessStartInfo
+        # with explicit encodings would bypass the very host settings this regression exercises.
+        $request = @{ title = $transportTitle } | ConvertTo-Json -Compress
+        Check ($request.Contains([char]0x200B)) 'request must contain literal Unicode, not JSON escapes'
+        $rawResponse = $request | & $pwsh -NoProfile -NonInteractive -EncodedCommand $encodedPeer
+        Check ($LASTEXITCODE -eq 0) "native UTF-8 peer exited with $LASTEXITCODE"
+        $response = ($rawResponse -join [Environment]::NewLine) | ConvertFrom-Json
+        [pscustomobject]@{
+            Request = $response.request
+            Response = $response.response
+            NoBom = ([Console]::OutputEncoding.GetPreamble().Length -eq 0 -and
+                $OutputEncoding.GetPreamble().Length -eq 0)
+        }
+    }
+    finally {
+        [Console]::OutputEncoding = $originalConsoleEncoding
+        $OutputEncoding = $originalOutputEncoding
+    }
+}
+
+$transportCount = 0
+foreach ($pipelineEncoding in @([Text.Encoding]::ASCII, $cp437)) {
+    foreach ($mutation in @('none', 'console', 'pipeline', 'both')) {
+        $omit = @()
+        if ($mutation -in @('console', 'both')) { $omit += '[Console]::OutputEncoding' }
+        if ($mutation -in @('pipeline', 'both')) { $omit += '$OutputEncoding' }
+        $result = Invoke-NativeTransportRoundtrip -PipelineEncoding $pipelineEncoding -Omit $omit
+        $context = "native transport with starting pipeline $($pipelineEncoding.CodePage), mutation $mutation"
+        if ($mutation -eq 'none') {
+            Check ($result.Request -ceq $transportTitle) "$context corrupted the Unicode request"
+            Check ($result.Response -ceq $transportResponse) "$context corrupted the Unicode response"
+            Check $result.NoBom "$context must use UTF-8 without BOM"
+        }
+        else {
+            Check (-not ($result.Request -ceq $transportTitle -and $result.Response -ceq $transportResponse)) "$context escaped detection"
+            if ($mutation -in @('console', 'both')) {
+                Check ($result.Response -ceq ('native' + $mojibake + 'response')) "$context did not reproduce CP437 stdout corruption"
+            }
+            if ($mutation -eq 'pipeline') {
+                Check ($result.Request -ceq 'request?title') "$context did not expose native stdin corruption"
+                Check ($result.Response -ceq $transportResponse) "$context unexpectedly corrupted correctly decoded stdout"
+            }
+        }
+        $transportCount++
+    }
+}
+Write-Host "$transportCount native UTF-8 transport scenarios passed"
+
 function Write-Note { param($Message) }
 function Wait-BrowserTransition {}
 function Invoke-OneRecording {
