@@ -258,7 +258,7 @@ jobs:
 
   rust-macos:
     name: Rust macOS
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - name: Check out Axon
         uses: actions/checkout@v4
