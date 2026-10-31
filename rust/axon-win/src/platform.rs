@@ -675,10 +675,10 @@ mod tests {
             CaptureBounds::default(),
         ).unwrap();
         assert_eq!(state.capture_window, Some(pixel::bits(hwnd)));
-        string_hex("capture", &snapshot.application.name);
+        string_hex("capture", &snapshot.app.name);
         let scope = axon_core::RecordingScope::Application {
             app: RecordedAppIdentity {
-                name: snapshot.application.name.clone(),
+                name: snapshot.app.name.clone(),
                 bundle_identifier: None,
                 process_id: None,
             },
