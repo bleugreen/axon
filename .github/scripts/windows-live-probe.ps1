@@ -342,8 +342,11 @@ function Invoke-OneRecording {
 
     $stopped = $null
     try {
+        $inputTimer = [Diagnostics.Stopwatch]::StartNew()
         $posted = Invoke-ProbeIndependentInput -X $X -Y $Y -Text $Text -ActivateProcessId $ActivateProcessId
+        $inputTimer.Stop()
         Write-Note "recording [$($Scope.label)] independent input: $($posted | ConvertTo-Json -Compress -Depth 20)"
+        Write-Note "recording [$($Scope.label)] independent input task elapsedMs=$($inputTimer.ElapsedMilliseconds)"
         # Checked rather than trusted: `""` inside a here-string is two literal quotes and not an
         # escaped one, so an earlier helper command line truncated this burst at its first space
         # and still reported success. A burst that typed one word would quietly weaken every
@@ -362,7 +365,10 @@ function Invoke-OneRecording {
         }
     }
     finally {
+        $drainTimer = [Diagnostics.Stopwatch]::StartNew()
         $stopped = Invoke-AxonRpc -Method 'recording.stop'
+        $drainTimer.Stop()
+        Write-Note "recording [$($Scope.label)] stop and enrichment drain elapsedMs=$($drainTimer.ElapsedMilliseconds)"
     }
     if ($null -ne $stopped.error) {
         throw "recording.stop failed for scope $($Scope.label): $($stopped | ConvertTo-Json -Compress -Depth 20)"
