@@ -55,6 +55,12 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# The session-0 SSH relay can inherit an OEM console code page. Axon's native streams are UTF-8:
+# decoding them as OEM corrupts application names before they become recording scopes, and
+# re-encoding those corrupted names for the log can conceal the mismatch. Set both directions.
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Text.UTF8Encoding]::new($false)
+
 # Native command failures are read from $LASTEXITCODE at each call site rather than thrown, because
 # the restore stage deliberately records one command's status instead of trusting it: whatever
 # starts a daemon reports on starting it, and the health round trip is the verdict.
@@ -421,6 +427,7 @@ function Invoke-RecordingAcceptance {
     # exactly the shape of the macOS failure in axn/207, and worth catching here rather than as an
     # empty artifact.
     $recordedAppName = [string]$captured.app.name
+    Write-Note ("recording capture identity: " + (Format-ProbeCodePoints $recordedAppName))
     if (-not $recordedAppName.StartsWith((Get-RecordingProbeTitle), [StringComparison]::Ordinal)) {
         throw ("the captured Edge title did not preserve the Unicode fixture title: expected prefix " +
             (Format-ProbeCodePoints (Get-RecordingProbeTitle)) + '; actual ' +
