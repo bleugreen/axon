@@ -238,7 +238,21 @@ so the floor cannot silently narrow again:
 | --- | --- |
 | macOS | role or subrole naming "secure", or a description naming a password. The subrole is the one that matters: `NSSecureTextField` reports role `AXTextField` with subrole `AXSecureTextField`, so a role-only test misses the ordinary AppKit password field entirely. |
 | Windows | `UIA_IsPasswordPropertyId` on the element. |
-| Linux | AT-SPI `STATE_PROTECTED`, or role `ROLE_PASSWORD_TEXT`. |
+| Linux | role `ROLE_PASSWORD_TEXT`, or a description naming a password. |
+
+The Linux row named `STATE_PROTECTED` until axn/229 tried to implement it. **AT-SPI has
+no such state.** `STATE_PROTECTED` is ATK and MSAA vocabulary; the AT-SPI state set has
+no member of that name, and the state AT-SPI does spell `SENSITIVE` means the opposite
+of what the word suggests here — it marks a widget as enabled and interactive, so
+reading it as "holds a credential" would have marked nearly every element sensitive.
+
+That leaves Linux with a narrower floor than the other two platforms, because AT-SPI
+offers no general "this field is concealed" state to stand behind the role, and a
+toolkit that conceals a field without reporting `ROLE_PASSWORD_TEXT` is not caught. The
+description is tested beside the role for the same reason macOS tests it, and
+deliberately not the *name*: on this platform an entry's AT-SPI name is usually its
+label, so testing the name would classify the ordinary field beside a "Password" label
+as a secret and silently drop what the user typed into it.
 
 The same flag also withholds the element's value from the evidence, so a
 provider must never read `AXValue`, the UIA value pattern, or the AT-SPI text
@@ -266,11 +280,30 @@ all. It is a separate desktop, and a hook installed on the interactive desktop
 simply never sees any of its input. There is nothing to detect and nothing to
 report; the events do not arrive.
 
+Linux reports nothing here either, and for a third reason again: there is no
+system-wide secure-input mode on X11 to report, and an XRecord client is handed
+keystrokes unconditionally whatever has focus.
+
 One gap the per-element predicate does not close on any platform: sensitivity is
 read when the burst is *flushed*, and a burst is flushed by the next event. Type
 a password and then click elsewhere, and the read that decides finds the newly
 focused element. Closing it means carrying sensitivity on the keystroke itself,
 which is a change to the shared event vocabulary rather than to any observer.
+
+A fourth platform difference matters for the same predicate. macOS and Windows
+each have a direct query for the focused element — `AXFocusedUIElement`,
+`GetFocusedElement`. **AT-SPI has neither.** The only mechanisms the accessibility
+bus offers are the focus event an assistive technology subscribes to, which the
+Linux backend's command actor cannot service while it is answering commands, and
+asking objects whether they say they are focused. So Linux finds focus by a
+bounded depth-first search from the active window, pruned by what a provider says
+is on screen, under the same node and depth limits a capture walk uses. A search
+that finds nothing reports the focused element as unavailable, which is the same
+`None` the other two platforms report when their query fails — and shared core
+treats that as a keyboard fallback, so a burst whose focus could not be read is
+serialized. That is the cost of the missing query, and it is why the search is
+pruned conservatively: a subtree whose state could not be read at all is descended
+into rather than skipped.
 
 ## One lifecycle vocabulary, three native mechanisms
 
@@ -371,7 +404,13 @@ events with a close conceptual fit to AX.
   queues, onto a bounded queue whose overflow is reported rather than swallowed,
   and an enrichment thread reads the interface immediately afterwards through a
   clone of the existing MTA actor's command channel. There is one UI Automation
-  client per process and observation does not add a second.
+  client per process and observation does not add a second. The queue is shared
+  core's `ObservedInputQueue`, which Linux uses too. It refuses an event only
+  when it is full, never because the enrichment thread happens to hold its lock:
+  the consumer holds that lock only to swap the backlog out, so the producer waits
+  a moment at most. A producer that gave up on a contended lock instead would
+  lose half a click under ordinary load, because the consumer drains
+  continuously and a press and its release arrive back to back.
 - The daemon must not record its own delivery, and the flag that looks like it
   answers this does not. Every `SendInput` from every process sets
   `LLKHF_INJECTED`, so filtering on it would discard assistive technology,
@@ -479,6 +518,101 @@ Linux capture and semantic actions use AT-SPI2 over the accessibility D-Bus.
 The backend must expect differences among desktop environments, widget
 toolkits, compositors, and application accessibility implementations rather
 than equating “Linux” with one uniform tree.
+
+### Recording: RECORD for the events, AT-SPI for what they hit
+
+Global input observation reads the X11 core input stream through the RECORD
+extension, added as a feature of the `x11rb` this crate already depends on rather
+than as a new crate or a new system library. RECORD and not XInput2, and the
+reason is the modifier state: a core `KeyPressEvent` carries the modifiers held
+when it was generated, where an XI2 raw event omits them by design and would leave
+the observer rebuilding that state from the key stream. The protocol asks for two
+connections and gets them — one to create and later disable the context, one
+blocked in `RecordEnableContext` on a listener thread that must keep reading,
+because a recording client which stops draining backs the stream up in the server.
+`recording.start` returns only once the server has answered the enable with its
+`StartOfData` reply, so input posted the moment it returns is observed. Each
+session owns its raw queue: a listener that misses the end of its stream is
+detached at stop rather than allowed to wedge the request, and a queue shared
+across sessions would hand what it went on writing to the next recording.
+
+Evidence is read on a second thread, not on the listener and not at `poll` time.
+That is the same constraint Windows has for the same reason: a `MouseDown` carries
+its evidence inside the event and shared core reads it as a picture of the
+interface *before* the click landed, but `poll` happens only on `recording.status`
+and `recording.stop`, so an event can wait minutes. The enrichment thread holds a
+clone of the AT-SPI actor's command sender and asks it at event time. There is one
+accessibility-bus connection per process and this does not open a second.
+
+Which application an event belongs to is answered by X11, not by AT-SPI. The
+accessibility bus exposes no stacking order and no foreground, so choosing between
+two applications whose windows both cover a point would be a guess there; the
+enrichment thread reads `_NET_WM_PID` off the window under the point and hands the
+actor a process it has already established. From there the actor descends with
+`Component.GetAccessibleAtPoint`, which answers with a direct child rather than the
+deepest hit, so reaching a leaf means asking repeatedly. Screen coordinates are
+asked for first, since that is the frame the event arrived in, and a provider that
+answers only in window coordinates is asked again relative to its own frame rather
+than being written off.
+
+No event the user made disappears without a trace. Reading the evidence can fail
+for reasons unrelated to the user: a provider elsewhere on the bus slow to answer,
+or an application whose window was raised before it registered. A pointer or key
+event whose interface cannot be read is still recorded, as a point target, when its
+process belongs to an application this session has already named, or to the
+scoped application itself. One whose application cannot be named at all is
+reported in the daemon log and as a notification on the recording, saying why. An
+application lookup by process also compares process identities before reading
+any names, so one application that will not answer fails only a lookup that
+could have matched it.
+
+A recorded event becomes a semantic target only if shared core can find its
+element again: it compares each evidence candidate field by field against a fresh
+capture, and anything that disagrees falls back to a screen point without an error.
+So the evidence and the capture node are built from one mapping,
+`ElementDescription` in `rust/axon-linux/src/recording.rs`, rather than from two
+that could drift apart. That mapping fixes two decisions. AT-SPI publishes one name
+where this project has a title and a label; capture puts it in `label`, and the
+evidence vocabulary has no label, so a matched candidate carries no title. The
+exception is a sensitive candidate, which shared core never matches and which keeps
+the name to label the secret argument it becomes. And a candidate carries no value,
+because the evidence is read at event time while the snapshot it is matched against
+is captured when the recording is next pumped, after the user may have typed into
+the very field they clicked. The identifier, a bus name and object path, already
+names the element exactly. The value a `setValue` is authored from is read
+separately, from the focused element when its burst is flushed.
+
+**Excluding this daemon's own delivery has no per-event channel to use.** Windows
+stamps `INPUT.dwExtraInfo` and reads it straight back off the hook. A core X11
+event has no equivalent field, and an XTEST-injected event is by design
+indistinguishable from a real one once the server has it — that is the whole point
+of the extension, and it is why `xdotool` output reaches `xev`. Refusing all
+synthetic input instead would discard assistive technology, remote-desktop
+sessions, and any live probe's own helper, leaving the capability untestable.
+
+So the exclusion is made by *order*. Every synthetic event this daemon posts goes
+through one function, `X11Session::fake_input`, which registers what it is about to
+inject before the request is sent; the listener drops the first matching event
+while that expectation is outstanding. Registration precedes the request, so an
+expectation is always in place before the server can generate the event, and the
+match is made on the listener thread rather than during enrichment because the
+expectation deadline runs on a wall clock while enrichment can be seconds behind a
+burst. What this cannot separate is a genuine user event of the identical kind and
+keycode arriving inside one server round trip of ours: the counts stay right and
+the attribution of two identical events swaps. A held-open time bracket has the
+same failure across a far wider window and in both directions, which is why it is
+not one.
+
+Two limitations are vocabulary rather than runtime, and both are stated where they
+are felt: AT-SPI has no focused-element query (see the observer sensitivity
+contract above), and it has no durable application identity. This backend spells an
+application as an AT-SPI identity — a unique bus name and a per-session object path
+— and names one by whatever the toolkit publishes. A recording therefore carries
+the application *name*, with `bundleIdentifier` left empty rather than minting a
+third identity that would resolve against nothing else in the daemon. The same
+per-session identity reaches persisted locators through ordinary capture, so a
+Linux recording replays reliably within its session and is subject to axn/208 on
+the replay side beyond it.
 
 - The backend opens the accessibility bus itself and addresses every object by
   explicit destination on that single connection. `atspi`'s

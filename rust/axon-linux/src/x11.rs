@@ -12,6 +12,7 @@ use crate::{
     keys::{self, Keysym},
     pixel::SendVariant,
     platform::{capability, operation},
+    recording::ModifierMasks,
 };
 use axon_core::{BackendError, Capability, KeyboardIntent, Rect, Screenshot};
 use image::{DynamicImage, ImageFormat, RgbaImage, imageops::FilterType};
@@ -134,6 +135,15 @@ impl X11Session {
             .ok()
             .flatten()
             .is_some()
+    }
+
+    /// Whether this server actually provides RECORD.
+    ///
+    /// Read for the same reason [`Self::supports_xtest`] is read: a server can be built or started
+    /// without it and will answer everything else about the session normally. `Xvfb` in particular
+    /// is a build where its presence is worth checking rather than assuming.
+    pub fn supports_record(&self) -> bool {
+        crate::xrecord::supported(&self.connection)
     }
 
     /// Whether a window manager is present that publishes the two properties the foreground
@@ -465,6 +475,32 @@ impl X11Session {
         Ok(None)
     }
 
+    /// Which process owns whatever is under a screen point.
+    ///
+    /// The reverse of [`Self::managed_window_at`], which starts from a process the caller already
+    /// resolved. Observation has only the point, because the user clicked wherever they clicked,
+    /// and the process is what turns that into an application AT-SPI can be asked about.
+    ///
+    /// X11 answers this and AT-SPI cannot: the accessibility bus exposes no stacking order, so
+    /// picking between two applications whose windows both cover a point would be a guess there.
+    /// Here it is a fact, read from the window tree the server maintains.
+    ///
+    /// The climb exists because `_NET_WM_PID` sits on the client's own top-level window, while the
+    /// descent ends at whichever child window the toolkit put under the pointer.
+    pub fn process_at(&self, point: (i16, i16)) -> Result<Option<u32>, BackendError> {
+        let mut window = self.window_under(point)?;
+        for _ in 0..MAX_WINDOW_TREE_STEPS {
+            if let Some(pid) = self.window_pid(window)? {
+                return Ok(Some(pid));
+            }
+            match self.parent_of(window)? {
+                Some(parent) if parent != self.root && parent != x11rb::NONE => window = parent,
+                _ => return Ok(None),
+            }
+        }
+        Ok(None)
+    }
+
     /// The deepest window at a screen point: where a real pointer click would land.
     fn window_under(&self, point: (i16, i16)) -> Result<Window, BackendError> {
         let mut window = self.root;
@@ -725,6 +761,19 @@ impl X11Session {
         Ok(())
     }
 
+    /// The live layout and the modifier bits that go with it, for an observer reading events back.
+    ///
+    /// Read once when a recording session starts rather than per keystroke: it is two server round
+    /// trips, and the enrichment thread that consumes it is already the slow half of the observer.
+    /// The cost of that choice is that a layout switched *during* a recording is not noticed, which
+    /// is worth stating because it is a real thing a user can do and the recording would transcribe
+    /// the rest of the session against the layout it started with.
+    pub fn keyboard_layout(&self) -> Result<Keyboard, BackendError> {
+        let mapping = self.keyboard_mapping()?;
+        let masks = self.modifier_mapping()?.masks(&mapping);
+        Ok(Keyboard { mapping, masks })
+    }
+
     /// Which modifier bit each keycode carries, as the server currently reports it.
     fn modifier_mapping(&self) -> Result<ModifierMapping, BackendError> {
         let reply = self
@@ -779,10 +828,30 @@ impl X11Session {
         })
     }
 
+    /// Posts one synthetic event through the global input device.
+    ///
+    /// Every synthetic event this daemon sends passes through here, which is what makes this the
+    /// one place the self-delivery ledger has to be told about it. An XTEST event is by design
+    /// indistinguishable from a real one once the server has it -- that is the whole point of the
+    /// extension, and it is why `xdotool` output reaches `xev` -- so an observer running at the
+    /// same time would otherwise record this daemon's own clicks and keystrokes as the user's.
+    ///
+    /// Registered *before* the request is sent, so the expectation is already in place by the time
+    /// the server can generate the event. See [`crate::recording::SelfDelivery`] for what that
+    /// ordering does and does not guarantee.
+    ///
+    /// And taken back the moment the request is refused. A rejected injection produces no event to
+    /// consume its expectation, so leaving it to expire would let a failed dispatch discard the
+    /// next genuine key or click the user made — which is a recording quietly losing the user's
+    /// input because of a fault somewhere else entirely.
     fn fake_input(&self, kind: u8, detail: u8, x: i16, y: i16) -> Result<(), BackendError> {
+        let expectation = crate::recording::self_delivery().expect(kind, detail);
         self.connection
             .xtest_fake_input(kind, detail, x11rb::CURRENT_TIME, self.root, x, y, 0)
-            .map_err(|error| operation("post synthetic input", error))?;
+            .map_err(|error| {
+                crate::recording::self_delivery().cancel(expectation);
+                operation("post synthetic input", error)
+            })?;
         Ok(())
     }
 
@@ -871,6 +940,61 @@ impl ModifierMapping {
             .position(|codes| codes.contains(&keycode))
             .map_or(0, |modifier| 1u16 << modifier)
     }
+
+    /// Which bit of an event's `state` mask each named modifier occupies on this server.
+    ///
+    /// Shift, Lock and Control have fixed positions in the core protocol. Alt, Super and the third
+    /// level do not: they live on whichever of `Mod1`..`Mod5` the session assigned them, so the
+    /// only way to read a chord correctly is to look up the keys that set each bit. Anything this
+    /// mapping does not place keeps its conventional bit, which is what an ordinary desktop uses.
+    fn masks(&self, layout: &KeyboardMapping) -> ModifierMasks {
+        let mut masks = ModifierMasks::CONVENTIONAL;
+        if self.per_modifier == 0 {
+            return masks;
+        }
+        let mut found = ModifierMasks::default();
+        for (modifier, keycodes) in self.keycodes.chunks(self.per_modifier).enumerate() {
+            // The first three chunks are Shift, Lock and Control by definition, and a server is
+            // free to list unrelated keys after them; only the rest is worth interpreting.
+            if modifier < 3 {
+                continue;
+            }
+            let bit = 1u16 << modifier;
+            for keysym in keycodes
+                .iter()
+                .filter_map(|keycode| layout.keysym_at(*keycode, 0))
+            {
+                match keysym {
+                    // Meta_L, Meta_R, Alt_L, Alt_R.
+                    0xFFE7..=0xFFEA => found.alt |= bit,
+                    // Super_L, Super_R, Hyper_L, Hyper_R.
+                    0xFFEB..=0xFFEE => found.super_key |= bit,
+                    // ISO_Level3_Shift and Mode_switch, which select a keysym level rather than
+                    // naming a chord.
+                    0xFE03 | 0xFF7E => found.level3 |= bit,
+                    _ => {}
+                }
+            }
+        }
+        for (placed, conventional) in [
+            (found.alt, &mut masks.alt),
+            (found.super_key, &mut masks.super_key),
+            (found.level3, &mut masks.level3),
+        ] {
+            if placed != 0 {
+                *conventional = placed;
+            }
+        }
+        masks
+    }
+}
+
+/// The live keyboard, in the two readings an observer needs: what each keycode types, and which
+/// bit of an event's modifier mask each named modifier occupies.
+#[derive(Clone, Debug, Default)]
+pub struct Keyboard {
+    pub mapping: KeyboardMapping,
+    pub masks: ModifierMasks,
 }
 
 /// One keystroke resolved against the live layout: the key to press, and the modifier keys held
@@ -882,13 +1006,36 @@ struct Stroke {
 }
 
 /// The layout the user is actually typing on, as the server currently reports it.
-struct KeyboardMapping {
+#[derive(Clone, Debug, Default)]
+pub struct KeyboardMapping {
     first: u8,
     per_keycode: usize,
     keysyms: Vec<u32>,
 }
 
 impl KeyboardMapping {
+    /// The keysym a keycode produces at one modifier level, which is the direction observation
+    /// reads the layout in.
+    ///
+    /// [`Self::locate`] is the same table read the other way for synthesis. Both are needed and
+    /// neither derives the other: a keysym may sit on several keycodes, and a keycode produces a
+    /// different keysym at every level.
+    pub fn keysym_at(&self, keycode: u8, level: usize) -> Option<Keysym> {
+        let index = usize::from(keycode.checked_sub(self.first)?);
+        let levels = self
+            .keysyms
+            .chunks(self.per_keycode.max(1))
+            .nth(index)
+            .filter(|_| self.per_keycode > 0)?;
+        // A layout that leaves a level empty means "the same as the level below", which is how a
+        // key with one keysym types the same character shifted. `NoSymbol` is zero.
+        levels
+            .get(level)
+            .copied()
+            .filter(|keysym| *keysym != 0)
+            .or_else(|| levels.first().copied().filter(|keysym| *keysym != 0))
+    }
+
     /// Resolves one keystroke, or explains which key this layout does not have.
     fn stroke(&self, keysym: Keysym, modifiers: &[Keysym]) -> Result<Stroke, BackendError> {
         let missing = |keysym: Keysym| {
