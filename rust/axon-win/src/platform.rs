@@ -1306,7 +1306,7 @@ impl UiaState {
             subrole: None,
             identifier: text(unsafe { element.CurrentAutomationId() }),
             title: text(unsafe { element.CurrentName() }),
-            value: crate::recording::evidence_value(sensitive, || {
+            value: axon_core::evidence_value(sensitive, || {
                 unsafe {
                     element.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
                 }
