@@ -17,7 +17,8 @@ use unicode_normalization::UnicodeNormalization;
 pub const MAX_NAVIGATION_URL_BYTES: usize = 8_192;
 
 /// Why a tab answer carries no Accessibility cross-check.
-pub const TAB_CROSS_CHECK_UNAVAILABLE: &str = "AX does not expose a portable authoritative tab model";
+pub const TAB_CROSS_CHECK_UNAVAILABLE: &str =
+    "AX does not expose a portable authoritative tab model";
 
 /// Where a window or tab enumeration's truth comes from.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -238,7 +239,9 @@ pub enum CrossCheck {
         ax_window_count: u32,
         matching_titles: u32,
     },
-    Unavailable { reason: String },
+    Unavailable {
+        reason: String,
+    },
 }
 
 /// Compares scripted window titles with Accessibility's, each Accessibility title answering for
@@ -416,9 +419,9 @@ pub fn validate_navigation_url(raw: &str) -> Result<(), BrowserError> {
     }
     let absolute = browser_url::parse(raw).is_some_and(|components| {
         components.authority.is_some()
-            && components
-                .scheme
-                .is_some_and(|scheme| matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https"))
+            && components.scheme.is_some_and(|scheme| {
+                matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https")
+            })
     });
     if !absolute {
         return Err(BrowserError::InvalidUrl(
@@ -671,7 +674,9 @@ pub mod browser_url {
         };
         Some(Authority {
             userinfo: userinfo.map(|userinfo| {
-                encode(userinfo, |b| is_unreserved(b) || is_sub_delim(b) || b == b':')
+                encode(userinfo, |b| {
+                    is_unreserved(b) || is_sub_delim(b) || b == b':'
+                })
             }),
             host: host(host_raw)?,
             port,
@@ -930,7 +935,8 @@ fn describes_the_new_page(requested_url: &str, before: &TabReading, reading: &Ta
     if !browser_url::equivalent(&reading.url, requested_url) {
         // Only a page that replaced the one being left, a redirect come to rest, is an outcome;
         // anything else is still the pre-navigation state.
-        return !browser_url::equivalent(&reading.url, &before.url) && reading.title != before.title;
+        return !browser_url::equivalent(&reading.url, &before.url)
+            && reading.title != before.title;
     }
     // The requested address is showing. Its title is trustworthy unless it is still the old
     // page's, and re-navigating to the address already open has no title change to wait for.
@@ -977,7 +983,12 @@ mod tests {
         }
     }
 
-    fn settle(settler: Settler, requested: &str, before: TabReading, tab: &mut Tab) -> SettleOutcome {
+    fn settle(
+        settler: Settler,
+        requested: &str,
+        before: TabReading,
+        tab: &mut Tab,
+    ) -> SettleOutcome {
         settler
             .settle(&FakeClock::default(), requested, &before, || tab.read())
             .unwrap()
@@ -985,16 +996,27 @@ mod tests {
 
     #[test]
     fn settling_outlasts_both_the_stale_title_and_the_placeholder_that_follows_it() {
-        let stale = reading("https://news.ycombinator.com/", "Why does Opus 5 feel worse to work with?", None);
-        let placeholder = reading("https://news.ycombinator.com/", "news.ycombinator.com", None);
-        let loaded = reading("https://news.ycombinator.com/", "Hacker News", None);
-        let mut tab = Tab::new(
-            [vec![stale; 5], vec![placeholder; 5], vec![loaded.clone()]].concat(),
+        let stale = reading(
+            "https://news.ycombinator.com/",
+            "Why does Opus 5 feel worse to work with?",
+            None,
         );
+        let placeholder = reading(
+            "https://news.ycombinator.com/",
+            "news.ycombinator.com",
+            None,
+        );
+        let loaded = reading("https://news.ycombinator.com/", "Hacker News", None);
+        let mut tab =
+            Tab::new([vec![stale; 5], vec![placeholder; 5], vec![loaded.clone()]].concat());
         let outcome = settle(
             Settler::default(),
             "https://news.ycombinator.com",
-            reading("https://news.ycombinator.com/item?id=1", "Why does Opus 5 feel worse to work with?", None),
+            reading(
+                "https://news.ycombinator.com/item?id=1",
+                "Why does Opus 5 feel worse to work with?",
+                None,
+            ),
             &mut tab,
         );
         assert_eq!(outcome.reading, loaded);
@@ -1113,7 +1135,10 @@ mod tests {
             )
             .unwrap();
         assert_eq!(outcome.evidence, SettleEvidence::Bound);
-        assert_eq!(reads, 3, "reads at 1.5 s, 3.06 s, and the one that crosses 4 s");
+        assert_eq!(
+            reads, 3,
+            "reads at 1.5 s, 3.06 s, and the one that crosses 4 s"
+        );
         assert!(outcome.elapsed_ms < Settler::DEFAULT_TIMEOUT_MS + 1_500 + 60);
     }
 
