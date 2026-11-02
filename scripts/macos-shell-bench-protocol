@@ -1,0 +1,294 @@
+#!/usr/bin/env python3
+"""The axn/249 bench protocol: the Rust daemon and the menu shell as two launchd jobs, measured.
+
+Run on bgsrv-mac over ssh as the console user, from the directory scripts/stage-macos-shell-bench
+staged (default ~/AxonBench/axn249), with someone at the Mac's screen:
+
+    ~/AxonBench/axn249/macos-shell-bench-protocol
+
+It does every step that a program can do itself: launchctl, socket calls on the bench socket, the
+TCC dumps (sudo asks for a password once per dump), kill/kickstart, and the TCC diff. It stops and
+asks only for what needs a person: reading the menu, recording in Calculator, and answering the
+Automation dialog. Every step lands in transcript.jsonl beside the bundle, and the run ends by
+tearing the bench down whatever happened.
+
+It never touches dev.axon.daemon, dev.axon.updater, or /tmp/axon.sock.
+"""
+
+import json
+import os
+import pathlib
+import socket
+import subprocess
+import sys
+import time
+
+BENCH = pathlib.Path(os.environ.get("AXON_BENCH_DIR", pathlib.Path.home() / "AxonBench/axn249"))
+APP = BENCH / "AxonMacDev.app"
+SOCKET = "/tmp/axon-bench249.sock"
+DAEMON = "dev.axon.bench249.daemon"
+MENU = "dev.axon.bench249.menu"
+DOMAIN = f"gui/{os.getuid()}"
+RECORDINGS = pathlib.Path.home() / "Library/Application Support/Axon/Recordings"
+TRANSCRIPT = BENCH / "transcript.jsonl"
+STAGE = BENCH / "stage-macos-shell-bench"
+TCC_QUERY = (
+    "select service, client, client_type, auth_value, coalesce(indirect_object_identifier,''), "
+    "last_modified from access order by service, client, indirect_object_identifier;"
+)
+USER_TCC = pathlib.Path.home() / "Library/Application Support/com.apple.TCC/TCC.db"
+SYSTEM_TCC = "/Library/Application Support/com.apple.TCC/TCC.db"
+
+verdicts = []
+
+
+def log(step, **fields):
+    entry = {"at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "step": step, **fields}
+    with TRANSCRIPT.open("a") as out:
+        out.write(json.dumps(entry) + "\n")
+    print(f"[{step}] " + json.dumps(fields)[:600])
+
+
+def verdict(step, ok, **fields):
+    verdicts.append((step, ok))
+    log(step, verdict="pass" if ok else "FAIL", **fields)
+
+
+def run(*argv, check=False):
+    result = subprocess.run(argv, capture_output=True, text=True)
+    if check and result.returncode != 0:
+        raise RuntimeError(f"{argv} failed: {result.stderr.strip()}")
+    return result
+
+
+def rpc(method, params=None, timeout=10):
+    try:
+        with socket.socket(socket.AF_UNIX) as conn:
+            conn.settimeout(timeout)
+            conn.connect(SOCKET)
+            request = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}}
+            conn.sendall((json.dumps(request) + "\n").encode())
+            buffer = b""
+            while not buffer.endswith(b"\n"):
+                chunk = conn.recv(1 << 16)
+                if not chunk:
+                    break
+                buffer += chunk
+        return json.loads(buffer)
+    except OSError as error:
+        return {"transport": str(error)}
+
+
+def job(label):
+    """(state, pid, last exit code) from launchctl print."""
+    out = run("/bin/launchctl", "print", f"{DOMAIN}/{label}").stdout
+    fields = {}
+    for line in out.splitlines():
+        line = line.strip()
+        for key in ("state", "pid", "last exit code", "runs"):
+            if line.startswith(f"{key} = "):
+                fields.setdefault(key, line.split(" = ", 1)[1])
+    return fields
+
+
+def wait_for(predicate, seconds, interval=0.5):
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        value = predicate()
+        if value:
+            return value
+        time.sleep(interval)
+    return None
+
+
+def ask(prompt):
+    answer = input(f"\n>>> {prompt}\n    answer y/n (or type what you see): ").strip()
+    log("operator", prompt=prompt, answer=answer)
+    return answer.lower().startswith("y")
+
+
+def pause(prompt):
+    input(f"\n>>> {prompt}\n    press Return when done: ")
+    log("operator", prompt=prompt, answer="done")
+
+
+def tcc_dump(name):
+    rows = []
+    user = run("/usr/bin/sqlite3", "-separator", "\t", str(USER_TCC), TCC_QUERY)
+    rows += ["user\t" + line for line in user.stdout.splitlines()]
+    system = run("/usr/bin/sudo", "/usr/bin/sqlite3", "-separator", "\t", SYSTEM_TCC, TCC_QUERY)
+    rows += ["system\t" + line for line in system.stdout.splitlines()]
+    (BENCH / name).write_text("\n".join(rows) + "\n")
+    log("tcc-dump", file=name, rows=len(rows), userError=user.stderr.strip(), systemError=system.stderr.strip())
+    return rows
+
+
+def healthy():
+    response = rpc("health", timeout=3)
+    return response.get("result")
+
+
+def newest_recording():
+    files = sorted(RECORDINGS.glob("*.axn"), key=lambda path: path.stat().st_mtime) if RECORDINGS.exists() else []
+    return files[-1] if files else None
+
+
+def running(name):
+    return run("/usr/bin/pgrep", "-x", name).returncode == 0
+
+
+def protocol():
+    production_before = job("dev.axon.daemon")
+    safari_was_running = running("Safari")
+    calculator_was_running = running("Calculator")
+    log("start", bench=str(BENCH), productionDaemon=production_before,
+        safariWasRunning=safari_was_running, calculatorWasRunning=calculator_was_running)
+
+    # 1. TCC before.
+    before = tcc_dump("tcc-before.tsv")
+
+    # 2. Stage.
+    staged = run(str(STAGE), "--bootstrap-only")
+    log("bootstrap", exit=staged.returncode, stdout=staged.stdout[-800:], stderr=staged.stderr[-800:])
+    if staged.returncode != 0:
+        raise RuntimeError("bootstrap failed")
+
+    # 3. Ownership.
+    report = wait_for(healthy, 20)
+    daemon_job, menu_job = job(DAEMON), wait_for(lambda: job(MENU).get("pid") and job(MENU), 20) or job(MENU)
+    provenance = (report or {}).get("provenance") or {}
+    permissions = {p["name"]: p["granted"] for p in (report or {}).get("permissions", [])}
+    holder = run("/usr/sbin/lsof", "-t", SOCKET + ".lock").stdout.split()
+    shell_sockets = run("/usr/sbin/lsof", "-a", "-p", menu_job.get("pid", "0"), "-U").stdout
+    verdict(
+        "3-ownership",
+        bool(report)
+        and provenance.get("backend") == "rust-axon-mac"
+        and provenance.get("executablePath", "").startswith(str(APP) + "/")
+        and report.get("shellContract") == 1
+        and permissions == {"accessibility": True, "screenRecording": True}
+        and daemon_job.get("state") == "running" and menu_job.get("state") == "running"
+        and holder == [daemon_job.get("pid")],
+        daemonJob=daemon_job, menuJob=menu_job, provenance=provenance, shellContract=(report or {}).get("shellContract"),
+        permissions=permissions, lockHolders=holder, shellUnixSockets=shell_sockets,
+    )
+
+    # 4. Live health.
+    verdict("4a-status-line", ask(f"Open the Axon menu bar item. Does it read 'Daemon {report.get('version') if report else '?'}: ready', with no 'not granted' lines?"))
+    run("/bin/launchctl", "bootout", f"{DOMAIN}/{DAEMON}")
+    gone = wait_for(lambda: "transport" in rpc("health", timeout=2), 10)
+    time.sleep(3)
+    verdict("4b-daemon-gone", bool(gone) and ask(f"Open the menu again. Does it read 'Axon daemon not running ({SOCKET})', with Record... disabled?"))
+    run("/bin/launchctl", "bootstrap", DOMAIN, str(pathlib.Path.home() / f"Library/LaunchAgents/{DAEMON}.plist"))
+    back = wait_for(healthy, 20)
+    time.sleep(3)
+    menu_pid = job(MENU).get("pid")
+    verdict("4c-recovers-after-bootstrap", bool(back) and menu_pid == menu_job.get("pid") and ask("Open the menu. Is it back to 'ready' (the menu itself was not restarted)?"),
+            menuPid=menu_pid)
+    old = job(DAEMON).get("pid")
+    run("/bin/kill", "-9", old or "0")
+    relaunched = wait_for(lambda: (p := job(DAEMON).get("pid")) and p != old and healthy() and p, 30)
+    time.sleep(3)
+    verdict("4d-recovers-after-crash", bool(relaunched) and ask("Open the menu. Is it 'ready' again?"), killed=old, relaunched=relaunched)
+
+    # 5. Recording.
+    before_file = newest_recording()
+    pause("Open Calculator. In the Axon menu choose Record..., pick Calculator, then press a few Calculator keys (for example 1 2 + 3). Leave it recording.")
+    seen = wait_for(lambda: (r := rpc("recording.status").get("result")) and r.get("recording") and r, 30)
+    red = ask("Is the Axon menu bar icon red?")
+    pause("Now choose Stop Recording... in the Axon menu. If an 'Unable to Stop Recording' alert says the matching Axon Editor.app was not found, that is expected on the bench identity: dismiss it.")
+    stopped = wait_for(lambda: (r := rpc("recording.status").get("result")) and not r.get("recording"), 30)
+    after_file = newest_recording()
+    body = after_file.read_text() if after_file and after_file != before_file else ""
+    verdict("5a-menu-recording", bool(seen) and red and bool(stopped) and body.startswith("version: 2") and "Calculator" in body,
+            status=seen, file=str(after_file), script=body[:400])
+    started = rpc("recording.start", {"scope": {"scope": "application", "app": {"name": "Calculator", "bundleIdentifier": "com.apple.calculator"}}})
+    time.sleep(4)
+    red = ask("A recording was just started over the socket, not from the menu. Is the icon red, and does the menu offer 'Stop Recording...'?")
+    pause("Choose Stop Recording... (dismiss the editor alert if it appears).")
+    restored = wait_for(lambda: (r := rpc("recording.status").get("result")) and not r.get("recording"), 30)
+    verdict("5b-restored-from-daemon-state", "result" in started and red and bool(restored), started=started, newestFile=str(newest_recording()))
+
+    # 6. Consent.
+    pause("Open Safari (any window). Leave it running.")
+    status = rpc("automation.status").get("result") or {}
+    shows = ask("Open the Axon menu. Is 'Browser Automation...' in it?")
+    verdict("6a-status-agrees-with-menu", shows == (status.get("need") != "none"), status=status)
+    if status.get("need") == "request":
+        pause("Choose Browser Automation.... If a dialog appears asking to let an app control Safari, note the app it names, then click Allow. If no dialog appears within 20 seconds, just continue.")
+        named = input("    Which app did the dialog name (blank if no dialog appeared)? ").strip()
+        log("operator", prompt="dialog named", answer=named)
+        granted = rpc("automation.status").get("result") or {}
+        gone = ask("Open the Axon menu. Is 'Browser Automation...' gone?")
+        verdict("6b-consent-minted-for-the-daemon", bool(named) and "menu" not in named.lower() and granted.get("need") == "none" and gone,
+                dialogNamed=named, status=granted)
+    else:
+        log("6b-consent-minted-for-the-daemon", verdict="skipped", reason=f"need was {status.get('need')}, not request")
+    reset = run("/usr/bin/tccutil", "reset", "AppleEvents", "dev.axon.mac-bench")
+    run("/bin/launchctl", "kickstart", "-k", f"{DOMAIN}/{DAEMON}")
+    wait_for(healthy, 20)
+    time.sleep(3)
+    pause("The grant was reset and the daemon restarted. Choose Browser Automation... and click Don't Allow on the dialog (continue if none appears). Read the alert that follows.")
+    denied = rpc("automation.status").get("result") or {}
+    explained = ask("Did the alert explain the denial (mentioning System Settings > Privacy & Security > Automation), and is 'Browser Automation...' still in the menu?")
+    verdict("6c-denial-explained", denied.get("need") == "explain" and explained, reset=reset.stdout.strip() + reset.stderr.strip(), status=denied)
+
+    # 7. permit on the granted bench answers trusted without a prompt.
+    permit = rpc("permit", timeout=30)
+    verdict("7-permit", (permit.get("result") or {}).get("accessibility") == "trusted", response=permit)
+
+    # 8. Quit stays quit.
+    pause("Choose 'Quit Axon Menu'.")
+    quit_state = wait_for(lambda: (j := job(MENU)).get("state") != "running" and j, 15) or job(MENU)
+    time.sleep(60)
+    later = job(MENU)
+    verdict("8-quit-stays-quit", quit_state.get("last exit code") == "0" and later.get("state") != "running" and bool(healthy()),
+            atQuit=quit_state, after60s=later)
+
+    # 9. A crash comes back; the daemon is untouched.
+    daemon_pid = job(DAEMON).get("pid")
+    run("/bin/launchctl", "kickstart", f"{DOMAIN}/{MENU}")
+    first = wait_for(lambda: job(MENU).get("pid"), 15)
+    run("/bin/kill", "-9", first or "0")
+    second = wait_for(lambda: (p := job(MENU).get("pid")) and p != first and p, 30)
+    verdict("9-crash-relaunches", bool(first) and bool(second) and job(DAEMON).get("pid") == daemon_pid,
+            killed=first, relaunched=second, daemonPid=daemon_pid)
+
+    # 10. TCC after: nothing for the shell, and only the daemon's Safari row new.
+    after = tcc_dump("tcc-after.tsv")
+    added = sorted(set(after) - set(before))
+    removed = sorted(set(before) - set(after))
+    shell_rows = [row for row in after if "dev.axon.mac-bench.menu" in row or "Axon Menu.app" in row]
+    foreign = [row for row in added if "\tdev.axon.mac-bench\t" not in row]
+    verdict("10-tcc", not shell_rows and not foreign, added=added, removed=removed, shellRows=shell_rows, foreignAdded=foreign)
+
+    production_after = job("dev.axon.daemon")
+    verdict("production-untouched", production_after.get("pid") == production_before.get("pid"),
+            before=production_before, after=production_after)
+    return safari_was_running, calculator_was_running
+
+
+def main():
+    BENCH.mkdir(parents=True, exist_ok=True)
+    safari_was_running = calculator_was_running = True
+    try:
+        safari_was_running, calculator_was_running = protocol()
+    except Exception as error:  # the teardown below must run whatever happened
+        log("aborted", error=repr(error))
+    finally:
+        # 11. Teardown: the jobs, their plists, and only the applications this run opened.
+        for label in (MENU, DAEMON):
+            run("/bin/launchctl", "bootout", f"{DOMAIN}/{label}")
+            (pathlib.Path.home() / f"Library/LaunchAgents/{label}.plist").unlink(missing_ok=True)
+        if not calculator_was_running:
+            run("/usr/bin/pkill", "-x", "Calculator")
+        if not safari_was_running:
+            run("/usr/bin/pkill", "-x", "Safari")
+        log("11-teardown", menu=job(MENU), daemon=job(DAEMON))
+    failed = [step for step, ok in verdicts if not ok]
+    log("summary", passed=[step for step, ok in verdicts if ok], failed=failed)
+    sys.exit(1 if failed else 0)
+
+
+if __name__ == "__main__":
+    main()
