@@ -11,6 +11,7 @@ let package = Package(
         .executable(name: "axon", targets: ["AxonCLI"]),
         .executable(name: "AxonDaemonApp", targets: ["AxonDaemonApp"]),
         .executable(name: "AxonEditorApp", targets: ["AxonEditorApp"]),
+        .executable(name: "AxonMenuApp", targets: ["AxonMenuApp"]),
         .library(name: "AxonClient", targets: ["AxonClient"]),
         .library(name: "AxonCore", targets: ["AxonCore"]),
         .executable(name: "tool-surface-exporter", targets: ["ToolSurfaceExporter"])
@@ -48,6 +49,12 @@ let package = Package(
             name: "AxonEditorApp",
             dependencies: ["AxonClient", "AxonCore"]
         ),
+        // The menu shell. It depends on AxonClient alone, so nothing that calls a privacy-gated API
+        // is reachable from it; the daemon does that work under its own identity.
+        .executableTarget(
+            name: "AxonMenuApp",
+            dependencies: ["AxonClient"]
+        ),
         .executableTarget(
             name: "AxonReorderFixtureApp"
         ),
@@ -58,6 +65,14 @@ let package = Package(
         .testTarget(
             name: "AxonCoreTests",
             dependencies: ["AxonClient", "AxonCore"]
+        ),
+        .testTarget(
+            name: "AxonClientTests",
+            dependencies: ["AxonClient"]
+        ),
+        .testTarget(
+            name: "AxonMenuAppTests",
+            dependencies: ["AxonClient", "AxonMenuApp"]
         )
     ]
 )
