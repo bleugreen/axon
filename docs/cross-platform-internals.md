@@ -1618,6 +1618,12 @@ would mint the grant for its own identity. Rust has no browser verbs yet, so the
 reserved in its vocabulary and nothing produces it; the sticky executed-leg denial below arrives
 with those verbs.
 
+The Rust daemon has no `NSApplication`, and that does not stop the prompt. On bgsrv-mac
+(2026-11-01, `scripts/macos-toolkit-acceptance/live/axn249/`), the launchd-started daemon's
+prompting determination presented the consent dialog through UserNotificationCenter, naming the
+daemon bundle and its `NSAppleEventsUsageDescription`. Allow and Don't Allow each landed on the
+daemon's identity, and the shell held no row afterwards.
+
 The Swift daemon sends Safari and Google Chrome events directly through
 `NSAppleScript.executeAndReturnError`; it does not launch `osascript`. Authorization is split by who
 is asking. Agent-facing verbs call `AEDeterminePermissionToAutomateTarget` with
@@ -1733,7 +1739,9 @@ the same behavioural check. `permit` and `health` therefore cannot disagree.
 determination only for a running browser it holds no answer for. Need is the strongest over running
 browsers: explain, then request, then none. A browser that is not running reports no status unless
 an answer is held, because macOS resolves a grant only for a running target. It is asked only when
-a person opens the menu, so no determination happens earlier than their own use of Axon.
+a person opens the menu, so no determination happens earlier than their own use of Axon. The
+item set therefore reflects the need as of the last open. A menu inspected without opening it, such
+as through its accessibility tree, shows the previous answer.
 `automation.request` runs a checked determination, then a prompting one only when the checked
 answer is "would require consent", for each running browser, and returns the need that remains.
 
