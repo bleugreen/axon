@@ -111,10 +111,11 @@ final class MenuShell: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// The executable behind a pid, for a daemon whose health does not say where it lives.
     private static func executablePath(ofProcess processId: Int) -> String? {
         var buffer = [CChar](repeating: 0, count: 4096)
-        guard proc_pidpath(Int32(processId), &buffer, UInt32(buffer.count)) > 0 else {
+        let length = proc_pidpath(Int32(processId), &buffer, UInt32(buffer.count))
+        guard length > 0 else {
             return nil
         }
-        return String(cString: buffer)
+        return String(decoding: buffer.prefix(Int(length)).map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 
     // MARK: - Rendering
@@ -516,7 +517,7 @@ final class MenuShell: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 try UpdateFinisher.arm(enclosingBundle: installed.bundleURL, socketPath: socketPath)
                 setUpdate(.restarting(version: installed.version))
             } catch {
-                let reason = (error as? CustomStringConvertible)?.description ?? String(describing: error)
+                let reason = String(describing: error)
                 setUpdate(.failed(reason: reason, update: update))
                 showAlert(title: "Update Failed", message: reason)
             }
