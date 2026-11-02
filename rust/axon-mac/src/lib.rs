@@ -493,7 +493,9 @@ impl<
         }
     }
 
-    /// Serves `navigate`, `windows`, and `tabs` through `browser`.
+    /// Serves `navigate`, `windows`, and `tabs` through `browser`. Only the macOS daemon installs
+    /// one outside the tests.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) fn with_browser(mut self, browser: Box<dyn browser::BrowserVerbs>) -> Self {
         self.browser = Some(browser);
         self
