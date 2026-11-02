@@ -655,6 +655,7 @@ fn pointer_matches(observed: (f64, f64), origin: (f64, f64)) -> bool {
 /// session is as the user left it.
 fn not_dispatched<T>(
     prior_app: Option<String>,
+    prior_app_process_identifier: Option<i64>,
     restored: bool,
     cleanup_message: &str,
     refusal_message: &str,
@@ -663,7 +664,7 @@ fn not_dispatched<T>(
         value: None,
         cleanup: ForegroundCleanup {
             prior_app,
-            prior_app_process_identifier: None,
+            prior_app_process_identifier,
             already_frontmost: false,
             activation_proved: false,
             restored,
@@ -739,6 +740,7 @@ where
         Err(_) => {
             return not_dispatched(
                 None,
+                None,
                 true,
                 "The prior foreground application could not be read; no events were posted",
                 "Foreground delivery could not read the application it would have to restore, so \
@@ -746,6 +748,9 @@ where
             );
         }
     };
+    let prior_process = prior
+        .as_deref()
+        .and_then(|prior| backend.application_process_identifier(prior));
     let already_frontmost = match target {
         None => true,
         Some(target) => prior.as_deref() == Some(target),
@@ -779,6 +784,7 @@ where
         let restored = restore(backend);
         return not_dispatched(
             prior_identity,
+            prior_process,
             restored,
             "No events were posted",
             "Foreground delivery could not prove the target became frontmost, so nothing was posted",
@@ -800,7 +806,7 @@ where
                     value: None,
                     cleanup: ForegroundCleanup {
                         prior_app: prior_identity,
-                        prior_app_process_identifier: None,
+                        prior_app_process_identifier: prior_process,
                         already_frontmost,
                         activation_proved: true,
                         restored,
@@ -835,7 +841,7 @@ where
         value: Some(value),
         cleanup: ForegroundCleanup {
             prior_app: prior_identity,
-            prior_app_process_identifier: None,
+            prior_app_process_identifier: prior_process,
             already_frontmost,
             activation_proved: true,
             restored,
