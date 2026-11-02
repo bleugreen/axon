@@ -321,6 +321,21 @@ pub mod native {
         fn CGEventPost(tap: u32, event: CGEventRef);
         fn CGEventPostToPid(pid: i32, event: CGEventRef);
         fn CGWarpMouseCursorPosition(position: CGPoint) -> i32;
+        fn CGEventSourceFlagsState(state: i32) -> u64;
+    }
+
+    const COMBINED_SESSION_STATE: i32 = 0;
+    const HID_SYSTEM_STATE: i32 = 1;
+
+    /// The modifier flags the window server holds, as `(combined session, HID system)`: the state a
+    /// later null-source event inherits from.
+    pub fn modifier_flags() -> (u64, u64) {
+        unsafe {
+            (
+                CGEventSourceFlagsState(COMBINED_SESSION_STATE),
+                CGEventSourceFlagsState(HID_SYSTEM_STATE),
+            )
+        }
     }
     #[link(name = "CoreFoundation", kind = "framework")]
     unsafe extern "C" {

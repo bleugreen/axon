@@ -2846,6 +2846,10 @@ mod tests {
             window_origin: (f64, f64),
             target_alive: bool,
             denylist: &'static [DenylistEntry],
+            /// The window server's modifier state, and whether a keyboard post leaves Command
+            /// logically held in it, the way a chord with flags but no modifier keys did.
+            modifiers: ModifierState,
+            leaks_command: bool,
         }
 
         impl NativeFake {
@@ -2894,6 +2898,12 @@ mod tests {
                     window_origin: (0.0, 0.0),
                     target_alive: true,
                     denylist: background::DENYLIST,
+                    // The non-coalesced bit an idle session reports, which is not a held key.
+                    modifiers: ModifierState {
+                        combined_session: 0x2000_0000,
+                        hid_system: 0x2000_0000,
+                    },
+                    leaks_command: false,
                 }
             }
 
@@ -3012,6 +3022,10 @@ mod tests {
                 intent: KeyboardIntent<'_>,
             ) -> Result<(), axon_core::BackendError> {
                 self.dispatches.push(format!("hid {}", intent.as_str()));
+                if self.leaks_command {
+                    self.modifiers.combined_session |= input::FLAG_COMMAND;
+                    self.modifiers.hid_system |= input::FLAG_COMMAND;
+                }
                 Ok(())
             }
             fn screenshot(
@@ -3116,6 +3130,9 @@ mod tests {
                 ));
                 self.pointer = point;
                 Ok(input::wheel_steps(delta.0, delta.1))
+            }
+            fn modifier_state(&mut self) -> Option<ModifierState> {
+                Some(self.modifiers)
             }
         }
         impl BackgroundApplicationKeyboard for NativeFake {
@@ -3358,6 +3375,42 @@ mod tests {
                 ]
             );
             assert_eq!(router.backend.dispatches, vec!["hid cmd+s".to_string()]);
+        }
+
+        /// Every keyboard dispatch reports whether it left the session's modifiers as it found
+        /// them, at either rung, beside the pointer's own restoration.
+        #[test]
+        fn every_keyboard_dispatch_reports_that_it_restored_the_modifiers() {
+            let mut router = router(NativeFake::new());
+            let background = ok(&mut router, "keyboard", json!({"app": "TextEdit", "text": "hi"}));
+            assert_eq!(background["backgroundDelivery"]["modifiersRestored"], true);
+            let chord = ok(
+                &mut router,
+                "keyboard",
+                json!({"app": "TextEdit", "key": "cmd+s", "deliveryPolicy": "foregroundPermitted"}),
+            );
+            assert_eq!(chord["foreground"]["modifiersRestored"], true);
+            assert_eq!(chord["dispatchSuccess"], true);
+        }
+
+        /// A chord that leaves Command logically held has turned every later keystroke on the
+        /// machine into a shortcut. That is a failed dispatch, and the masks say what was left.
+        #[test]
+        fn a_chord_that_leaves_a_modifier_held_is_a_failed_dispatch() {
+            let mut backend = NativeFake::new();
+            backend.leaks_command = true;
+            let mut router = router(backend);
+            let result = ok(
+                &mut router,
+                "keyboard",
+                json!({"app": "TextEdit", "key": "cmd+s", "deliveryPolicy": "foregroundPermitted"}),
+            );
+            assert_eq!(result["delivery"], "foreground");
+            assert_eq!(result["dispatchSuccess"], false);
+            assert_eq!(result["dispatch"]["success"], false);
+            assert_eq!(result["foreground"]["modifiersRestored"], false);
+            let message = result["message"].as_str().unwrap();
+            assert!(message.contains("0x20000000 before and 0x20100000 after"), "{message}");
         }
 
         #[test]

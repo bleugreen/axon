@@ -1044,6 +1044,13 @@ impl NativeInput for MacBackend {
     ) -> Result<Vec<(i32, i32)>, BackendError> {
         input::native::scroll(point, &input::wheel_steps(delta.0, delta.1))
     }
+    fn modifier_state(&mut self) -> Option<crate::ModifierState> {
+        let (combined_session, hid_system) = input::native::modifier_flags();
+        Some(crate::ModifierState {
+            combined_session,
+            hid_system,
+        })
+    }
     fn take_activation_evidence(&mut self) -> Option<String> {
         (!self.activation_evidence.is_empty())
             .then(|| std::mem::take(&mut self.activation_evidence).join("; "))
