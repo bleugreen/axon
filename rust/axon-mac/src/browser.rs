@@ -851,7 +851,10 @@ mod tests {
 
     #[test]
     fn windows_and_tabs_read_every_index_in_order() {
-        for (dictionary, app) in [(Dictionary::SAFARI, "Safari"), (Dictionary::CHROME, "Chrome")] {
+        for (dictionary, app) in [
+            (Dictionary::SAFARI, "Safari"),
+            (Dictionary::CHROME, "Chrome"),
+        ] {
             let rig = rig(dictionary, NO_ERR, tabs_state());
             let windows = rig.service.windows(app).unwrap();
             assert_eq!(
