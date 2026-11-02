@@ -614,6 +614,7 @@ mod tests {
                 process_id: 12,
                 endpoint: r"\\.\pipe\axon-v1".into(),
                 provenance: None,
+                shell_contract: None,
                 session: SessionHealth::usable(None),
                 permissions: vec![],
                 capabilities: CapabilityState::all_unusable(reason::DAEMON_NOT_READY),
