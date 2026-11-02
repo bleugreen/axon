@@ -63,3 +63,20 @@ pub fn keysym_for_character(character: char) -> Keysym {
 pub fn text_keysyms(text: &str) -> Vec<Keysym> {
     text.chars().map(keysym_for_character).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A macOS recording's `cmd+…` chord parses everywhere and is refused at the X11 mapping,
+    /// rather than being pressed as Super behind the caller's back.
+    #[test]
+    fn command_is_refused_at_the_x11_mapping() {
+        let chord = axon_core::parse_chord("cmd+s").unwrap();
+        assert_eq!(
+            keysym_for_modifier(chord.modifiers[0]),
+            Err(axon_core::COMMAND_IS_MACOS_ONLY)
+        );
+        assert_eq!(keysym_for_modifier(Modifier::Super), Ok(SUPER_L));
+    }
+}
