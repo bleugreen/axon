@@ -444,17 +444,16 @@ pub mod browser_url {
     /// The parts of a URL, each already in its percent-encoded spelling.
     pub(crate) struct Components<'a> {
         pub scheme: Option<&'a str>,
-        pub authority: Option<Authority<'a>>,
+        pub authority: Option<Authority>,
         pub path: String,
         pub query: Option<String>,
         pub fragment: Option<String>,
     }
 
-    pub(crate) struct Authority<'a> {
+    pub(crate) struct Authority {
         pub userinfo: Option<String>,
         pub host: String,
         pub port: Option<u64>,
-        _raw: std::marker::PhantomData<&'a str>,
     }
 
     pub fn equivalent(lhs: &str, rhs: &str) -> bool {
@@ -650,7 +649,7 @@ pub mod browser_url {
             .map(|labels| labels.join("."))
     }
 
-    fn authority(raw: &str) -> Option<Authority<'_>> {
+    fn authority(raw: &str) -> Option<Authority> {
         let (userinfo, host_port) = match raw.rfind('@') {
             Some(at) => (Some(&raw[..at]), &raw[at + 1..]),
             None => (None, raw),
@@ -676,7 +675,6 @@ pub mod browser_url {
             }),
             host: host(host_raw)?,
             port,
-            _raw: std::marker::PhantomData,
         })
     }
 
