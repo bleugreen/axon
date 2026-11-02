@@ -12,7 +12,8 @@ These are the only sources that promote or sustain a **Supported** cell.
 | --- | --- | --- | --- |
 | macOS live loop | `.github/workflows/live.yml` `macos` job | capture → resolve → `invoke` `AXPress` → verified Calculator display; complete health-v1 document; Accessibility grant — each asserted against the app bundle the job launched, by process id | every push to `main` |
 | macOS grant-carry upgrade verification | `bglab-mac`, measured during the axn/119 v0.3.0 rollout | `daemon install` from `~/.local/lib/axon/0.3.0` repointed the LaunchAgent from 0.2.3 while the unchanged `com.bleugreen.axon` bundle identity carried Accessibility and Screen Recording grants across the upgrade: the daemon returned ready in about one second with all fifteen capabilities usable and no System Settings prompts | manual (2026-08-11); re-run on changes to bundle identity or installation registration |
-| Linux live loop | `.github/workflows/live.yml` `linux` job | AT-SPI capture/resolve/invoke with verified readback on GNOME Calculator under GNOME/Mutter Wayland; honest refusal of global input at both policies; systemd-user lifecycle and health-v1, including the session accessibility switch this runner has on | every push to `main` |
+| Linux live loop (Wayland) | `.github/workflows/live.yml` `linux` job, on `bglab-ub` (GNOME/Mutter Wayland) | AT-SPI capture/resolve/invoke with verified readback on GNOME Calculator; honest refusal of global input at both policies and of `recording.start` with `wayland-restricted`; systemd-user lifecycle and health-v1, including the session accessibility switch this runner has on | every push to `main` |
+| Linux X11 live loop | `.github/workflows/live.yml` `linux-x11` job, on `bginf-sp2` (GNOME 46 on Xorg) | a direct X11 window screenshot of GNOME Calculator, checked against the window's size as a separate X client reads it and against a blank capture; AT-SPI invoke with verified readback; `keyboard` into Calculator refused under `backgroundOnly` (naming the GTK 4 pixel refusal) and delivered under `foregroundPermitted` through XTEST, with activation proved from a known window, the `0` → `07` transition read back, and the foreground handed back; the XRecord recorder end to end via `scripts/linux-recording-probe --target gtk3`, including the daemon's own XTEST input kept out of recordings; systemd-user lifecycle and health-v1 with input, capture, hit testing, and observation usable | every push to `main` |
 | Windows live loop | `.github/workflows/live.yml` `windows` job | the interactive-session daemon serves `look` through the DACL-restricted pipe; against a probe-owned isolated Edge window targeted by its window-owning process id, Ctrl+L, text, Return, and a page-content click dispatch through the foreground rung and are verified from page state; the complete health-v1 document and the desktop's unchanged registration are also asserted | every push to `main` |
 | Hermetic X11 foreground test | `.github/workflows/test.yml` Linux job; `rust/axon-linux/tests/x11_foreground.rs` | the X11 activate/prove/dispatch/restore conversation against a real X server with a miniature EWMH window manager | every pull request |
 | Hermetic AT-SPI activation test | `.github/workflows/test.yml` Linux job; `rust/axon-linux/tests/atspi_activation.rs` | that the attributes call is issued against the application root and only once per application, that the bounded wait ends when a withholding provider publishes rather than when the bound expires, and that a provider which never publishes is reported as withheld rather than as empty — against a private session bus and a provider built to withhold the way Chromium does; and, on a second private bus, that the session's accessibility switch is read live rather than remembered and reaches health-v1 as a degraded session | every pull request |
@@ -42,14 +43,48 @@ unusable in health-v1, and an elevated target refuses by name at dispatch
 time.
 
 **Linux X11.** The hermetic test proves the protocol conversation against a
-real X server; what it cannot prove is a full desktop's window manager, and
-the fleet has no X11 desktop. Enrolling one, or recording a dated probe
-against one, is the promotion path for the limits above. On every Linux
-environment `scroll` is refused — AT-SPI has no portable delta-scroll
-operation, and it is never silently replaced with global wheel input.
+real X server on every pull request; the X11 live loop on `bginf-sp2` proves
+it against a full desktop's window manager on every push to `main`. That
+bench is a DGX Spark (aarch64, Ubuntu 24.04) running GNOME 46 on Xorg — DGX
+OS forces `nvidia-drm modeset=0`, so Wayland is unavailable there by design,
+which is what makes it a stable X11 bench rather than one a login-screen
+choice could flip. A third desktop, `bginf-halo` (Fedora 43, Xfce on X11), is
+not a runner; it is where the toolkit acceptance table and the first
+recording round trip were measured by hand, with Chromium as the target. On
+every Linux environment `scroll` is refused — AT-SPI has no portable
+delta-scroll operation, and it is never silently replaced with global wheel
+input.
 
-**GNOME/Mutter (Wayland).** The project's one real Linux desktop, so it
-carries the Linux live loop alone. Its two compositor-specific findings are
+What the X11 bench taught the lane, each now handled by the job rather than
+by hand on the machine:
+
+- *The session locks while idle.* GNOME blanks after five minutes and locks
+  on blank, and a lock shield holds the foreground and swallows input. The
+  job's first desktop step unlocks through logind (`loginctl
+  unlock-session`, which a session's owner may do without authentication),
+  wakes the display, and holds a `gnome-session-inhibit` idle inhibitor for
+  the job's length, so the bench's own idle policy is left alone between runs.
+- *The runner is outside the session.* It is a systemd system unit, so it
+  inherits no X credentials; the job exports GDM's cookie at
+  `/run/user/1000/gdm/Xauthority`. The accessibility bus socket on Xorg is
+  display-suffixed (`at-spi/bus_0`), so the job asks `org.a11y.Bus.GetAddress`
+  rather than naming a path.
+- *The foreground at login is not on the accessibility bus.* DGX OS opens its
+  dashboard in a snap Firefox that publishes nothing over AT-SPI. Foreground
+  delivery refuses to take the foreground from a window it cannot name and so
+  cannot give back (`activationNotProved`), which is correct and is why the
+  job first puts `scripts/linux-probe-window` (a GTK 3 window it owns) in
+  front and prints what held the foreground before the first aimed action.
+- *GNOME Calculator is GTK 4.* Its AT-SPI extents are zeroed on X11, so it is
+  the right target for semantic invoke, capture, and foreground keystrokes but
+  the wrong one for anything aimed at a point — element-at-point enrichment of
+  a recorded click among them. The recording step targets the GTK 3 probe
+  window instead. Calculator is also single-instance: a launch beside a
+  running one hands its arguments over and exits, so each step tracks the
+  Calculator it launched by pid and refuses to start beside another.
+
+**GNOME/Mutter (Wayland).** The Wayland half of the Linux live loop runs on
+`bglab-ub`. Its two compositor-specific findings are
 separate claims with separate evidence: synthetic input is refused because
 the compositor forbids it (live-verified), and AT-SPI Component geometry is
 untrustworthy for GTK4 descendants (spike-recorded, dated). Mutter advertises the RemoteDesktop and ScreenCast portals. AXN-172 measured WINDOW authorization and restore-token behavior, but the stream metadata has no application identity. Axon therefore keeps app-scoped `look` screenshots refused while the distinct `capture_screen` operation returns only an honestly labeled user-authorized source. Tokens are optimistic restoration hints, never global health proof.
@@ -1075,10 +1110,11 @@ GitHub cannot silently route it to a hosted machine.
 The Linux job also runs the hermetic X11 foreground test under `Xvfb`. That test
 brings its own miniature EWMH window manager rather than depending on an
 installed desktop, so it needs only the `Xvfb` binary and behaves the same on
-every run. It gates pull requests deliberately: the project's only real Linux
-desktop is a GNOME Wayland session, which is the worst possible place to verify
-X11 activation, and the live lane asserts the opposite property there — that
-global input stays withheld at both policies with a reason naming Wayland.
+every run. It gates pull requests deliberately: the live workflow has no
+`pull_request` trigger, so the X11 live loop on `bginf-sp2` proves activation
+against a real window manager only after a change reaches `main`, and the
+Wayland live loop on `bglab-ub` asserts the opposite property — that global
+input stays withheld at both policies with a reason naming Wayland.
 
 The `Test` workflow's macOS job also rehearses the live lane's recovery
 branches. Because the live workflow has no `pull_request` trigger, its steps
@@ -1319,13 +1355,24 @@ Remove the offline runner in **Settings > Actions > Runners**, then stop and
 uninstall its local runner service. Download the current runner package from the
 repository's **New self-hosted runner** page, request a fresh registration token,
 and configure the replacement as the desktop user with exactly one dedicated
-label: `axon-live-mac`, `axon-live-linux`, or `axon-live-windows`. Install and
+label: `axon-live-mac`, `axon-live-linux` (the Wayland bench, `bglab-ub`),
+`axon-live-linux-x11` (the X11 bench, `bginf-sp2`), or `axon-live-windows`. Install and
 start it with the runner package's platform service command (`svc.sh install`
 and `svc.sh start` on macOS/Linux). On Windows, run `config.cmd` from an
 elevated prompt and select service mode, or pass `--runasservice` during
 unattended configuration. Confirm the runner is online and carries `self-hosted`, its operating
 system and architecture labels, and its dedicated `axon-live-*` label before
 dispatching the workflow.
+
+Both Linux benches run the runner as the desktop user `dev` (uid 1000), whose
+GNOME session starts at boot through GDM's `AutomaticLogin`; the jobs address
+that session through `/run/user/1000` and fail by name when it is absent.
+`dev` needs passwordless `sudo` for the jobs' `apt-get` step, and GNOME's
+`toolkit-accessibility` must be on. The X11 bench additionally needs GTK 3
+introspection for Python (`python3-gi`, `gir1.2-gtk-3.0`) and GNOME
+Calculator; the job installs `xdotool` and `x11-utils` itself, exports GDM's X
+cookie, and wakes, unlocks, and idle-inhibits the session on every run, so no
+desktop setting has to be changed by hand.
 
 The Windows service runs as `NETWORK SERVICE` with install directory
 `C:\actions-runner-axon`. Keep that directory: the relay hardcodes the runner's
