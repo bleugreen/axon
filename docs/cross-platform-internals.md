@@ -1609,6 +1609,15 @@ carries `-32004` with `kind: capability-unavailable` and the stable
 
 ## macOS browser Automation attribution
 
+The Rust daemon is the sender for consent from the split onward. It answers `automation.status` and
+`automation.request` (see [the shell contract](#macos-daemon-and-menu-shell-contract-shell-v1)) with a
+port of the ledger and the two determination legs described below, in
+`rust/axon-mac/src/automation.rs`, while the gesture itself moves to the menu shell's Browser
+Automation item. The shell never calls `AEDeterminePermissionToAutomateTarget`: a prompt it issued
+would mint the grant for its own identity. Rust has no browser verbs yet, so the `executed` leg is
+reserved in its vocabulary and nothing produces it; the sticky executed-leg denial below arrives
+with those verbs.
+
 The Swift daemon sends Safari and Google Chrome events directly through
 `NSAppleScript.executeAndReturnError`; it does not launch `osascript`. Authorization is split by who
 is asking. Agent-facing verbs call `AEDeterminePermissionToAutomateTarget` with
@@ -1667,3 +1676,119 @@ the granting-time code requirement, upgrade persistence is meaningful only when 
 use the same stable bundle identifier and designated requirement; ad-hoc signatures cannot establish
 that claim. The Rust macOS backend must preserve this attribution model when it adopts browser
 operations.
+
+## macOS daemon and menu shell contract (shell-v1)
+
+The macOS product is being split into two processes. The daemon is `rust/axon-mac`, the outer
+`Axon.app`'s main executable and the only Axon process macOS grants anything to. The menu shell is
+`Axon Menu.app` (`Sources/AxonMenuApp`), nested at `Axon.app/Contents/Library/Applications`,
+unsigned for any entitlement and holding no TCC row. The shell links only `AxonClient`, the
+privacy-free half of the Swift code (socket client, health and contract models, bundle and launchd
+plumbing, the updater). Nothing that calls a privacy-gated API is reachable from it, which the
+package graph enforces and `Tests/AxonClientTests/PrivacyBoundaryTests.swift` checks by scanning
+the shell's sources for privileged imports, symbols, and protected-folder paths. Everything the
+shell shows or does that needs a grant is a request the daemon carries out under its own identity.
+
+The shell exists as a bench-proven product in `Package.swift` while `AxonDaemonApp` remains the
+shipping app. Packaging the shell, deleting `AxonDaemonApp`, and registering both jobs as one
+install transaction belong to the cutover's packaging step.
+
+### Versioning
+
+The daemon publishes `shellContract` in its `health` answer (`SHELL_CONTRACT_VERSION` in
+`rust/axon-core/src/health.rs`, `ShellContract.version` in `Sources/AxonClient/ShellContract.swift`).
+This is shell-v1. A shell that reads a missing or different value shows "Incompatible daemon at
+<path>" and disables everything but Open .axn, updates, and Quit. That includes the Swift daemon,
+which publishes no `shellContract`. A change to any method, shape, or error below is a new contract
+version.
+
+### Methods
+
+Transport is the ordinary newline-delimited JSON-RPC socket at `AXON_SOCKET_PATH`. Every shell call
+runs off the main thread. A call that times out leaves the shell showing the last answer it had,
+marked stale, and the shell never falls back to doing the work itself.
+
+| Method | Params | Result | Shell timeout | Answered on |
+| --- | --- | --- | --- | --- |
+| `health` | none | `DaemonReport` with `provenance` and `shellContract` | 2 s, polled every 2 s | connection thread |
+| `recording.status` | none | `{recording, sessionId?, scope?, destination?}` | 2 s, polled every 2 s | backend worker |
+| `recording.start` | `{scope}`, either `{scope:"application", app:{name, bundleIdentifier?}}` or `{scope:"allApplications"}` | as `recording.status` | 30 s | backend worker |
+| `recording.stop` | none | `{sessionId, destination, script, actionCount}`, `destination` `null` when none | 30 s | backend worker |
+| `permit` | none | `{accessibility: "trusted"\|"denied", prompted: true}` | 30 s | connection thread |
+| `automation.status` | none | `{need: "none"\|"request"\|"explain", browsers:[{app, bundleIdentifier, running, status?, leg?, detail?}]}` | 2 s, when the menu opens | connection thread |
+| `automation.request` | none | `{need, outcomes:[{app, bundleIdentifier, granted, detail?}]}` | 300 s | connection thread |
+
+`recording.status` polling is also how the shell picks up a recording the editor started with
+`editor.recordFromHere`, and how a restarted shell recovers the state. The shell writes a stopped
+recording to `~/Library/Application Support/Axon/Recordings` and opens the editor in insert mode
+when the result carries a destination, review mode otherwise. That folder is outside the Files and
+Folders protections, so writing there costs the shell no grant, and unlike `$TMPDIR` it is not
+purged. A recording scope carries no pid, so the picker lists each application once.
+
+`permit` calls `AXIsProcessTrustedWithOptions` with the prompt option, discards its return value
+(the per-process verdict, frozen at launch), and reports what `health` would report, read through
+the same behavioural check. `permit` and `health` therefore cannot disagree.
+
+`automation.status` reads the daemon's per-process answer ledger and runs a non-prompting
+determination only for a running browser it holds no answer for. Need is the strongest over running
+browsers: explain, then request, then none. A browser that is not running reports no status unless
+an answer is held, because macOS resolves a grant only for a running target. It is asked only when
+a person opens the menu, so no determination happens earlier than their own use of Axon.
+`automation.request` runs a checked determination, then a prompting one only when the checked
+answer is "would require consent", for each running browser, and returns the need that remains.
+
+The three permission methods are answered on the connection thread, beside `health`, so a replay
+holding the serialized backend worker cannot stall the menu, and a consent dialog that blocks for
+minutes holds only its own connection. The ledger has its own lock and is never held across a
+determination. One consent request runs at a time.
+
+### Errors the shell renders
+
+| Error | Meaning | Shell behaviour |
+| --- | --- | --- |
+| `-32004`, `data.kind: capability-unavailable`, `data.code: accessibility-denied` | `recording.start` refused: the daemon lacks Accessibility | alert offering Request Accessibility, which calls `permit` |
+| `-32005`, `data.reason: recording-active` | a recording is already running (perhaps from the editor) | alert, then re-poll |
+| `-32005`, `data.reason: recording-inactive` | `recording.stop` with nothing running | alert |
+| `-32005`, `data.reason: consent-in-progress` | a consent dialog is already waiting on a person | alert |
+| socket absent | no daemon | "Axon daemon not running (<socket>)"; actions disabled |
+
+All of these shapes, both start requests, and every result are pinned in `schema/fixtures/shell`.
+Each fixture is produced by the code path the daemon answers with
+(`rust/axon-core/tests/shell_contract.rs`, and in `axon-mac` for the accessibility refusal and the
+consent service), and decoded and re-encoded by the shell's models
+(`Tests/AxonClientTests/ShellContractConformanceTests.swift`).
+
+### The shell's one process-spawning dependency
+
+To update, and for Use This Copy, the shell arms the one-shot `dev.axon.updater` job with exactly
+`<enclosing Axon.app>/Contents/Resources/bin/axon daemon install`. That is a path and two words, with
+no flag or behaviour only the Swift CLI has, so a Rust CLI can later stand at that path without the
+shell changing. Opening the editor with `/usr/bin/open -a` is a Launch Services handoff, not a
+dependency on any Axon binary.
+
+The updater stays in the shell because it needs no grant. It anchors a downloaded bundle to the
+running code's Team ID and to the outer bundle's fixed identifier, `com.bleugreen.axon`, never to
+the shell's own identifier (`ReleaseInstaller.updateRequirement`). It replaces the enclosing
+`Axon.app`, so install-layout detection sees the real versioned or fixed-location parent. The
+generated Homebrew cask re-registers nothing on upgrade, so after `brew upgrade` the shell arms the
+same finisher. Previously it relaunched with `open -b com.bleugreen.axon`, which after the split
+would start the daemon executable rather than the menu.
+
+### Trust model and launchd topology
+
+There is one TCC identity, the outer bundle, whose main executable is the daemon. The shell is a
+separate nested application with no entitlements, no `NSAppleEventsUsageDescription`, and no
+document types. It is not in `Contents/MacOS`, where a second executable becomes a TCC subject keyed
+by its path. Each process is its own launchd job and its own responsible process. Neither spawns
+the other, so neither inherits the other's attribution.
+
+| Job | Program | KeepAlive | Notes |
+| --- | --- | --- | --- |
+| `dev.axon.daemon` | `Axon.app/Contents/MacOS/Axon` | `true` | unchanged |
+| `dev.axon.menu` | `Axon.app/Contents/Library/Applications/Axon Menu.app/Contents/MacOS/AxonMenu` | `{SuccessfulExit: false}` | `LaunchAgentConfiguration.menu`; Aqua, Interactive, `AXON_SOCKET_PATH`, logs at `~/Library/Logs/Axon/menu.{out,err}.log` |
+| `dev.axon.updater` | the bundle CLI, `daemon install` | `false` | armed by the shell |
+
+Quit Axon Menu exits 0 and launchd leaves the menu stopped. A crash brings it back. There is
+deliberately no item that stops the daemon; `axon shutdown` is that control. The bench staging of
+this topology is `scripts/stage-macos-shell-bench`, and its evidence is in
+`scripts/macos-toolkit-acceptance/live/axn249/`.
