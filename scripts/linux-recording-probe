@@ -1,41 +1,52 @@
 #!/usr/bin/env bash
 # A real record -> stop -> run -> save -> replay round trip through the Linux daemon, on X11.
 #
-# WHY THIS IS A SCRIPT AND NOT A WORKFLOW STEP. Recording on Linux needs an X11 desktop with
-# applications on the accessibility bus. The project's live.yml Linux runner is bglab-ub, a GNOME
-# Wayland session, which can only ever prove the refusal -- and does, in the "Refuse global input
-# honestly under Wayland" step. The desktop that can prove the round trip is fedora (Xfce/X11,
-# toolkit accessibility on, Chromium on the bus), which is not a live.yml runner. So this lane is
-# relayed: someone with the machine runs this script and posts its output on the issue.
+#   ./scripts/linux-recording-probe [--daemon path/to/axon-linux] [--target gtk3|chromium]
 #
-#   ./scripts/linux-recording-probe [--daemon path/to/axon-linux]
+# Recording on Linux needs an X11 desktop with applications on the accessibility bus. This is the
+# recording step of live.yml's `Linux X11 live loop` on bginf-sp2 (GNOME on Xorg), which runs it
+# with `--target gtk3`. It also runs by hand on any other X11 desktop, which is how it first ran on
+# bginf-halo (Fedora 43, Xfce, Chromium) before that lane existed.
 #
-# The bench machine is bginf-halo (Fedora 43, Xfce on X11, lightdm autologin as `dev`), with
-# xdotool, xdpyinfo and Chromium (`chromium-browser`) installed; its `:0` advertises RECORD. Two
-# things about it are worth knowing before a run:
+# Two targets, because the two toolkits record the same flow differently and both are worth being
+# able to prove:
 #
-# - The Xfce screensaver will take the foreground mid-probe and the clicks are then recorded,
-#   correctly, against `xfce4-screensaver-dialog`. This probe refuses to post input unless its own
-#   window is frontmost, and the fix is the desktop's, not the probe's:
-#     xfconf-query -c xfce4-screensaver -p /saver/enabled -s false; xset s off -dpms
-# - The daemon names Chromium's AT-SPI application `Chromium`, not the page title. Set
-#   AXON_PROBE_APP if another browser or build names itself differently.
+# - gtk3 (the default): scripts/linux-probe-window, a GTK 3 window with a button and an entry.
+#   Needs python3-gi with GTK 3 introspection. A GTK 3 entry exposes EditableText, so the typed
+#   burst is recorded as a `type` (setValue) step. GTK 3 does not act on window-targeted clicks, so
+#   every click in this probe -- direct or replayed -- is the daemon's foreground XTest pointer.
+# - chromium: a local page in a Chromium-family browser. Chromium inputs expose Text but not
+#   EditableText, so the burst has to be recorded as keystrokes; its clicks travel the background
+#   pixel rung. The daemon names the application `Chromium`; set AXON_PROBE_APP if a build names
+#   itself differently.
 #
-# It builds the daemon if none is given, brings up its own browser page, and cleans up after itself.
+# GTK 4 is not offered: it reports zeroed AT-SPI extents on X11, so element-at-point cannot enrich
+# a click on it and every recorded click would fall back to a point.
+#
+# The probe starts its own daemon from the given binary (building one if none is given) and refuses
+# to go on unless that daemon is the one serving the socket. It brings up its own target window and
+# cleans up after itself.
 #
 # THE ONE THING THAT MUST NOT BE SIMPLIFIED. The input being recorded is posted by xdotool, a
 # separate process, and never by the daemon's own click and keyboard tools. The daemon excludes its
 # own synthetic input from what it records -- otherwise every action an agent took during a
 # recording would come back as the user's -- so a probe that drove the daemon's own tools would
 # record nothing and look exactly like a broken observer. If xdotool is missing, this refuses to
-# run rather than falling back.
+# run rather than falling back. The daemon's own delivery is exercised too, at the end, where the
+# claim is the opposite one: that it is kept out.
+#
+# A screensaver or lock screen that takes the foreground mid-probe would have the clicks recorded,
+# correctly, against it. The probe refuses to post input unless its own window is frontmost; the
+# live lane wakes, unlocks, and idle-inhibits the session before this runs.
 
 set -euo pipefail
 
 daemon=""
+target=gtk3
 while [ $# -gt 0 ]; do
   case "$1" in
     --daemon) daemon="$2"; shift 2 ;;
+    --target) target="$2"; shift 2 ;;
     -h|--help) sed -n '/^set -euo/q;2,$p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -43,10 +54,24 @@ done
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 ask="$root/scripts/axon-socket-request"
-app_query="${AXON_PROBE_APP:-Chromium}"
 # Chromium publishes an HTML <button> as `button` on this backend; GTK names the same thing
 # `push button`. Either is the element this probe is looking for.
 button_roles='["button","push button"]'
+case "$target" in
+  gtk3)
+    app_query="${AXON_PROBE_APP:-axon-probe-window}"
+    window_title='Axon Probe Window'
+    entry_roles='["text"]'
+    burst_tool=type
+    ;;
+  chromium)
+    app_query="${AXON_PROBE_APP:-Chromium}"
+    window_title='Axon Recording Probe'
+    entry_roles='["entry"]'
+    burst_tool=keyboard
+    ;;
+  *) echo "unknown target: $target (gtk3 or chromium)" >&2; exit 2 ;;
+esac
 
 fail() { echo "FAILED: $*" >&2; exit 1; }
 note() { printf '\n=== %s\n' "$*"; }
@@ -64,13 +89,22 @@ if [ -z "$daemon" ]; then
 fi
 [ -x "$daemon" ] || fail "no daemon at $daemon"
 
-# A page with two elements worth recording against: something to click and something to type into.
-# A local file rather than a network page, so the probe does not depend on anything being reachable.
-#
 # Kept when the probe fails, because the daemon log in it is the one diagnostic a failed run leaves.
 scratch="$(mktemp -d /tmp/axon-probe.XXXXXX)"
-page="$scratch/recording-probe.html"
-cat > "$page" <<'HTML'
+
+case "$target" in
+  gtk3)
+    python3 -c 'import gi; gi.require_version("Gtk", "3.0")' 2>/dev/null \
+      || fail "python3-gi with GTK 3 introspection (gir1.2-gtk-3.0) is required for the gtk3 target"
+    python3 "$root/scripts/linux-probe-window" >"$scratch/window.log" 2>&1 &
+    target_pid=$!
+    ;;
+  chromium)
+    # A page with two elements worth recording against: something to click and something to type
+    # into. A local file rather than a network page, so the probe does not depend on anything being
+    # reachable.
+    page="$scratch/recording-probe.html"
+    cat > "$page" <<'HTML'
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Axon Recording Probe</title></head>
 <body style="font-family: sans-serif; padding: 40px">
@@ -80,21 +114,20 @@ cat > "$page" <<'HTML'
   <input id="note" aria-label="Recording note" style="font-size: 20px; width: 320px">
 </body></html>
 HTML
-
-browser=""
-for candidate in chromium chromium-browser google-chrome; do
-  if command -v "$candidate" >/dev/null 2>&1; then browser="$candidate"; break; fi
-done
-[ -n "$browser" ] || fail "no Chromium-family browser found; GTK4 reports zeroed AT-SPI extents on X11, so this probe wants Chromium or a GTK3 application"
-
-# `TMPDIR=/tmp` on the browser itself, not just a short profile path. Chromium creates its singleton
-# socket under its own $TMPDIR and links it from the profile, and under an agent executor $TMPDIR is
-# long enough to exceed the Unix socket path limit: the browser dies at launch with
-# `process_singleton_posix.cc: Socket path too long`.
-profile="$scratch/profile"
-TMPDIR=/tmp "$browser" --user-data-dir="$profile" --no-first-run --no-default-browser-check \
-  --force-renderer-accessibility --new-window "file://$page" >/dev/null 2>&1 &
-browser_pid=$!
+    browser=""
+    for candidate in chromium chromium-browser google-chrome; do
+      if command -v "$candidate" >/dev/null 2>&1; then browser="$candidate"; break; fi
+    done
+    [ -n "$browser" ] || fail "no Chromium-family browser found"
+    # `TMPDIR=/tmp` on the browser itself, not just a short profile path. Chromium creates its
+    # singleton socket under its own $TMPDIR and links it from the profile, and under an agent
+    # executor $TMPDIR is long enough to exceed the Unix socket path limit: the browser dies at
+    # launch with `process_singleton_posix.cc: Socket path too long`.
+    TMPDIR=/tmp "$browser" --user-data-dir="$scratch/profile" --no-first-run --no-default-browser-check \
+      --force-renderer-accessibility --new-window "file://$page" >/dev/null 2>&1 &
+    target_pid=$!
+    ;;
+esac
 
 log="$scratch/daemon.log"
 "$daemon" serve >"$log" 2>&1 &
@@ -110,10 +143,10 @@ cleanup() {
   kill -9 "$daemon_pid" >/dev/null 2>&1 || true
   # Chromium goes on writing its profile for a moment after it is told to stop, and its helper
   # processes outlive it briefly, so removing the scratch directory straight away races them and
-  # fails with "Directory not empty". Wait for the browser, then retry the removal a few times.
-  kill "$browser_pid" >/dev/null 2>&1 || true
+  # fails with "Directory not empty". Wait for the target, then retry the removal a few times.
+  kill "$target_pid" >/dev/null 2>&1 || true
   for _ in $(seq 1 40); do
-    kill -0 "$browser_pid" 2>/dev/null || break
+    kill -0 "$target_pid" 2>/dev/null || break
     sleep 0.25
   done
   if [ "$status" -eq 0 ]; then
@@ -121,7 +154,7 @@ cleanup() {
       rm -rf "$scratch" 2>/dev/null && break
       sleep 0.5
     done
-    [ -e "$scratch" ] && echo "note: could not remove $scratch; the browser was still writing to it" >&2
+    [ -e "$scratch" ] && echo "note: could not remove $scratch; the target was still writing to it" >&2
   else
     echo "kept $scratch for diagnosis; the daemon log is $log" >&2
   fi
@@ -142,16 +175,10 @@ answered() {
     || { printf '%s\n' "$response" | jq '.' 2>/dev/null || printf '%s\n' "$response"; fail "$what"; }
 }
 
-# `serve` returns to the shell before the daemon is answering, and `status --json` asked in that
-# window reports `daemon-not-running` -- while still listing capabilities, so waiting for the array
-# to exist proves nothing. Wait on the daemon saying it is ready.
-note "waiting for the daemon"
-for _ in $(seq 1 60); do
-  "$daemon" status --json 2>/dev/null | jq -e '.daemon.ready == true' >/dev/null 2>&1 && break
-  kill -0 "$daemon_pid" 2>/dev/null || { cat "$log"; fail "the daemon exited during startup"; }
-  sleep 0.5
-done
-"$daemon" status --json | jq -e '.daemon.ready == true' >/dev/null || { cat "$log"; fail "the daemon never reported ready"; }
+# Every request below is a client of the socket, so this is what makes the run evidence about the
+# daemon this probe started rather than about whichever one is listening.
+note "waiting for the daemon under test"
+"$root/scripts/assert-daemon-under-test" "$daemon" "$daemon_pid" "$log" || fail "the daemon under test is not the one serving the socket"
 
 note "the session as the daemon reports it"
 "$daemon" status --json | jq '{
@@ -163,23 +190,23 @@ note "the session as the daemon reports it"
   | jq -e '.capabilities[] | select(.capability == "observeGlobalInput") | .usable' >/dev/null \
   || fail "this session reports it cannot observe global input; the reason is above"
 
-note "waiting for the probe page on the accessibility bus"
+note "waiting for the $target target on the accessibility bus"
 app=""
 for _ in $(seq 1 60); do
-  # `screenshot: false` because the reply is otherwise around 70 KB per poll, for nothing this
+  # `screenshot: false` because the reply is otherwise tens of kilobytes per poll, for nothing this
   # probe reads.
   look="$(mcp "$(jq -cn --arg app "$app_query" '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{"app":$app,"frames":true,"screenshot":false}}}')")"
-  if printf '%s' "$look" | jq -e --argjson roles "$button_roles" '
+  if printf '%s' "$look" | jq -e --argjson roles "$button_roles" --argjson entries "$entry_roles" '
     .result.isError == false
     and ([.result.structuredContent.app.windows[]?.root | .. | objects | select((.role | IN($roles[])) and (.label? // .name?) == "Press me")] | length == 1)
-    and ([.result.structuredContent.app.windows[]?.root | .. | objects | select(.role == "entry" and (.label? // "") == "Recording note")] | length == 1)
+    and ([.result.structuredContent.app.windows[]?.root | .. | objects | select((.role | IN($entries[])) and (.label? // "") == "Recording note")] | length == 1)
   ' >/dev/null 2>&1; then
     app="$(printf '%s' "$look" | jq -r '.result.structuredContent.app.name')"
     break
   fi
   sleep 0.5
 done
-[ -n "$app" ] || { printf '%s\n' "$look" | jq '.' | head -60; fail "the probe page never published a button and an entry; --force-renderer-accessibility and the toolkit-accessibility setting are the usual causes"; }
+[ -n "$app" ] || { printf '%s\n' "$look" | jq '.' | head -60; fail "the target never published a button and an entry; the toolkit-accessibility setting (and --force-renderer-accessibility for Chromium) are the usual causes"; }
 echo "the daemon calls this application: $app"
 
 # The centres of the two elements, in screen coordinates. `look` strips frames unless asked, which
@@ -191,20 +218,22 @@ centre() {
     | if . == null then "" else "\(.x + .width / 2 | floor) \(.y + .height / 2 | floor)" end'
 }
 button_at="$(centre "$button_roles" 'Press me')"
-entry_at="$(centre '["entry"]' 'Recording note')"
-[ -n "$button_at" ] && [ -n "$entry_at" ] || fail "the page published no frames to aim at; GTK4 on X11 reports zeroed extents, which is why this probe targets Chromium"
+entry_at="$(centre "$entry_roles" 'Recording note')"
+[ -n "$button_at" ] && [ -n "$entry_at" ] || fail "the target published no frames to aim at"
 
 # Input posted while something else holds the foreground is recorded, correctly, against that
 # something else -- a screensaver dialog, a notification, another window -- and would read as a
 # backend that misattributes clicks. So the probe window is raised and then confirmed frontmost
 # before every recording, rather than assumed to be.
 probe_window_frontmost() {
-  xdotool search --name 'Axon Recording Probe' windowactivate --sync >/dev/null 2>&1 || true
+  # Bounded: `--sync` waits for the window manager to comply and never gives up on its own. The
+  # check below is what decides, either way.
+  timeout 10 xdotool search --name "$window_title" windowactivate --sync >/dev/null 2>&1 || true
   local active
   active="$(xdotool getactivewindow getwindowname 2>/dev/null || echo '<none>')"
   case "$active" in
-    *'Axon Recording Probe'*) ;;
-    *) fail "the frontmost window is '$active', not the probe page; a screensaver or another window has the foreground (see this script's header)" ;;
+    *"$window_title"*) ;;
+    *) fail "the frontmost window is '$active', not the probe's; a screensaver or another window has the foreground" ;;
   esac
 }
 
@@ -214,6 +243,12 @@ clear_entry() {
   xdotool mousemove ${entry_at%% *} ${entry_at##* } click 1
   xdotool key --clearmodifiers ctrl+a BackSpace
   sleep 0.3
+}
+
+# The tools of a recorded or saved script, in order, one line. serde_yaml writes each action's keys
+# at two spaces under its `- id:` line, which is the only place a `  tool:` line can occur.
+tools_of() {
+  printf '%s\n' "$1" | awk '/^  tool: / { printf "%s%s", sep, $2; sep = " " } END { print "" }'
 }
 
 note "recording, with the input coming from xdotool rather than from the daemon"
@@ -248,14 +283,25 @@ for scope in allApplications application; do
   [ "$count" -eq 3 ] || fail "scope $scope recorded $count actions; two clicks and one typed burst were posted"
 
   script="$(printf '%s' "$stopped" | jq -r '.result.script')"
-  printf '%s' "$script" | grep -q 'locator' || fail "scope $scope recorded no semantic target, only points"
+  # The exact sequence, not merely the right count: two clicks and then the burst, authored as the
+  # step this toolkit can replay. A GTK 3 entry is EditableText, so its burst is a setValue `type`;
+  # Chromium's inputs are not, and a `type` step into one is refused on replay as "target is not
+  # editable", so its burst has to be keystrokes.
+  recorded_tools="$(tools_of "$script")"
+  [ "$recorded_tools" = "click click $burst_tool" ] \
+    || fail "scope $scope recorded '$recorded_tools', not 'click click $burst_tool'"
+  # AT-SPI enrichment: each click carries the element it landed on, found by element-at-point, by
+  # its role and its own label -- not a coordinate.
   printf '%s' "$script" | grep -q 'point fallback' && fail "scope $scope fell back to a point target for at least one action"
+  printf '%s' "$script" | grep -Eq '^ +exact: Press me$' || fail "scope $scope recorded no click on the 'Press me' element"
+  printf '%s' "$script" | grep -Eq '^ +exact: Recording note$' || fail "scope $scope recorded no action on the 'Recording note' element"
+  [ "$(printf '%s\n' "$script" | grep -Ec '^    locator:$')" = "$(printf '%s\n' "$script" | grep -Ec '^  target:$')" ] \
+    || fail "scope $scope recorded a target without a semantic locator"
+  [ "$(printf '%s\n' "$script" | grep -Ec '^      role: ')" = "$(printf '%s\n' "$script" | grep -Ec '^    locator:$')" ] \
+    || fail "scope $scope recorded a locator without the element's role"
+  printf '%s' "$script" | grep -Eq '^ +(value|text): axon recorded this$' || fail "scope $scope did not record exactly the typed text"
   printf '%s' "$script" | grep -q 'was not recorded' && fail "scope $scope reports an event the observer could not record"
   printf '%s' "$script" | grep -q 'axon recorded thisaxon' && fail "scope $scope recorded a doubled value; the entry was not cleared"
-  # Chromium's inputs expose AT-SPI Text but not EditableText: the burst has to be keystrokes, since
-  # a `type` (setValue) step into one is refused on replay as "target is not editable".
-  printf '%s' "$script" | grep -q 'tool: type' && fail "scope $scope authored a setValue step into a field this backend cannot write"
-  printf '%s' "$script" | grep -q 'tool: keyboard' || fail "scope $scope recorded no keyboard step for the typed burst"
   printf '%s' "$script" | grep -q 'dropped' && fail "scope $scope reports that the observer dropped events"
   # axn/213's shape: identity only. A recorded locator that carried the value or the frame would be
   # describing the moment rather than the element.
@@ -283,25 +329,25 @@ run_artifact() {
 
 # What each traced action did, in the shape the run reports it.
 traced() {
-  printf '%s' "$1" | jq '[.result.structuredContent.batch.trace[]? | {index, actionId, tool, success, resolution: .targetResolution.status, dispatchSuccess: .result.dispatchSuccess, error}]'
+  printf '%s' "$1" | jq '[.result.structuredContent.batch.trace[]? | {index, actionId, tool, success, resolution: .targetResolution.status, delivery: .result.delivery, dispatchSuccess: .result.dispatchSuccess, refusal: .result.refusal.reason, error}]'
 }
 
 # A dry run resolves nothing and dispatches nothing, so all it can say is that every action was
-# accepted. Resolution and dispatch are asserted on the live run.
+# accepted, in order. Resolution and dispatch are asserted on the live run.
 dry="$(run_artifact "$scratch/recorded.axn" true)"
 answered "the dry run of the recorded artifact failed" "$dry"
 traced "$dry"
-printf '%s' "$dry" | jq -e '
-  (.result.structuredContent.batch.trace | length) == 3
+printf '%s' "$dry" | jq -e --arg burst "$burst_tool" '
+  ([.result.structuredContent.batch.trace[].tool] == ["click", "click", $burst])
   and all(.result.structuredContent.batch.trace[]; .success == true)
-' >/dev/null || fail "the dry run did not accept all three recorded actions"
+' >/dev/null || fail "the dry run did not accept the three recorded actions in order"
 
 # What the entry holds now, read back through the daemon rather than trusted from a dispatch result:
-# a keystroke Chromium silently discards still dispatches successfully.
+# a keystroke a toolkit silently discards still dispatches successfully.
 entry_value() {
   mcp "$(jq -cn --arg app "$app" '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{"app":$app,"screenshot":false}}}')" \
-    | jq -r '[.result.structuredContent.app.windows[]?.root | .. | objects
-              | select(.role == "entry" and (.label? // "") == "Recording note") | .value // ""][0] // ""'
+    | jq -r --argjson entries "$entry_roles" '[.result.structuredContent.app.windows[]?.root | .. | objects
+              | select((.role | IN($entries[])) and (.label? // "") == "Recording note") | .value // ""][0] // ""'
 }
 
 expect_entry() {
@@ -329,7 +375,8 @@ foreground_copy() {
 # `backgroundOnly` policy is reported as exactly that and then retried once with foreground delivery
 # permitted -- which is the daemon's own delivery during replay, so the self-delivery exclusion has
 # nothing to say about it -- so the evidence records both what background replay does and whether
-# the steps themselves are sound.
+# the steps themselves are sound. A GTK 3 click always takes the retry: GTK 3 does not act on a
+# window-targeted click, so the only rung that can deliver one is the foreground.
 replay_live() {
   local artifact="$1" label="$2"
   probe_window_frontmost
@@ -339,6 +386,11 @@ replay_live() {
   traced "$replayed"
   if printf '%s' "$replayed" | jq -e 'any(.result.structuredContent.batch.trace[];
         ((.result.refusal // null) != null) or ((.error // "") | test("backgroundOnly|refus"; "i")))' >/dev/null; then
+    # A refusal is only acceptable as the typed one this retry answers. Anything else is a
+    # replay failure wearing the retry's clothes.
+    printf '%s' "$replayed" | jq -e 'all(.result.structuredContent.batch.trace[];
+        (.result.refusal // null) == null or .result.refusal.reason == "foregroundNotPermitted")' >/dev/null \
+      || fail "the $label was refused for a reason foreground delivery would not answer"
     echo "the $label: an action was refused under the recorded backgroundOnly policy (above); replaying it once more with foregroundPermitted on every action"
     foreground_copy "$artifact" "$artifact.foreground"
     probe_window_frontmost
@@ -359,8 +411,8 @@ replay_live() {
 }
 
 replay_live "$scratch/recorded.axn" "recorded artifact"
-printf '%s' "$replayed" | jq -e '(.result.structuredContent.batch.trace | length) == 3' >/dev/null \
-  || fail "the recorded artifact did not replay all three actions"
+printf '%s' "$replayed" | jq -e --arg burst "$burst_tool" '[.result.structuredContent.batch.trace[].tool] == ["click", "click", $burst]' >/dev/null \
+  || fail "the recorded artifact did not replay its three actions in order"
 
 # One tool call, with its arguments as a JSON object.
 call() {
@@ -372,7 +424,7 @@ call() {
 dispatched() {
   local what="$1" response="$2"
   answered "$what failed" "$response"
-  printf '%s' "$response" | jq -c --arg what "$what" '{($what): {dispatchSuccess: .result.structuredContent.dispatchSuccess, mechanism: .result.structuredContent.dispatch.mechanism}}'
+  printf '%s' "$response" | jq -c --arg what "$what" '{($what): {dispatchSuccess: .result.structuredContent.dispatchSuccess, delivery: .result.structuredContent.delivery, mechanism: .result.structuredContent.dispatch.mechanism, refusal: .result.structuredContent.refusal}}'
   printf '%s' "$response" | jq -e '.result.structuredContent.dispatchSuccess == true' >/dev/null \
     || fail "$what did not dispatch"
 }
@@ -392,16 +444,18 @@ note "saving live history and replaying that too"
 # nothing, so the replays above leave nothing to save. The same flow is performed here as three
 # direct calls, by semantic name the way an agent would, and that is what is saved.
 button_name="$(semantic_name "$button_roles" 'Press me')"
-entry_name="$(semantic_name '["entry"]' 'Recording note')"
+entry_name="$(semantic_name "$entry_roles" 'Recording note')"
 [ -n "$button_name" ] && [ -n "$entry_name" ] || fail "look published no semantic name for the button or the entry"
 echo "semantic names: $button_name, $entry_name"
 
 probe_window_frontmost
 clear_entry
-dispatched "a direct click on the button" "$(call click "$(jq -cn --arg app "$app" --arg name "$button_name" '{target:{app:$app,name:$name}}')")"
-dispatched "a direct click on the entry" "$(call click "$(jq -cn --arg app "$app" --arg name "$entry_name" '{target:{app:$app,name:$name}}')")"
-# Foreground permitted because Chromium refuses background keystrokes (P-L-INPUT), which the
-# recorded replay above has already shown.
+# Foreground permitted on every call, because each one needs it on at least one target: GTK 3 does
+# not act on a background click, and Chromium refuses background keystrokes (P-L-INPUT), which the
+# recorded replay above has already shown. A target whose background rung does work still takes it,
+# since the ladder only escalates past a rung that is unavailable.
+dispatched "a direct click on the button" "$(call click "$(jq -cn --arg app "$app" --arg name "$button_name" '{target:{app:$app,name:$name},deliveryPolicy:"foregroundPermitted"}')")"
+dispatched "a direct click on the entry" "$(call click "$(jq -cn --arg app "$app" --arg name "$entry_name" '{target:{app:$app,name:$name},deliveryPolicy:"foregroundPermitted"}')")"
 dispatched "direct typing into the entry" "$(call keyboard "$(jq -cn --arg app "$app" '{app:$app,text:"axon recorded this",deliveryPolicy:"foregroundPermitted"}')")"
 expect_entry 'axon recorded this' "the direct calls did not type into the entry"
 
@@ -440,33 +494,52 @@ record_around() {
   own_mechanism="$(printf '%s' "$response" | jq -r '.result.structuredContent.dispatch.mechanism // ""')"
 }
 
-# (a) A semantic click. On this backend it is delivered as a window-targeted XSendEvent, which never
-# enters RECORD's device stream at all, so this shows the recording stays clean without exercising
-# the self-delivery ledger.
-record_around "the daemon's own semantic click" click "$(jq -cn --arg app "$app" --arg name "$button_name" '{target:{app:$app,name:$name}}')"
+# (a) The daemon's own click. On GTK 3 it is the foreground XTest pointer, which RECORD does see,
+# so only the self-delivery ledger keeps it out. On Chromium it is a window-targeted XSendEvent,
+# which never enters RECORD's device stream at all, so there it shows the recording stays clean
+# without exercising the ledger.
+record_around "the daemon's own click" click "$(jq -cn --arg app "$app" --arg name "$button_name" '{target:{app:$app,name:$name},deliveryPolicy:"foregroundPermitted"}')"
 echo "delivered by: $own_mechanism"
 printf '%s' "$own" | jq -e '(.result.actionCount // 0) == 0' >/dev/null \
   || fail "the daemon recorded its own click as the user's"
 
-# (b) The ledger itself. Foreground keystrokes go through XTEST, which RECORD does see; only the
-# ledger keeps them out. First on their own, then interleaved with the user's typing in one
-# session, which is what tells a ledger that excludes the daemon's input from one that excludes
-# everything.
-record_around "the daemon's own keystrokes" keyboard "$(jq -cn --arg app "$app" '{app:$app,text:"daemon typed this",deliveryPolicy:"foregroundPermitted"}')"
+# (b) The ledger itself, for keystrokes. Addressed to the foreground rather than to the application,
+# because an aimed keystroke into GTK 3 travels the background pixel rung -- an XSendEvent RECORD
+# never sees -- and would prove nothing about the ledger. Unaimed keystrokes always go through
+# XTEST, into the window confirmed frontmost above. First on their own, then interleaved with the
+# user's typing in one session, which is what tells a ledger that excludes the daemon's input from
+# one that excludes everything.
+record_around "the daemon's own keystrokes" keyboard '{"text":"daemon typed this","deliveryPolicy":"foregroundPermitted"}'
 [ "$own_mechanism" = "XTest keyboard" ] \
   || fail "the daemon's keystrokes were delivered by '$own_mechanism', not XTest, so this trial did not exercise the self-delivery ledger"
 printf '%s' "$own" | jq -e '(.result.actionCount // 0) == 0' >/dev/null \
   || fail "the daemon recorded its own XTest keystrokes as the user's"
 
-record_around "the daemon's keystrokes beside the user's" keyboard "$(jq -cn --arg app "$app" '{app:$app,text:"daemon typed this",deliveryPolicy:"foregroundPermitted"}')" 'user typed this'
+record_around "the daemon's keystrokes beside the user's" keyboard '{"text":"daemon typed this","deliveryPolicy":"foregroundPermitted"}' 'user typed this'
 [ "$own_mechanism" = "XTest keyboard" ] || fail "the daemon's keystrokes were delivered by '$own_mechanism', not XTest"
 printf '%s' "$own" | jq -e '.result.actionCount == 1' >/dev/null \
   || fail "a session with the daemon's keystrokes and the user's recorded something other than exactly the user's one action"
 own_script="$(printf '%s' "$own" | jq -r '.result.script')"
-printf '%s' "$own_script" | grep -q 'tool: keyboard' || fail "the user's typing was not recorded as a keyboard step"
-printf '%s' "$own_script" | grep -q 'text: user typed this' || fail "the recorded step does not carry exactly the user's text"
-printf '%s' "$own_script" | grep -q 'daemon typed' && fail "the daemon's keystrokes leaked into the user's recorded text"
-echo "the ledger kept the daemon's XTest keystrokes out and the user's in"
+[ "$(tools_of "$own_script")" = "$burst_tool" ] || fail "the user's typing was not recorded as a $burst_tool step"
+case "$burst_tool" in
+  keyboard)
+    # A keystroke step carries the burst the observer saw, so the ledger's work is visible in it
+    # directly: the user's characters and none of the daemon's.
+    printf '%s' "$own_script" | grep -Eq '^ +text: user typed this$' || fail "the recorded step does not carry exactly the user's text"
+    printf '%s' "$own_script" | grep -q 'daemon typed' && fail "the daemon's keystrokes leaked into the user's recorded text"
+    ;;
+  type)
+    # A setValue step carries the field's complete value read when the burst ends -- the shared
+    # recorder's contract on every platform -- so it is the field's resulting state, and that
+    # state includes what the daemon typed into it earlier. The ledger's work shows instead in the
+    # count above: the daemon's burst did not become an action of its own. What is asserted here is
+    # the contract itself, against the field read back through the daemon.
+    held="$(entry_value)"
+    case "$held" in *'user typed this') ;; *) fail "the entry holds '$held', which does not end with the user's typing" ;; esac
+    printf '%s\n' "$own_script" | grep -Fxq "  value: $held" \
+      || fail "the recorded setValue does not carry the field's value '$held'"
+    ;;
+esac
+echo "the ledger kept the daemon's XTest input out and the user's in"
 
 note "PASSED"
-echo "post this output on cairn://p/axn/169 as the fedora row of the Linux recording evidence"

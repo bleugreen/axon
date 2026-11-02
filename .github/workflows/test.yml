@@ -410,11 +410,10 @@ jobs:
       # plus foreground click. `--ignored` sweeps every hermetic desktop test together.
       #
       # This runs for pull requests, unlike the live lane, and it is the only lane that proves the
-      # X11 conversations at all on a pull request. The project has two real Linux desktops and
-      # neither can stand in for it: bglab-ub is a GNOME Wayland session, which is the worst
-      # possible place to verify X11 activation and is asserted to refuse instead, and fedora is an
-      # Xfce/X11 desktop that is not a live.yml runner, so evidence from it is relayed by hand
-      # rather than gated on.
+      # X11 conversations at all on a pull request. The real Linux desktops cannot stand in for it
+      # here: bginf-sp2 (GNOME on Xorg) proves them against a real window manager in live.yml's X11
+      # loop, but live.yml runs only on `main` and by dispatch; bglab-ub is a GNOME Wayland session,
+      # asserted there to refuse instead; and bginf-halo (Xfce/X11) is not a runner at all.
       - name: Run the hermetic desktop tests
         working-directory: rust
         env:

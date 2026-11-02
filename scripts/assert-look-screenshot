@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""Asserts that a `look` answered through the MCP facade carries a real screenshot of one window.
+
+    scripts/assert-look-screenshot <look-response.json> <window-width> <window-height>
+
+The facade does not put the pixels in `structuredContent`: the screenshot travels as the one
+`image` content item, and `structuredContent.screenshot` describes it (`contentTransport`,
+`mediaType`, `width`, `height`). So "a screenshot is present" is three claims, and this checks all
+three against independent evidence:
+
+- the image item decodes as a PNG whose own header agrees with the size the daemon reported;
+- that size is the size of the application's window as the X server reports it, which the caller
+  reads with a separate client (xdotool) -- so a capture of the wrong window, or of the root, fails;
+- the decoded pixels are not nearly uniform, so a black or blank capture of the right size fails.
+
+The decode is the standard library's alone, because the live runners have no imaging package and
+the check must not depend on one. Only the layouts the daemon writes are accepted: 8-bit RGB or
+RGBA, not interlaced. A window larger than the observation ceiling is downscaled by the daemon,
+which this does not model: it is for windows under the ceiling, as a probe's window is.
+"""
+
+import base64
+import json
+import struct
+import sys
+import zlib
+
+# A rendered application window has hundreds of distinct colours (anti-aliased text alone gives
+# dozens); a blank, black, or single-fill capture has one or two.
+MINIMUM_DISTINCT_COLOURS = 16
+
+
+def fail(message: str) -> None:
+    print(f"::error::{message}")
+    sys.exit(1)
+
+
+def chunks(png: bytes):
+    position = 8
+    while position < len(png):
+        length, kind = struct.unpack(">I4s", png[position : position + 8])
+        yield kind, png[position + 8 : position + 8 + length]
+        position += 12 + length
+
+
+def distinct_colours(raw: bytes, width: int, height: int, bpp: int) -> int:
+    """Undoes the per-row PNG filters and counts the distinct pixels."""
+    stride = width * bpp
+    previous = bytearray(stride)
+    colours = set()
+    for row in range(height):
+        start = row * (stride + 1)
+        kind = raw[start]
+        line = bytearray(raw[start + 1 : start + 1 + stride])
+        for i in range(stride):
+            left = line[i - bpp] if i >= bpp else 0
+            up = previous[i]
+            up_left = previous[i - bpp] if i >= bpp else 0
+            if kind == 1:
+                line[i] = (line[i] + left) & 0xFF
+            elif kind == 2:
+                line[i] = (line[i] + up) & 0xFF
+            elif kind == 3:
+                line[i] = (line[i] + (left + up) // 2) & 0xFF
+            elif kind == 4:
+                estimate = left + up - up_left
+                distances = (abs(estimate - left), abs(estimate - up), abs(estimate - up_left))
+                if distances[0] <= distances[1] and distances[0] <= distances[2]:
+                    predictor = left
+                elif distances[1] <= distances[2]:
+                    predictor = up
+                else:
+                    predictor = up_left
+                line[i] = (line[i] + predictor) & 0xFF
+        colours.update(bytes(line[i : i + bpp]) for i in range(0, stride, bpp))
+        previous = line
+    return len(colours)
+
+
+def main() -> None:
+    if len(sys.argv) != 4:
+        sys.exit(f"usage: {sys.argv[0]} <look-response.json> <window-width> <window-height>")
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        look = json.load(handle)
+    window = [int(sys.argv[2]), int(sys.argv[3])]
+
+    result = look.get("result") or {}
+    reported = (result.get("structuredContent") or {}).get("screenshot")
+    if not reported:
+        fail("the look carries no screenshot description in structuredContent")
+    if reported.get("contentTransport") != "mcp_image" or reported.get("mediaType") != "image/png":
+        fail(f"the screenshot is described as {reported}, not a PNG carried as MCP image content")
+    images = [item for item in result.get("content", []) if item.get("type") == "image"]
+    if len(images) != 1:
+        fail(f"the look carries {len(images)} image content items, not one")
+
+    png = base64.b64decode(images[0]["data"])
+    if png[:8] != b"\x89PNG\r\n\x1a\n":
+        fail("the image content item is not a PNG")
+    header = None
+    compressed = b""
+    for kind, data in chunks(png):
+        if kind == b"IHDR":
+            header = struct.unpack(">IIBBBBB", data)
+        elif kind == b"IDAT":
+            compressed += data
+    if header is None:
+        fail("the PNG has no header chunk")
+    width, height, depth, colour_type, _, _, interlace = header
+    if depth != 8 or interlace != 0 or colour_type not in (2, 6):
+        fail(f"the PNG layout (depth {depth}, colour type {colour_type}, interlace {interlace}) is not one the daemon writes")
+    colours = distinct_colours(zlib.decompress(compressed), width, height, 4 if colour_type == 6 else 3)
+
+    print(json.dumps({
+        "reported": [reported.get("width"), reported.get("height")],
+        "png": [width, height],
+        "window": window,
+        "distinctColours": colours,
+    }))
+    if [reported.get("width"), reported.get("height")] != [width, height]:
+        fail("the size the daemon reported disagrees with the PNG it sent")
+    if [width, height] != window:
+        fail("the screenshot is not the size of the application's window as the X server reports it")
+    if colours < MINIMUM_DISTINCT_COLOURS:
+        fail(f"the screenshot has {colours} distinct colours; a rendered window has far more")
+
+
+if __name__ == "__main__":
+    main()
