@@ -247,6 +247,77 @@ pub trait NativeInput: PlatformBackend {
     fn take_activation_evidence(&mut self) -> Option<String> {
         None
     }
+
+    /// The session's modifier state as the window server holds it, read around every keyboard
+    /// dispatch. `None` from a backend that cannot read it, which reports the invariant as unknown
+    /// rather than as held.
+    fn modifier_state(&mut self) -> Option<ModifierState> {
+        None
+    }
+}
+
+/// The window server's modifier flags, in both states a later event can inherit them from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ModifierState {
+    /// `kCGEventSourceStateCombinedSessionState`.
+    pub combined_session: u64,
+    /// `kCGEventSourceStateHIDSystemState`.
+    pub hid_system: u64,
+}
+
+impl ModifierState {
+    /// The four modifiers a chord presses. The non-coalesced bit, and the numeric-pad and function
+    /// bits arrow keys carry, are not keys anyone holds, so they are not compared.
+    pub const HELD: u64 =
+        input::FLAG_SHIFT | input::FLAG_CONTROL | input::FLAG_OPTION | input::FLAG_COMMAND;
+
+    fn held(self) -> (u64, u64) {
+        (self.combined_session & Self::HELD, self.hid_system & Self::HELD)
+    }
+}
+
+/// Stamps the modifier invariant onto a keyboard result's `section` (`foreground` or
+/// `backgroundDelivery`), beside the pointer's.
+///
+/// A keyboard dispatch must leave the session's modifiers as it found them. One that does not has
+/// left a key logically held for every later keystroke on the machine, the user's included, which
+/// is why a changed state fails the dispatch rather than only being reported.
+fn stamp_modifier_readback(
+    result: &mut Value,
+    section: &str,
+    readback: Option<(Option<ModifierState>, Option<ModifierState>)>,
+) {
+    let Some(object) = result.as_object_mut() else {
+        return;
+    };
+    let restored = match readback {
+        Some((Some(before), Some(after))) => Some(before.held() == after.held()),
+        _ => None,
+    };
+    if let Some(Value::Object(evidence)) = object.get_mut(section) {
+        evidence.insert("modifiersRestored".into(), json!(restored));
+    }
+    if restored == Some(false) {
+        let (Some((Some(before), Some(after)))) = readback else {
+            unreachable!("a comparison needs both readings")
+        };
+        let problem = format!(
+            "the session's modifier state changed across the dispatch, so a modifier is still \
+             logically held: combined-session {:#x} before and {:#x} after, HID-system {:#x} \
+             before and {:#x} after",
+            before.combined_session, after.combined_session, before.hid_system, after.hid_system
+        );
+        let message = match object.get("message").and_then(Value::as_str) {
+            Some(existing) => format!("{existing}; {problem}"),
+            None => problem,
+        };
+        object.insert("message".into(), json!(message));
+        object.insert("dispatchSuccess".into(), json!(false));
+        object.insert("success".into(), json!(false));
+        if let Some(Value::Object(dispatch)) = object.get_mut("dispatch") {
+            dispatch.insert("success".into(), json!(false));
+        }
+    }
 }
 
 /// The application rung for keyboard input: keystrokes posted to one process, without activating
@@ -608,7 +679,10 @@ impl<
         intent: KeyboardIntent<'_>,
         verification: Value,
     ) -> Result<Value, JsonRpcError> {
-        let dispatch = match self.backend.dispatch_application_keyboard(process, intent) {
+        let modifiers_before = self.backend.modifier_state();
+        let dispatched = self.backend.dispatch_application_keyboard(process, intent);
+        let readback = Some((modifiers_before, self.backend.modifier_state()));
+        let dispatch = match dispatched {
             Ok(dispatch) => dispatch,
             // Revalidation failed, so nothing was posted and the pid now names something else.
             Err(BackgroundDispatchError::Stale(reason)) => return Err(rpc_error(-32003, reason)),
@@ -644,6 +718,7 @@ impl<
             );
         }
         DeliveryOutcome::dispatched(policy, DeliveryRung::Application).merge_into(object);
+        stamp_modifier_readback(&mut result, "backgroundDelivery", readback);
         Ok(result)
     }
 
@@ -973,7 +1048,9 @@ impl<
                         verification,
                     );
                 }
-                self.foreground_dispatch(
+                let mut readback = None;
+                let slot = &mut readback;
+                let mut result = self.foreground_dispatch(
                     policy,
                     &candidate,
                     process
@@ -986,12 +1063,16 @@ impl<
                     false,
                     verification,
                     move |backend| {
-                        backend
-                            .keyboard(&app, intent)
-                            .map(|_| Value::Null)
-                            .map_err(backend_error)
+                        let before = backend.modifier_state();
+                        let posted = backend.keyboard(&app, intent);
+                        *slot = Some((before, backend.modifier_state()));
+                        posted.map(|_| Value::Null).map_err(backend_error)
                     },
-                )
+                )?;
+                if result.get("delivery").is_some_and(|delivery| !delivery.is_null()) {
+                    stamp_modifier_readback(&mut result, "foreground", readback);
+                }
+                Ok(result)
             }
             "invoke" => {
                 let action = required_str(params, "name")?;
