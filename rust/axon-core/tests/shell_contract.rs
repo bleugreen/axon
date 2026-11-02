@@ -32,8 +32,8 @@ fn fixture_path(name: &str) -> PathBuf {
 }
 
 fn fixture(name: &str) -> Value {
-    let body = fs::read_to_string(fixture_path(name))
-        .unwrap_or_else(|error| panic!("{name}: {error}"));
+    let body =
+        fs::read_to_string(fixture_path(name)).unwrap_or_else(|error| panic!("{name}: {error}"));
     serde_json::from_str(&body).unwrap_or_else(|error| panic!("{name}: {error}"))
 }
 
@@ -48,9 +48,16 @@ fn pin<T: Serialize + DeserializeOwned + PartialEq + std::fmt::Debug>(name: &str
         fs::create_dir_all(fixture_path(name).parent().unwrap()).unwrap();
         fs::write(fixture_path(name), body).unwrap();
     }
-    assert_eq!(encoded, fixture(name), "{name} does not match what the daemon answers");
+    assert_eq!(
+        encoded,
+        fixture(name),
+        "{name} does not match what the daemon answers"
+    );
     let decoded: T = serde_json::from_value(fixture(name)).unwrap();
-    assert_eq!(&decoded, produced, "{name} does not decode to what was produced");
+    assert_eq!(
+        &decoded, produced,
+        "{name} does not decode to what was produced"
+    );
 }
 
 fn params(request: &str) -> Map<String, Value> {
@@ -100,7 +107,11 @@ fn the_shell_requests_are_accepted_and_produce_the_pinned_statuses() {
     ] {
         let parsed: JsonRpcRequest = serde_json::from_value(fixture(request)).unwrap();
         assert_eq!(parsed.method, "recording.start", "{request}");
-        assert_eq!(serde_json::to_value(&parsed).unwrap(), fixture(request), "{request}");
+        assert_eq!(
+            serde_json::to_value(&parsed).unwrap(),
+            fixture(request),
+            "{request}"
+        );
     }
 
     let mut owner = DaemonRecordingOwner::default();

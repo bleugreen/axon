@@ -1,0 +1,7 @@
+{
+  "code": -32005,
+  "data": {
+    "reason": "consent-in-progress"
+  },
+  "message": "a consent request is already waiting on a person"
+}

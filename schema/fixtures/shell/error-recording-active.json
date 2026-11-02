@@ -1,0 +1,7 @@
+{
+  "code": -32005,
+  "data": {
+    "reason": "recording-active"
+  },
+  "message": "a recording session is already active"
+}

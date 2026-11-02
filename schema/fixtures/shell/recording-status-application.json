@@ -1,0 +1,11 @@
+{
+  "recording": true,
+  "scope": {
+    "app": {
+      "bundleIdentifier": "com.apple.calculator",
+      "name": "Calculator"
+    },
+    "scope": "application"
+  },
+  "sessionId": "recording-0001"
+}

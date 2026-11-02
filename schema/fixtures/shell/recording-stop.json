@@ -1,0 +1,6 @@
+{
+  "actionCount": 1,
+  "destination": null,
+  "script": "version: 2\nargs: []\nactions:\n- id: a001\n  tool: keyboard\n  app: Calculator\n  text: '12'\n",
+  "sessionId": "recording-0001"
+}

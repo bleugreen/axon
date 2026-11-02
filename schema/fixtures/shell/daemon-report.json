@@ -1,0 +1,90 @@
+{
+  "capabilities": [
+    {
+      "capability": "enumerate",
+      "usable": true
+    },
+    {
+      "capability": "capture",
+      "usable": true
+    },
+    {
+      "capability": "retainedHandles",
+      "usable": true
+    },
+    {
+      "capability": "observeChanges",
+      "usable": true
+    },
+    {
+      "capability": "invoke",
+      "usable": true
+    },
+    {
+      "capability": "readValue",
+      "usable": true
+    },
+    {
+      "capability": "setValue",
+      "usable": true
+    },
+    {
+      "capability": "focus",
+      "usable": true
+    },
+    {
+      "capability": "scroll",
+      "usable": true
+    },
+    {
+      "capability": "pointerInput",
+      "usable": true
+    },
+    {
+      "capability": "keyboardInput",
+      "usable": true
+    },
+    {
+      "capability": "screenshot",
+      "usable": true
+    },
+    {
+      "capability": "hitTest",
+      "usable": true
+    },
+    {
+      "capability": "serializeHistory",
+      "usable": true
+    },
+    {
+      "capability": "observeGlobalInput",
+      "usable": true
+    }
+  ],
+  "endpoint": "/tmp/axon.sock",
+  "permissions": [
+    {
+      "granted": true,
+      "name": "accessibility"
+    },
+    {
+      "granted": true,
+      "name": "screenRecording"
+    }
+  ],
+  "platform": "macos",
+  "processId": 4242,
+  "provenance": {
+    "backend": "rust-axon-mac",
+    "executablePath": "/Applications/Axon.app/Contents/MacOS/Axon",
+    "processId": 4242,
+    "version": "0.4.0"
+  },
+  "ready": true,
+  "session": {
+    "graphical": true,
+    "interactive": true
+  },
+  "shellContract": 1,
+  "version": "0.4.0"
+}

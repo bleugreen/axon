@@ -1,0 +1,11 @@
+{
+  "destination": {
+    "beforeBlockId": "block-12",
+    "documentId": "doc-7F3A"
+  },
+  "recording": true,
+  "scope": {
+    "scope": "allApplications"
+  },
+  "sessionId": "recording-0001"
+}

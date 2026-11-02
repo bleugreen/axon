@@ -1,0 +1,10 @@
+{
+  "need": "none",
+  "outcomes": [
+    {
+      "app": "Safari",
+      "bundleIdentifier": "com.apple.Safari",
+      "granted": true
+    }
+  ]
+}
