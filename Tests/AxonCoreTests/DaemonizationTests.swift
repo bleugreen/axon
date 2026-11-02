@@ -894,3 +894,31 @@ private func socketPair() throws -> (reader: Int32, writer: Int32) {
     }
     return (descriptors[0], descriptors[1])
 }
+
+@Test func keepAliveSerializesTheThreeSupervisionShapes() {
+    #expect(KeepAlive.always.propertyListValue as? Bool == true)
+    #expect(KeepAlive.never.propertyListValue as? Bool == false)
+    #expect(KeepAlive.onFailure.propertyListValue as? [String: Bool] == ["SuccessfulExit": false])
+}
+
+/// The menu job: restarted after a crash, left stopped after Quit, in the user's Aqua session, and
+/// pointed at the nested shell rather than anything in `Contents/MacOS`.
+@Test func theMenuJobIsCrashOnlySupervisedAndNested() throws {
+    let configuration = LaunchAgentConfiguration.menu(bundlePath: "/Applications/Axon.app", socketPath: "/tmp/axon.sock")
+    let plist = try #require(
+        PropertyListSerialization.propertyList(from: configuration.propertyListData(), format: nil) as? [String: Any]
+    )
+    #expect(plist["Label"] as? String == "dev.axon.menu")
+    #expect(plist["ProgramArguments"] as? [String] == [
+        "/Applications/Axon.app/Contents/Library/Applications/Axon Menu.app/Contents/MacOS/AxonMenu"
+    ])
+    #expect(plist["KeepAlive"] as? [String: Bool] == ["SuccessfulExit": false])
+    #expect(plist["RunAtLoad"] as? Bool == true)
+    #expect(plist["LimitLoadToSessionType"] as? String == "Aqua")
+    #expect(plist["ProcessType"] as? String == "Interactive")
+    #expect(plist["EnvironmentVariables"] as? [String: String] == ["AXON_SOCKET_PATH": "/tmp/axon.sock"])
+    #expect((plist["StandardErrorPath"] as? String)?.hasSuffix("Library/Logs/Axon/menu.err.log") == true)
+    // The daemon's job is unchanged.
+    let daemon = LaunchAgentConfiguration(program: DaemonProgram(executablePath: "/Applications/Axon.app/Contents/MacOS/Axon", identity: .executablePath))
+    #expect(daemon.keepAlive == .always)
+}
