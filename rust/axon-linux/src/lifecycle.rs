@@ -257,6 +257,7 @@ pub fn daemon_report(
         process_id,
         endpoint,
         provenance: None,
+        shell_contract: None,
         session: session_health(env, accessibility_enabled),
         permissions: vec![if accessibility_bus {
             PermissionState::granted(ACCESSIBILITY_BUS)

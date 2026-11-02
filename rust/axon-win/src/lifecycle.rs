@@ -294,6 +294,7 @@ pub fn daemon_report(
         process_id,
         endpoint: PIPE.into(),
         provenance: None,
+        shell_contract: None,
         session,
         // Windows applies no per-application permission gate to UI Automation.
         permissions: vec![],
