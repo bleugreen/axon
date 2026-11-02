@@ -76,7 +76,9 @@ def rpc(method, params=None, timeout=10):
                     break
                 buffer += chunk
         return json.loads(buffer)
-    except OSError as error:
+    # A daemon going down can accept a connection and close it with no body; an empty or partial
+    # reply is the same transport failure as a refused connect.
+    except (OSError, ValueError) as error:
         return {"transport": str(error)}
 
 
