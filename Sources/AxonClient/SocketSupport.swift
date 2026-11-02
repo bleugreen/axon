@@ -19,7 +19,7 @@ public enum SocketError: Error, CustomStringConvertible {
     case messageTooLarge(Int)
 
     /// Captures the current `errno` before any cleanup on the way out can disturb it.
-    static func failed(_ operation: String, code: Int32 = errno) -> SocketError {
+    package static func failed(_ operation: String, code: Int32 = errno) -> SocketError {
         .operationFailed(operation, code: code)
     }
 
@@ -45,12 +45,12 @@ public enum SocketError: Error, CustomStringConvertible {
     }
 }
 
-func setNoSigPipe(_ descriptor: Int32) {
+package func setNoSigPipe(_ descriptor: Int32) {
     var value: Int32 = 1
     setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &value, socklen_t(MemoryLayout.size(ofValue: value)))
 }
 
-func withSocketAddress<T>(
+package func withSocketAddress<T>(
     path: String,
     _ body: (UnsafePointer<sockaddr>, socklen_t) throws -> T
 ) throws -> T {
@@ -77,7 +77,7 @@ func withSocketAddress<T>(
     }
 }
 
-func readLineData(
+package func readLineData(
     from descriptor: Int32,
     timeoutSeconds: TimeInterval = 5.0,
     maxBytes: Int = 1_048_576
@@ -107,7 +107,7 @@ func readLineData(
     }
 }
 
-func writeAll(_ data: Data, to descriptor: Int32) throws {
+package func writeAll(_ data: Data, to descriptor: Int32) throws {
     try data.withUnsafeBytes { bytes in
         guard let base = bytes.baseAddress else {
             return
