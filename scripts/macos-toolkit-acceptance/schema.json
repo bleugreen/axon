@@ -114,7 +114,7 @@
         "label": { "type": "string", "minLength": 1 },
         "kind": {
           "description": "What the target is built on, as a description rather than as a key. A consumer keys on identity, never on this.",
-          "enum": ["webkit-browser", "chromium-browser", "electron", "appkit-native", "wkwebview", "gecko-browser"]
+          "enum": ["webkit-browser", "chromium-browser", "electron", "appkit-native", "wkwebview", "gecko-browser", "terminal"]
         },
         "identity": { "$ref": "#/$defs/identity" }
       }
