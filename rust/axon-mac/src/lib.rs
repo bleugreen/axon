@@ -4,12 +4,12 @@ use axon_core::{
     AppQuery, AxnRunner, Capability, DeliveryCandidate, DeliveryCapability, DeliveryOutcome,
     DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung, DeliverySelection,
     DiffPolicy, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId,
-    JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, PointerContract,
-    ResolutionStatus, RunEnvelope, SemanticElementName, SemanticLookup, SemanticNameRegistry,
-    SemanticSelection, SinceToken, Snapshot, SnapshotHandle, TextLocationResolver,
-    TextLocationSource, TextLocationTarget, TextRecognitionProvider, ToolDispatcher,
-    classify_semantic_diff, dispatch_in_foreground, goal_success, look_since_response, prepare_run,
-    select_delivery,
+    JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, PointSpace, PointTarget,
+    PointerContract, ResolutionStatus, RunEnvelope, SemanticElementName, SemanticLookup,
+    SemanticNameRegistry, SemanticSelection, SinceToken, Snapshot, SnapshotHandle,
+    TextLocationResolver, TextLocationSource, TextLocationTarget, TextRecognitionProvider,
+    ToolDispatcher, classify_semantic_diff, dispatch_in_foreground, goal_success,
+    look_since_response, pointer_target_is_point, prepare_run, select_delivery,
 };
 use serde_json::{Map, Value, json};
 use std::{
@@ -26,12 +26,17 @@ pub mod probe;
 
 #[cfg(target_os = "macos")]
 mod accessibility;
+mod background;
 #[cfg(target_os = "macos")]
 mod core_foundation;
 #[cfg(target_os = "macos")]
 mod global_input;
+mod input;
 #[cfg(target_os = "macos")]
 mod platform;
+#[cfg(target_os = "macos")]
+mod workspace;
+pub use background::{ApplicationPlan, ApplicationProcess, DenylistEntry};
 #[cfg(target_os = "macos")]
 pub use platform::MacBackend;
 
@@ -54,21 +59,33 @@ const EXCLUDED: &[(&str, &str)] = &[
     ("debug.stop", "DebugSession"),
 ];
 
-/// Pixel delivery is withheld in v1; this mechanism label makes that absence explicit.
-const PIXEL_MECHANISM: &str = "unimplemented macOS target-bound input";
+/// The pixel rung's mechanism, which macOS has for no action. Named so a refusal says what is
+/// missing rather than only which rung.
+const PIXEL_MECHANISM: &str = "window-bound background input";
+
+/// The application rung's mechanism: input posted to one process.
+const APPLICATION_MECHANISM: &str = "CGEventPostToPid";
+
+/// The foreground rung's mechanism: global input routed by the window server like a real device.
+const FOREGROUND_MECHANISM: &str = "CGEventPost(kCGHIDEventTap)";
 
 /// Why `keyboard` has no pixel rung, and never will in this shape.
 ///
 /// The pixel rung is target-bound input derived from verified window geometry. `keyboard` names an
 /// application and an input string; there is no element, so there is no window to bind to and no
-/// transform to report. Key delivery gets an honest home as a `type` fallback, below ValuePattern,
-/// once the pointer path is proven on real targets.
+/// transform to report. Its background home is the application rung, which binds to a process
+/// rather than a window.
 const NO_KEYBOARD_GEOMETRY: &str = "keyboard input names an application rather than an element, so \
      there is no verified window geometry to bind it to";
 
-/// Why a text location that resolved from screen text alone cannot travel the pixel rung.
-const NO_RECOGNIZED_TEXT_GEOMETRY: &str = "this text location resolved from recognized screen text \
-     rather than an accessibility element, so there is no ancestry to bind a window to";
+/// Why a pointer action has no pixel rung on macOS: no mechanism delivers a mouse or wheel event to
+/// one window without the window server's hit testing.
+const NO_WINDOW_BOUND_POINTER: &str = "macOS has no mechanism that delivers pointer input to one \
+     window without the window server's hit testing, so there is no verified window to bind it to";
+
+/// Why a scroll that carries a delta has no semantic rung.
+const NO_SEMANTIC_SCROLL_DELTA: &str =
+    "AXScrollToVisible scrolls an element into view and cannot carry a scroll delta";
 
 /// Why the foreground rung is withheld rather than merely gated behind the opt-in.
 ///
@@ -201,148 +218,239 @@ pub trait PointerTargetVerifier: PlatformBackend {
     }
 }
 
-/// A target-bound pointer mechanism: input delivered to one verified window, without activating
-/// the application and without moving the real pointer.
+/// The native pointer input the router drives beyond the shared backend trait.
 ///
-/// This is the pixel rung's whole contract expressed as a seam. The router that decides *when* to
-/// use it is platform-neutral and testable anywhere; the mechanism behind it is Win32 and is not.
-pub trait BackgroundPixelPointer: PlatformBackend {
-    /// Resolves a delivery plan for one click. Pure inspection with no native side effect, because
-    /// the planner may discard the result and refuse before anything is allowed to happen.
-    fn plan_pixel_click(
+/// A seam so the router that decides *when* each is used stays testable anywhere; the mechanisms
+/// behind it are Core Graphics and Accessibility and are not.
+pub trait NativeInput: PlatformBackend {
+    /// The process owning whatever is on screen at `point`, by Accessibility hit test.
+    fn point_owner(&mut self, point: (f64, f64)) -> Result<Option<i32>, axon_core::BackendError>;
+
+    /// The frame of an application's focused window, in screen points.
+    fn focused_window_frame(
+        &mut self,
+        app: &AppQuery,
+    ) -> Result<Option<axon_core::Rect>, axon_core::BackendError>;
+
+    /// Posts a pixel-unit wheel burst at `point` through the HID tap, returning the `(x, y)` steps
+    /// that were posted. Distinct from `PlatformBackend::scroll`, which stays the semantic
+    /// AXScrollToVisible.
+    fn scroll_wheel(
+        &mut self,
+        point: (f64, f64),
+        delta: (f64, f64),
+    ) -> Result<Vec<(i32, i32)>, axon_core::BackendError>;
+
+    /// What the activation calls since the last take did: each primitive's name and the value it
+    /// returned. Taken once per foreground transaction so it can ride on that transaction's
+    /// cleanup evidence; an acknowledgement is not proof, and the readback still decides.
+    fn take_activation_evidence(&mut self) -> Option<String> {
+        None
+    }
+
+    /// The session's modifier state as the window server holds it, read around every keyboard
+    /// dispatch. `None` from a backend that cannot read it, which reports the invariant as unknown
+    /// rather than as held.
+    fn modifier_state(&mut self) -> Option<ModifierState> {
+        None
+    }
+
+    /// The actions a resolved element advertises right now, asked of the element itself.
+    ///
+    /// The captured node's `actions` on macOS come from a role table, which knows six roles; a
+    /// pop-up button, disclosure triangle, or outline row that supports `AXPress` is not among
+    /// them. `Ok(None)` means this backend cannot ask, and the router falls back to the capture.
+    fn advertised_actions(
         &mut self,
         handle: &SnapshotHandle,
-        point: (f64, f64),
-    ) -> Result<PixelPlan, axon_core::BackendError>;
+    ) -> Result<Option<Vec<String>>, axon_core::BackendError> {
+        let _ = handle;
+        Ok(None)
+    }
+}
 
-    /// Revalidates the plan and dispatches it. A revalidation failure returns `Stale` and must
-    /// post nothing: a window that moved or an ancestry that broke between planning and dispatch
-    /// means the recorded coordinates now name somewhere else.
-    fn dispatch_pixel_click(
+/// The window server's modifier flags, in both states a later event can inherit them from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ModifierState {
+    /// `kCGEventSourceStateCombinedSessionState`.
+    pub combined_session: u64,
+    /// `kCGEventSourceStateHIDSystemState`.
+    pub hid_system: u64,
+}
+
+impl ModifierState {
+    /// The four modifiers a chord presses. The non-coalesced bit, and the numeric-pad and function
+    /// bits arrow keys carry, are not keys anyone holds, so they are not compared.
+    pub const HELD: u64 =
+        input::FLAG_SHIFT | input::FLAG_CONTROL | input::FLAG_OPTION | input::FLAG_COMMAND;
+
+    fn held(self) -> (u64, u64) {
+        (
+            self.combined_session & Self::HELD,
+            self.hid_system & Self::HELD,
+        )
+    }
+}
+
+/// How long the after-reading waits for the window server to apply a dispatch's releases.
+const MODIFIER_SETTLE: Duration = Duration::from_millis(300);
+
+/// The modifier state after a dispatch, read once the window server has caught up.
+///
+/// Posted events are applied asynchronously, so a reading taken the instant a chord's final
+/// release is posted can still show the modifier held; on bgsrv-mac (axn/230) it did, while a
+/// reading a moment later showed it released. The reading is retried until it matches `before` or
+/// the bound passes, and only a state still changed at the bound is a held modifier.
+fn settled_modifier_state<B: NativeInput>(
+    backend: &mut B,
+    before: Option<ModifierState>,
+) -> Option<ModifierState> {
+    let deadline = Instant::now() + MODIFIER_SETTLE;
+    loop {
+        let after = backend.modifier_state();
+        let settled = match (before, after) {
+            (Some(before), Some(after)) => before.held() == after.held(),
+            _ => true,
+        };
+        if settled || Instant::now() >= deadline {
+            return after;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Stamps the modifier invariant onto a keyboard result's `section` (`foreground` or
+/// `backgroundDelivery`), beside the pointer's.
+///
+/// A keyboard dispatch must leave the session's modifiers as it found them. One that does not has
+/// left a key logically held for every later keystroke on the machine, the user's included, so a
+/// changed state means the rung did not hold and `success` is false. `dispatchSuccess` stays true:
+/// the events were posted, and a caller told otherwise would retry and type them twice.
+fn stamp_modifier_readback(
+    result: &mut Value,
+    section: &str,
+    readback: Option<(Option<ModifierState>, Option<ModifierState>)>,
+) {
+    let Some(object) = result.as_object_mut() else {
+        return;
+    };
+    let restored = match readback {
+        Some((Some(before), Some(after))) => Some(before.held() == after.held()),
+        _ => None,
+    };
+    if let Some(Value::Object(evidence)) = object.get_mut(section) {
+        evidence.insert("modifiersRestored".into(), json!(restored));
+    }
+    if restored == Some(false) {
+        let Some((Some(before), Some(after))) = readback else {
+            unreachable!("a comparison needs both readings")
+        };
+        let problem = format!(
+            "the session's modifier state changed across the dispatch, so a modifier is still \
+             logically held: combined-session {:#x} before and {:#x} after, HID-system {:#x} \
+             before and {:#x} after",
+            before.combined_session, after.combined_session, before.hid_system, after.hid_system
+        );
+        let message = match object.get("message").and_then(Value::as_str) {
+            Some(existing) => format!("{existing}; {problem}"),
+            None => problem,
+        };
+        object.insert("message".into(), json!(message));
+        object.insert("success".into(), json!(false));
+    }
+}
+
+/// The application rung for keyboard input: keystrokes posted to one process, without activating
+/// it and without touching the pointer.
+///
+/// Availability is decided by [`background::application_keyboard_availability`], which is a
+/// property of the mechanism rather than of the application; the seam only supplies the process
+/// and posts to it.
+pub trait BackgroundApplicationKeyboard: PlatformBackend {
+    /// The one live application process a query names, with the identity foreground delivery
+    /// would compare. `Ok(None)` when no application, or more than one, matched.
+    fn application_process(
         &mut self,
-        target: &PixelTarget,
-    ) -> Result<PixelDispatch, PixelDispatchError>;
-}
+        app: &AppQuery,
+    ) -> Result<Option<ApplicationProcess>, axon_core::BackendError>;
 
-/// Whether a target-bound mechanism exists for one specific click.
-#[derive(Clone, Debug, PartialEq)]
-pub enum PixelPlan {
-    Bound(PixelTarget),
-    /// No target-bound mechanism here. `reason` names the specific obstacle, because a caller who
-    /// is told only "unsupported" cannot tell an elevated window from an unknown control class.
-    Unavailable {
-        reason: String,
-        /// Whether the obstacle stops *any* synthetic input at this target rather than only the
-        /// target-bound rung.
-        ///
-        /// An integrity boundary is the case that matters: UIPI discards posted messages and
-        /// `SendInput` alike from a lower-integrity process, and `SetForegroundWindow` fails the
-        /// same way. Leaving the foreground candidate available there would answer an elevated
-        /// target with "opt in to foreground delivery", and the opt-in would buy a dispatch
-        /// macOS silently drops — dressed up as a successful one. The obstacle has to be named
-        /// at both rungs or it is not really being refused.
-        blocks_global_input: bool,
-    },
-}
-
-impl PixelPlan {
-    /// No target-bound mechanism, but the obstacle is specific to this rung: a louder one may
-    /// still carry the action.
-    pub fn unavailable(reason: impl Into<String>) -> Self {
-        PixelPlan::Unavailable {
-            reason: reason.into(),
-            blocks_global_input: false,
-        }
+    /// The applications measured not to act on application-rung keystrokes.
+    fn application_keyboard_denylist(&self) -> &'static [DenylistEntry] {
+        background::DENYLIST
     }
 
-    /// No mechanism at all, at any rung, for the reason given.
-    pub fn blocked(reason: impl Into<String>) -> Self {
-        PixelPlan::Unavailable {
-            reason: reason.into(),
-            blocks_global_input: true,
-        }
+    /// Decides the rung for one request. Pure inspection, because the planner may discard the
+    /// answer and refuse before anything native happens.
+    fn plan_application_keyboard(
+        &self,
+        process: Option<ApplicationProcess>,
+        intent: KeyboardIntent<'_>,
+    ) -> ApplicationPlan {
+        background::application_keyboard_availability(
+            process,
+            intent,
+            self.application_keyboard_denylist(),
+        )
     }
+
+    /// Revalidates the process and posts to it. A process that exited, or whose bundle changed,
+    /// between planning and dispatch returns `Stale` and must post nothing: the pid now names
+    /// something else, or nothing.
+    fn dispatch_application_keyboard(
+        &mut self,
+        process: &ApplicationProcess,
+        intent: KeyboardIntent<'_>,
+    ) -> Result<ApplicationDispatch, BackgroundDispatchError>;
 }
 
-/// One window, bound to one element, with the coordinate transform that reaches it.
+/// What an application-rung dispatch observed around itself.
 #[derive(Clone, Debug, PartialEq)]
-pub struct PixelTarget {
-    /// The element this plan is bound to. Dispatch re-checks it, because a window that is still
-    /// exactly where it was can still be showing something else by then.
-    pub handle: SnapshotHandle,
-    /// The leaf window that receives the messages.
-    pub window: u64,
-    pub window_class: String,
-    /// How the target declares its DPI awareness. Reported so a probe run can distinguish a
-    /// reconciliation that ran from one that was a no-op, which is what tells an allowlist entry
-    /// earned at 100% scaling from one earned where the transform actually had work to do.
-    pub dpi_awareness: &'static str,
-    /// The top-level window the UIA ancestry bound this to. Revalidated before dispatch, so a leaf
-    /// that has been reparented out of the captured window cannot be clicked.
-    pub root_window: u64,
-    pub process_identifier: i64,
-    pub screen_point: (f64, f64),
-    /// The window's client origin in screen coordinates: the transform itself, kept so it can be
-    /// both revalidated and reported.
-    pub client_origin: (f64, f64),
-    pub client_point: (f64, f64),
-}
-
-impl PixelTarget {
-    /// The transform reported as evidence rather than implied.
-    ///
-    /// A dispatch that landed in the wrong window is only diagnosable after the fact if the window
-    /// it went to and the arithmetic that chose the point are both on the wire.
-    pub fn evidence(&self) -> Value {
-        json!({
-            "nativeWindowHandle": format!("0x{:08X}", self.window),
-            "windowClass": self.window_class,
-            "rootNativeWindowHandle": format!("0x{:08X}", self.root_window),
-            "dpiAwareness": self.dpi_awareness,
-            "clientOrigin": {"x": self.client_origin.0, "y": self.client_origin.1},
-            "windowPoint": {"x": self.client_point.0, "y": self.client_point.1},
-            "sourceCoordinateSpace": "screen",
-        })
-    }
-}
-
-/// What a delivered sequence did, and the evidence that it stayed in the background.
-#[derive(Clone, Debug, PartialEq)]
-pub struct PixelDispatch {
-    /// Whether the target processed the whole sequence.
-    ///
-    /// Processed, not effective. A window procedure that examines a click and does nothing returns
-    /// from it exactly like one that acts on it, so this is dispatch evidence and goal success
-    /// still needs a readback or a declared postcondition.
-    pub complete: bool,
-    /// Set when part of the sequence landed and the rest did not, naming the state the target was
-    /// left in. A partial dispatch never escalates: the target may already consider the button
-    /// held, and a second attempt at another rung would compound it.
-    pub partial: Option<String>,
-    /// Observed across the delivery, which is only meaningful because the delivery has an explicit
-    /// end: the backend does not report these until the target's window procedure has processed
-    /// every message. A handler that activates its application or moves the cursor is inside the
-    /// window these two comparisons straddle.
+pub struct ApplicationDispatch {
+    /// Read before and after the post. A target that activated itself in response is still
+    /// reported, because a delivery that changed the foreground was not background delivery.
     pub frontmost_unchanged: bool,
+    /// Reported, never asserted: keystrokes touch no pointing device, so motion around them is
+    /// the person at the machine.
     pub pointer_unchanged: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum PixelDispatchError {
+pub enum BackgroundDispatchError {
     /// Revalidation failed between planning and dispatch. Nothing was posted.
     Stale(String),
     Backend(axon_core::BackendError),
 }
 
-/// What a click resolved to, and therefore what can be bound and verified before it is delivered.
-///
-/// The distinction is load-bearing rather than cosmetic: only an element carries the accessibility
-/// ancestry a pixel plan is built from, so a point recovered from screen text has no window to
-/// bind to however precise the point itself is.
+/// What a pointer action resolved to, and therefore how it is verified before it is posted.
 enum ClickTarget {
     Element(SnapshotHandle),
     /// A point inside a frame of recognized screen text, with no element behind it.
     Recognized(AppQuery, axon_core::Rect),
+    /// A caller-supplied point, and the application it named, if any.
+    Point(Option<String>),
+}
+
+/// The pointer actions this router posts, each through the same ladder and transaction.
+#[derive(Clone, Copy)]
+enum PointerAction {
+    Click,
+    /// A wheel burst carrying this `(x, y)` pixel delta.
+    Wheel((f64, f64)),
+}
+
+impl PointerAction {
+    fn tool(self) -> &'static str {
+        match self {
+            PointerAction::Click => "click",
+            PointerAction::Wheel(_) => "scroll",
+        }
+    }
+}
+
+/// Which application a pointer escalation activates, and which process the point must belong to.
+struct PointerAim {
+    identity: String,
+    process_identifier: i32,
 }
 
 impl<
@@ -350,7 +458,8 @@ impl<
         + TextRecognitionProvider
         + VisualObservationProvider
         + ReadableStateProvider
-        + BackgroundPixelPointer
+        + NativeInput
+        + BackgroundApplicationKeyboard
         + axon_core::RecordingEvidenceProvider,
 > Router<B>
 {
@@ -383,21 +492,17 @@ impl<
         })
     }
 
-    fn click_text_location(
+    /// Resolves a text location to the point a pointer action aims at, and what stands behind it.
+    fn resolve_text_location(
         &mut self,
         value: &Value,
-        policy: DeliveryPolicy,
-    ) -> Result<Value, JsonRpcError> {
+    ) -> Result<(ClickTarget, (f64, f64), Value), JsonRpcError> {
         let target: TextLocationTarget = serde_json::from_value(value.clone())
             .map_err(|error| rpc_error(-32602, error.to_string()))?;
         if target.app.is_empty() {
             return Err(rpc_error(-32602, "location app must not be empty"));
         }
-        let app = AppQuery {
-            process_id: None,
-            name: Some(target.app.clone()),
-            identifier: None,
-        };
+        let app = query_for_app(&target.app);
         let snapshot = self.backend.capture(&app).map_err(backend_error)?;
         let initial = TextLocationResolver::resolve(&target, &snapshot, &[]);
         let resolution = if target.source == TextLocationSource::Screenshot
@@ -420,187 +525,277 @@ impl<
             Some(handle) => ClickTarget::Element(handle.clone()),
             None => ClickTarget::Recognized(app.clone(), candidate.frame),
         };
+        let resolution = json!(resolution);
         // The snapshot becomes the router's before the ladder runs, so foreground delivery recovers
         // the same canonical identity a handle click does. Handing the caller's raw app string to
         // the transaction instead would compare a display name against whatever identity the
         // backend reports for the foreground window, and the two can never match.
         self.snapshot = Some(snapshot);
-        // A resolved text location is a click like any other. It travels the same ladder and the
-        // same transaction; a separate path here is how a caller ends up with global pointer input
-        // under a policy that forbids it.
-        self.deliver_click(policy, click_target, point, json!(resolution))
+        Ok((click_target, point, resolution))
     }
 
-    /// One click, whatever resolved it, travelling the whole ladder exactly once.
-    fn deliver_click(
+    /// A point target converted to screen coordinates, with the application it named.
+    fn point_target(
+        &mut self,
+        tool: &str,
+        target: &Value,
+        params: &Map<String, Value>,
+    ) -> Result<(ClickTarget, (f64, f64)), JsonRpcError> {
+        let point = PointTarget::parse(target, params.get("app").and_then(Value::as_str))
+            .map_err(|error| rpc_error(-32602, error))?;
+        let screen = match point.space {
+            PointSpace::Screen => (point.x, point.y),
+            PointSpace::Window => {
+                let app = point.app.as_deref().expect("a window point names its app");
+                let frame = self
+                    .backend
+                    .focused_window_frame(&query_for_app(app))
+                    .map_err(backend_error)?
+                    .ok_or_else(|| {
+                        rpc_error(
+                            -32002,
+                            format!("{app} has no focused window to measure a window point from"),
+                        )
+                    })?;
+                (frame.x + point.x, frame.y + point.y)
+            }
+            // Screenshot pixels convert by the encoded image's size against the window it
+            // photographed, which needs the capture the point was measured on. Recorded artifacts
+            // only ever carry screen points.
+            PointSpace::Screenshot => {
+                return Err(capability_unavailable(
+                    tool,
+                    "screenshot-coordinate-space",
+                    "not-implemented",
+                ));
+            }
+        };
+        Ok((ClickTarget::Point(point.app), screen))
+    }
+
+    /// Where a pointer action aims at a resolved element: the centre of the part of it that is
+    /// actually on screen.
+    ///
+    /// Not the centre of its frame. A document view inside a scroll area reports the frame of the
+    /// whole document, thousands of points tall, and its centre is somewhere nobody can see; the
+    /// hit test there finds another window or nothing. Clipping by every ancestor's frame is what
+    /// the scroll area and the window do to it on screen.
+    fn element_point(&self, handle: &SnapshotHandle) -> Result<(f64, f64), JsonRpcError> {
+        let snapshot = self.snapshot.as_ref().ok_or_else(|| {
+            rpc_error(-32003, "the resolved element is not in the current capture")
+        })?;
+        let index = snapshot
+            .index_for_handle(handle)
+            .map_err(|error| rpc_error(-32003, error.to_string()))?;
+        let frame = visible_frame(snapshot, index).ok_or_else(|| {
+            rpc_error(
+                -32003,
+                "the resolved element exposes no frame, or none of it is visible, to aim a \
+                 pointer at",
+            )
+        })?;
+        Ok((frame.x + frame.width / 2.0, frame.y + frame.height / 2.0))
+    }
+
+    fn snapshot_node(&self, handle: &SnapshotHandle) -> Option<&axon_core::Node> {
+        let snapshot = self.snapshot.as_ref()?;
+        snapshot.node(snapshot.index_for_handle(handle).ok()?)
+    }
+
+    /// One pointer action, whatever resolved it, travelling the whole ladder exactly once.
+    ///
+    /// macOS has no background rung for a pointer action, so the ladder refuses or escalates to
+    /// the foreground. The target is verified inside the transaction, after activation and
+    /// immediately before the post: before activation, a window that the escalation is about to
+    /// raise is still covered, and a check made then says nothing about where the event will land.
+    fn deliver_pointer(
         &mut self,
         policy: DeliveryPolicy,
+        action: PointerAction,
         target: ClickTarget,
         point: (f64, f64),
         resolution: Value,
     ) -> Result<Value, JsonRpcError> {
-        let mut result = self.select_and_deliver_click(policy, target, point)?;
+        let ladder = self.pointer_ladder(action);
+        let Some(candidate) = self.selected(&ladder, policy) else {
+            return Ok(self.refusal(&ladder, policy));
+        };
+        let aim = match &target {
+            ClickTarget::Element(_) | ClickTarget::Recognized(..) => Some(self.snapshot_aim()?),
+            ClickTarget::Point(Some(app)) => Some(
+                self.backend
+                    .application_process(&query_for_app(app))
+                    .map_err(backend_error)?
+                    .map(|process| PointerAim {
+                        identity: process.identity,
+                        process_identifier: process.process_identifier,
+                    }),
+            ),
+            // A point naming no application is addressed at whatever holds the foreground.
+            ClickTarget::Point(None) => None,
+        };
+        let (foreground, owner) = match &aim {
+            Some(Some(aim)) => (
+                ForegroundTarget::Application(aim.identity.as_str()),
+                Some(aim.process_identifier),
+            ),
+            // Falling through to the frontmost here would post global input into whatever the
+            // user is working in, having been asked for something else.
+            Some(None) => {
+                return Ok(DeliveryOutcome::refusal_result(
+                    policy,
+                    DeliveryRefusal::new(
+                        DeliveryRefusalReason::TargetIdentityUnavailable,
+                        DeliveryRung::Foreground,
+                        Some(DeliveryCapability::GlobalInput),
+                        "the resolved target's owning application could not be identified, so \
+                         foreground delivery cannot activate and prove it",
+                    ),
+                ));
+            }
+            None => (ForegroundTarget::Frontmost, None),
+        };
+        let tool = action.tool();
+        let verification =
+            json!({"verified": false, "reason": format!("{tool} has no declared postcondition")});
+        let mut result = self.foreground_dispatch(
+            policy,
+            &candidate,
+            foreground,
+            // The HID tap drives the real cursor, so the transaction puts it back.
+            true,
+            verification,
+            move |backend| {
+                let (fresh, stale) = match &target {
+                    ClickTarget::Element(handle) => (
+                        backend.verify_pointer_target(handle, point),
+                        "target moved, is covered, or no longer matches the resolved element",
+                    ),
+                    ClickTarget::Recognized(app, frame) => (
+                        backend.verify_ocr_target(app, point, *frame),
+                        "target moved, is covered, or no longer matches the resolved text",
+                    ),
+                    ClickTarget::Point(_) => (
+                        point_belongs(backend, point, owner),
+                        "the point is not over a window of the application it was aimed at",
+                    ),
+                };
+                if !fresh.map_err(backend_error)? {
+                    return Err(rpc_error(-32003, format!("{tool} {stale}")));
+                }
+                match action {
+                    PointerAction::Click => backend
+                        .pointer_click(point)
+                        .map(|_| Value::Null)
+                        .map_err(backend_error),
+                    PointerAction::Wheel(delta) => backend
+                        .scroll_wheel(point, delta)
+                        .map(|steps| {
+                            json!({"eventPath": {
+                                "units": "pixel",
+                                "at": {"x": point.0, "y": point.1, "coordinateSpace": "screen"},
+                                "steps": steps
+                                    .iter()
+                                    .map(|(x, y)| json!({"deltaX": x, "deltaY": y}))
+                                    .collect::<Vec<_>>(),
+                            }})
+                        })
+                        .map_err(backend_error),
+                }
+            },
+        )?;
         if let (Some(object), false) = (result.as_object_mut(), resolution.is_null()) {
             object.insert("resolution".into(), resolution);
         }
         Ok(result)
     }
 
-    fn select_and_deliver_click(
-        &mut self,
-        policy: DeliveryPolicy,
-        target: ClickTarget,
-        point: (f64, f64),
-    ) -> Result<Value, JsonRpcError> {
-        // Planning is pure inspection, so it is safe before the ladder decides. The planner may
-        // discard this plan and refuse, and by then nothing native may have happened.
-        let plan = match &target {
-            ClickTarget::Element(handle) => self
-                .backend
-                .plan_pixel_click(handle, point)
-                .map_err(backend_error)?,
-            ClickTarget::Recognized(..) => PixelPlan::unavailable(NO_RECOGNIZED_TEXT_GEOMETRY),
-        };
-        let ladder = self.pointer_ladder(&plan);
-        let Some(candidate) = self.selected(&ladder, policy) else {
-            return Ok(self.refusal(&ladder, policy));
-        };
-        // Freshness is checked after selection, so the planner still decides before anything
-        // happens, and a target that moved under the request stays a stale-target error rather
-        // than becoming a delivery refusal.
-        let (fresh, stale) = match &target {
-            ClickTarget::Element(handle) => (
-                self.backend.verify_pointer_target(handle, point),
-                "click target moved, is covered, or no longer matches the resolved element",
-            ),
-            ClickTarget::Recognized(app, frame) => (
-                self.backend.verify_ocr_target(app, point, *frame),
-                "click target moved, is covered, or no longer matches the resolved text",
-            ),
-        };
-        if !fresh.map_err(backend_error)? {
-            return Err(rpc_error(-32003, stale));
-        }
-        let verification =
-            json!({"verified": false, "reason": "click has no declared postcondition"});
-        if candidate.rung == DeliveryRung::Pixel {
-            let PixelPlan::Bound(bound) = plan else {
-                unreachable!("the pixel rung is only offered for a bound plan")
-            };
-            return self.dispatch_pixel(
-                policy,
-                &candidate,
-                &bound,
-                PointerContract::Asserted,
-                verification,
-            );
-        }
-        // Owning-application identity is a foreground concern. Refusing on it while a bound pixel
-        // plan was available would decline an action that had a perfectly good target-bound path.
-        let Some(application) = self.resolved_application() else {
-            return Ok(DeliveryOutcome::refusal_result(
-                policy,
-                DeliveryRefusal::new(
-                    DeliveryRefusalReason::TargetIdentityUnavailable,
-                    DeliveryRung::Foreground,
-                    Some(DeliveryCapability::GlobalInput),
-                    "the resolved target's owning application could not be identified, so \
-                     foreground delivery cannot activate and prove it",
-                ),
-            ));
-        };
-        self.foreground_dispatch(
-            policy,
-            &candidate,
-            ForegroundTarget::Application(&application),
-            // `SendInput` drives the real cursor, so the transaction puts it back.
-            true,
-            verification,
-            |backend| backend.pointer_click(point),
-        )
-    }
-
-    /// Posts one bound sequence to one verified window, and reports what that proved.
-    /// `pointer` is `Asserted` for every caller here because `click` is the only action with a
-    /// pixel rung in this router: `keyboard` binds to an application rather than a window, so it
-    /// takes the semantic or foreground path and never reaches this one.
-    fn dispatch_pixel(
+    /// Posts one keyboard request to one application process, and reports what that proved.
+    fn dispatch_application(
         &mut self,
         policy: DeliveryPolicy,
         candidate: &DeliveryCandidate,
-        target: &PixelTarget,
-        pointer: PointerContract,
+        process: &ApplicationProcess,
+        intent: KeyboardIntent<'_>,
         verification: Value,
     ) -> Result<Value, JsonRpcError> {
-        let dispatch = match self.backend.dispatch_pixel_click(target) {
+        let modifiers_before = self.backend.modifier_state();
+        let dispatched = self.backend.dispatch_application_keyboard(process, intent);
+        let readback = Some((
+            modifiers_before,
+            settled_modifier_state(&mut self.backend, modifiers_before),
+        ));
+        let dispatch = match dispatched {
             Ok(dispatch) => dispatch,
-            // Revalidation failed, so nothing was posted and the plan now names somewhere else.
-            // That is the same stale target a moved element produces, and it reads the same way.
-            Err(PixelDispatchError::Stale(reason)) => return Err(rpc_error(-32003, reason)),
-            Err(PixelDispatchError::Backend(error)) => return Err(backend_error(error)),
+            // Revalidation failed, so nothing was posted and the pid now names something else.
+            Err(BackgroundDispatchError::Stale(reason)) => return Err(rpc_error(-32003, reason)),
+            Err(BackgroundDispatchError::Backend(error)) => return Err(backend_error(error)),
         };
-        // This rung is defined by what it does not do. A dispatch that changed the foreground or
-        // moved the real pointer was not background delivery, whatever it managed to deliver.
-        let mut problems = Vec::new();
-        if let Some(partial) = &dispatch.partial {
-            problems.push(partial.clone());
-        }
-        if !dispatch.frontmost_unchanged {
-            problems.push("the foreground window changed across the dispatch".to_string());
-        }
-        if pointer.is_asserted() && !dispatch.pointer_unchanged {
-            problems.push("the real pointer moved across the dispatch".to_string());
-        }
-        // Mechanism acceptance and goal success are kept apart because at this rung the gap between
-        // them is the whole problem. A completed post proves each message was accepted and returned
-        // from; a window procedure that examined one and did nothing returns exactly like one that
-        // acted on it, which is the stated reason `PIXEL_MESSAGE_CLASSES` exists at all. Collapsing
-        // the two would hollow out that table's own defence: a class that regressed, or one that
-        // behaved differently in a context nobody probed, would produce an accepted post, intact
-        // invariants, and a report that the caller's click had worked.
+        // This rung is defined by what it does not do. A dispatch across which the foreground
+        // changed was not background delivery, whatever it managed to deliver. The pointer is
+        // reported and not judged: keystrokes touch no pointing device.
+        let held = dispatch.frontmost_unchanged;
         let mut result = json!({
-            "success": goal_success(&verification, dispatch.complete && problems.is_empty()),
-            "dispatch": {"success": dispatch.complete, "mechanism": candidate.mechanism},
+            "success": goal_success(&verification, held),
+            "dispatch": {"success": true, "mechanism": candidate.mechanism},
             "verification": verification,
             "backgroundDelivery": {
-                "targetProcessIdentifier": target.process_identifier,
+                "targetApplication": process.identity,
+                "targetProcessIdentifier": process.process_identifier,
                 "frontmostAppUnchanged": dispatch.frontmost_unchanged,
                 "pointerUnchanged": dispatch.pointer_unchanged,
-                // Whether that reading is a promise this dispatch made or an observation of the
-                // desktop it ran on.
-                "pointerAsserted": pointer.is_asserted(),
+                "pointerAsserted": PointerContract::Observed.is_asserted(),
+                // What licenses this rung: the measured rows and the exact event construction
+                // they measured, one hop from the dispatch they authorize.
+                "variant": background::KEYBOARD_VARIANT,
+                "evidence": background::KEYBOARD_EVIDENCE,
             },
-            "targetWindow": target.evidence(),
         });
         let object = result
             .as_object_mut()
             .expect("a JSON object literal is an object");
-        if !problems.is_empty() {
-            object.insert("message".into(), json!(problems.join("; ")));
+        if !held {
+            object.insert(
+                "message".into(),
+                json!("the foreground application changed across the dispatch"),
+            );
         }
-        DeliveryOutcome {
-            policy,
-            delivery: Some(DeliveryRung::Pixel),
-            dispatch_success: dispatch.complete,
-            refusal: None,
-        }
-        .merge_into(object);
+        DeliveryOutcome::dispatched(policy, DeliveryRung::Application).merge_into(object);
+        stamp_modifier_readback(&mut result, "backgroundDelivery", readback);
         Ok(result)
     }
 
-    /// The stable identity of the application that owns the currently resolved target.
+    /// The application that owns the currently resolved target, spelled the way foreground
+    /// delivery compares it, and its process.
     ///
     /// Foreground delivery has to activate the application the *target* belongs to, not whichever
     /// app string the request happened to carry. A handle-only request carries no app string at
     /// all, and treating that as "already frontmost" would dispatch global input with no
     /// activation and no proof — the exact bug this contract exists to close.
-    fn resolved_application(&self) -> Option<String> {
-        let app = &self.snapshot.as_ref()?.app;
-        app.identifier
-            .as_deref()
-            .or(Some(app.name.as_str()))
-            .filter(|identity| !identity.is_empty())
-            .map(str::to_owned)
+    fn snapshot_aim(&mut self) -> Result<Option<PointerAim>, JsonRpcError> {
+        let Some(app) = self.snapshot.as_ref().map(|snapshot| &snapshot.app) else {
+            return Ok(None);
+        };
+        let query = match app.process_id {
+            Some(process_id) => AppQuery {
+                process_id: Some(process_id),
+                name: None,
+                identifier: None,
+            },
+            None => AppQuery {
+                process_id: None,
+                name: app.identifier.is_none().then(|| app.name.clone()),
+                identifier: app.identifier.clone(),
+            },
+        };
+        Ok(self
+            .backend
+            .application_process(&query)
+            .map_err(backend_error)?
+            .map(|process| PointerAim {
+                identity: process.identity,
+                process_identifier: process.process_identifier,
+            }))
     }
 
     fn pump_recording(&mut self) -> Result<(), JsonRpcError> {
@@ -773,21 +968,55 @@ impl<
                 Ok(json!({"handle": handle, "resolution": resolution}))
             }
             "click" => {
-                if let Some(location) = params
-                    .get("target")
-                    .and_then(|target| target.get("location"))
-                    .or_else(|| params.get("location"))
-                {
-                    return self.click_text_location(&location.clone(), policy);
+                if let Some(location) = text_location(params) {
+                    let (target, point, resolution) = self.resolve_text_location(&location)?;
+                    // A resolved text location is a click like any other. It travels the same
+                    // ladder and the same transaction; a separate path here is how a caller ends up
+                    // with global pointer input under a policy that forbids it.
+                    return self.deliver_pointer(
+                        policy,
+                        PointerAction::Click,
+                        target,
+                        point,
+                        resolution,
+                    );
                 }
-                if params.get("target").is_some_and(pointer_target_is_point) {
-                    return Err(capability_unavailable(
-                        "click",
-                        "point-target",
-                        "not-implemented",
-                    ));
+                if let Some(target) = params.get("target").filter(|t| pointer_target_is_point(t)) {
+                    let (target, point) = self.point_target("click", &target.clone(), params)?;
+                    return self.deliver_pointer(
+                        policy,
+                        PointerAction::Click,
+                        target,
+                        point,
+                        Value::Null,
+                    );
                 }
                 let (handle, resolution) = self.resolve(params)?;
+                // The semantic rung is offered only to an element that advertises the action.
+                // Discovering its absence from the AX error instead leaked kAXErrorActionUnsupported
+                // to the caller for every text area and window that was ever clicked.
+                let advertised = match self
+                    .backend
+                    .advertised_actions(&handle)
+                    .map_err(backend_error)?
+                {
+                    Some(actions) => actions,
+                    None => self
+                        .snapshot_node(&handle)
+                        .map(|node| node.actions.clone())
+                        .unwrap_or_default(),
+                };
+                let presses = advertised.iter().any(|action| action == "AXPress");
+                if !presses {
+                    let point = self.element_point(&handle)?;
+                    return self.deliver_pointer(
+                        policy,
+                        PointerAction::Click,
+                        ClickTarget::Element(handle),
+                        point,
+                        json!(resolution),
+                    );
+                }
                 self.backend
                     .invoke(&handle, "AXPress")
                     .map_err(backend_error)?;
@@ -815,23 +1044,24 @@ impl<
                 // The intent is validated before the ladder, so a malformed request is an error
                 // rather than a refusal.
                 let intent = keyboard_intent(params)?;
-                let ladder = self.keyboard_ladder();
-                let Some(candidate) = self.selected(&ladder, policy) else {
-                    return Ok(self.refusal(&ladder, policy));
-                };
+                if let KeyboardIntent::Key(spec) = intent {
+                    input::stroke(spec).map_err(|error| rpc_error(-32602, error))?;
+                }
                 let app = app_query(params);
                 // `keyboard` naming no application is explicitly addressed at whatever holds the
-                // foreground: nothing to activate, nothing to restore. Naming one makes it aimed,
-                // and the transaction compares and activates the backend's own identity for that
-                // application rather than the display name the request carried.
-                let aimed = app.name.is_some() || app.identifier.is_some();
-                let target = if aimed {
+                // foreground: nothing to activate, nothing to restore, and no process to post to.
+                // Naming one makes it aimed, and both the application rung and the transaction
+                // use the backend's own identity for that application rather than the display
+                // name the request carried.
+                let aimed =
+                    app.name.is_some() || app.identifier.is_some() || app.process_id.is_some();
+                let process = if aimed {
                     match self
                         .backend
-                        .resolve_application(&app)
+                        .application_process(&app)
                         .map_err(backend_error)?
                     {
-                        Some(identity) => Some(identity),
+                        Some(process) => Some(process),
                         // Falling through to the frontmost here would post keystrokes into whatever
                         // the user happens to be working in, having been asked for something else.
                         None => {
@@ -850,18 +1080,54 @@ impl<
                 } else {
                     None
                 };
-                self.foreground_dispatch(
+                let plan = self
+                    .backend
+                    .plan_application_keyboard(process.clone(), intent);
+                let ladder = self.keyboard_ladder(&plan);
+                let Some(candidate) = self.selected(&ladder, policy) else {
+                    return Ok(self.refusal(&ladder, policy));
+                };
+                let verification = json!({"verified":false,"reason":"keyboard input has no declared postcondition"});
+                if candidate.rung == DeliveryRung::Application {
+                    let ApplicationPlan::Bound(bound) = plan else {
+                        unreachable!("the application rung is only offered for a bound plan")
+                    };
+                    return self.dispatch_application(
+                        policy,
+                        &candidate,
+                        &bound,
+                        intent,
+                        verification,
+                    );
+                }
+                let mut readback = None;
+                let slot = &mut readback;
+                let mut result = self.foreground_dispatch(
                     policy,
                     &candidate,
-                    target
-                        .as_deref()
-                        .map_or(ForegroundTarget::Frontmost, ForegroundTarget::Application),
+                    process
+                        .as_ref()
+                        .map_or(ForegroundTarget::Frontmost, |process| {
+                            ForegroundTarget::Application(&process.identity)
+                        }),
                     // Keyboard input never touches the cursor, and capturing a pointer it does not
                     // move would report a restoration that never happened.
                     false,
-                    json!({"verified":false,"reason":"keyboard input has no declared postcondition"}),
-                    move |backend| backend.keyboard(&app, intent),
-                )
+                    verification,
+                    move |backend| {
+                        let before = backend.modifier_state();
+                        let posted = backend.keyboard(&app, intent);
+                        *slot = Some((before, settled_modifier_state(backend, before)));
+                        posted.map(|_| Value::Null).map_err(backend_error)
+                    },
+                )?;
+                if result
+                    .get("delivery")
+                    .is_some_and(|delivery| !delivery.is_null())
+                {
+                    stamp_modifier_readback(&mut result, "foreground", readback);
+                }
+                Ok(result)
             }
             "invoke" => {
                 let action = required_str(params, "name")?;
@@ -876,30 +1142,24 @@ impl<
                 ))
             }
             "scroll" => {
-                // These defaults mirror the generated public schema. Any amount or directional
-                // request is unsupported by AXScrollToVisible and must be refused before target
-                // resolution can capture an application or call another native API.
+                // These defaults mirror the generated public schema: pixels, with -120 one notch.
                 let dx = number_param(params, "deltaX", 0.0)?;
                 let dy = number_param(params, "deltaY", -120.0)?;
-                if dx != 0.0 || dy != 0.0 {
-                    return Err(capability_unavailable(
-                        "scroll",
-                        "directional-scroll",
-                        "not-implemented",
-                    ));
+                if !(dx.is_finite() && dy.is_finite()) {
+                    return Err(rpc_error(-32602, "deltaX and deltaY must be finite"));
                 }
-                let Some(target) = params.get("target") else {
-                    return Err(capability_unavailable(
-                        "scroll",
-                        "semantic-target",
-                        "not-implemented",
-                    ));
-                };
-                if pointer_target_is_point(target) || target.get("location").is_some() {
-                    return Err(capability_unavailable(
-                        "scroll",
-                        "non-semantic-target",
-                        "not-implemented",
+                if dx != 0.0 || dy != 0.0 {
+                    return self.scroll_wheel(params, policy, (dx, dy));
+                }
+                // A zero delta asks for the semantic scroll: bring an element into view.
+                let semantic = params.get("target").filter(|target| {
+                    !pointer_target_is_point(target) && target.get("location").is_none()
+                });
+                if semantic.is_none() {
+                    return Err(rpc_error(
+                        -32602,
+                        "a scroll with no delta brings a semantic target into view, so it requires \
+                         one; a point, a text location, or an app scrolls only by a nonzero delta",
                     ));
                 }
                 let (handle, resolution) = self.resolve(params)?;
@@ -917,47 +1177,104 @@ impl<
         }
     }
 
-    /// The ladder for a pointer action: no semantic rung, a pixel rung the backend answers for per
-    /// target, and `SendInput` behind the explicit opt-in.
-    fn pointer_ladder(&self, plan: &PixelPlan) -> Vec<DeliveryCandidate> {
-        vec![
-            match plan {
-                PixelPlan::Bound(_) => DeliveryCandidate::available(
-                    DeliveryRung::Pixel,
-                    DeliveryCapability::BackgroundPixelInput,
-                    PIXEL_MECHANISM,
-                ),
-                // The plan's own reason travels intact. A generic "unsupported" here would leave a
-                // caller unable to tell an elevated window from an unrecognized control class.
-                PixelPlan::Unavailable { reason, .. } => DeliveryCandidate::unavailable(
-                    DeliveryRung::Pixel,
-                    DeliveryCapability::BackgroundPixelInput,
-                    PIXEL_MECHANISM,
-                    DeliveryRefusalReason::BackgroundPixelUnsupported,
-                    reason.clone(),
-                ),
-            },
-            match plan {
-                // An obstacle that blocks every synthetic input at this target blocks the loud
-                // rung too, and saying so is what stops the refusal from recommending an opt-in
-                // that would buy a dispatch macOS discards.
-                PixelPlan::Unavailable {
-                    reason,
-                    blocks_global_input: true,
-                } => DeliveryCandidate::unavailable(
-                    DeliveryRung::Foreground,
-                    DeliveryCapability::GlobalInput,
-                    "SendInput",
-                    DeliveryRefusalReason::NoDeliveryCandidate,
-                    reason.clone(),
-                ),
-                _ => self.foreground_candidate(Capability::PointerInput, "SendInput"),
-            },
-        ]
+    /// A wheel scroll, aimed at whatever the request named.
+    ///
+    /// The point is resolved in a fixed order: a semantic target's element centre, a point target,
+    /// a text location's resolved point, or the centre of `app`'s focused window. A request naming
+    /// none of them has nowhere to scroll.
+    fn scroll_wheel(
+        &mut self,
+        params: &Map<String, Value>,
+        policy: DeliveryPolicy,
+        delta: (f64, f64),
+    ) -> Result<Value, JsonRpcError> {
+        let action = PointerAction::Wheel(delta);
+        if let Some(location) = text_location(params) {
+            let (target, point, resolution) = self.resolve_text_location(&location)?;
+            return self.deliver_pointer(policy, action, target, point, resolution);
+        }
+        match params.get("target") {
+            Some(target) if pointer_target_is_point(target) => {
+                let (target, point) = self.point_target("scroll", &target.clone(), params)?;
+                self.deliver_pointer(policy, action, target, point, Value::Null)
+            }
+            Some(_) => {
+                let (handle, resolution) = self.resolve(params)?;
+                let point = self.element_point(&handle)?;
+                self.deliver_pointer(
+                    policy,
+                    action,
+                    ClickTarget::Element(handle),
+                    point,
+                    json!(resolution),
+                )
+            }
+            None => {
+                let Some(app) = params
+                    .get("app")
+                    .and_then(Value::as_str)
+                    .filter(|app| !app.is_empty())
+                else {
+                    return Err(rpc_error(
+                        -32602,
+                        "scroll requires a target or an app to aim the wheel at",
+                    ));
+                };
+                let frame = self
+                    .backend
+                    .focused_window_frame(&query_for_app(app))
+                    .map_err(backend_error)?
+                    .ok_or_else(|| {
+                        rpc_error(-32002, format!("{app} has no focused window to scroll"))
+                    })?;
+                let point = (frame.x + frame.width / 2.0, frame.y + frame.height / 2.0);
+                self.deliver_pointer(
+                    policy,
+                    action,
+                    ClickTarget::Point(Some(app.to_owned())),
+                    point,
+                    Value::Null,
+                )
+            }
+        }
     }
 
-    /// The ladder for keyboard input, whose pixel rung is permanently absent by construction.
-    fn keyboard_ladder(&self) -> Vec<DeliveryCandidate> {
+    /// The ladder for a pointer action: no background rung, for reasons that are properties of
+    /// macOS rather than of the target, and the HID tap behind the explicit opt-in.
+    fn pointer_ladder(&self, action: PointerAction) -> Vec<DeliveryCandidate> {
+        let mut ladder = Vec::with_capacity(4);
+        if let PointerAction::Wheel(_) = action {
+            ladder.push(DeliveryCandidate::unavailable(
+                DeliveryRung::Semantic,
+                DeliveryCapability::SemanticAction,
+                "AXScrollToVisible",
+                DeliveryRefusalReason::NoDeliveryCandidate,
+                NO_SEMANTIC_SCROLL_DELTA,
+            ));
+        }
+        ladder.extend([
+            DeliveryCandidate::unavailable(
+                DeliveryRung::Pixel,
+                DeliveryCapability::BackgroundPixelInput,
+                PIXEL_MECHANISM,
+                DeliveryRefusalReason::BackgroundPixelUnsupported,
+                NO_WINDOW_BOUND_POINTER,
+            ),
+            DeliveryCandidate::unavailable(
+                DeliveryRung::Application,
+                DeliveryCapability::BackgroundPixelInput,
+                APPLICATION_MECHANISM,
+                DeliveryRefusalReason::BackgroundPixelUnsupported,
+                background::PID_POINTER_REFUSED,
+            ),
+            self.foreground_candidate(Capability::PointerInput, FOREGROUND_MECHANISM),
+        ]);
+        ladder
+    }
+
+    /// The ladder for keyboard input: no pixel rung by construction, the application rung as
+    /// the plan answers it, and the HID tap behind the explicit opt-in.
+    fn keyboard_ladder(&self, plan: &ApplicationPlan) -> Vec<DeliveryCandidate> {
         vec![
             DeliveryCandidate::unavailable(
                 DeliveryRung::Pixel,
@@ -966,7 +1283,31 @@ impl<
                 DeliveryRefusalReason::BackgroundPixelUnsupported,
                 NO_KEYBOARD_GEOMETRY,
             ),
-            self.foreground_candidate(Capability::KeyboardInput, "SendInput"),
+            match (plan, self.capability_restriction(Capability::KeyboardInput)) {
+                // Posting to a process needs the same Accessibility grant the HID tap does.
+                (ApplicationPlan::Bound(_), Some(restriction)) => DeliveryCandidate::unavailable(
+                    DeliveryRung::Application,
+                    DeliveryCapability::BackgroundPixelInput,
+                    APPLICATION_MECHANISM,
+                    DeliveryRefusalReason::NoDeliveryCandidate,
+                    restriction,
+                ),
+                (ApplicationPlan::Bound(_), None) => DeliveryCandidate::available(
+                    DeliveryRung::Application,
+                    DeliveryCapability::BackgroundPixelInput,
+                    APPLICATION_MECHANISM,
+                ),
+                // The plan's own reason travels intact, so a caller can tell a chord nobody
+                // measured from a request that named no application.
+                (ApplicationPlan::Unavailable(reason), _) => DeliveryCandidate::unavailable(
+                    DeliveryRung::Application,
+                    DeliveryCapability::BackgroundPixelInput,
+                    APPLICATION_MECHANISM,
+                    DeliveryRefusalReason::BackgroundPixelUnsupported,
+                    reason.clone(),
+                ),
+            },
+            self.foreground_candidate(Capability::KeyboardInput, FOREGROUND_MECHANISM),
         ]
     }
 
@@ -1026,8 +1367,12 @@ impl<
         Some(NO_FOREGROUND_TRANSACTION.to_string())
     }
 
-    /// Dispatches one action at the selected rung, inside a foreground transaction when the rung is
-    /// the foreground one.
+    /// Dispatches one action inside a foreground transaction.
+    ///
+    /// `body` runs only after activation is proved. It may still decline with an error, such as a
+    /// target that moved, and it returns any detail of its own to merge into the result. Either way
+    /// the transaction hands the session back, and its cleanup evidence travels with what the
+    /// caller receives.
     fn foreground_dispatch(
         &mut self,
         policy: DeliveryPolicy,
@@ -1035,33 +1380,50 @@ impl<
         target: ForegroundTarget<'_>,
         restores_pointer: bool,
         verification: Value,
-        body: impl FnOnce(&mut B) -> Result<(), axon_core::BackendError>,
+        body: impl FnOnce(&mut B) -> Result<Value, JsonRpcError>,
     ) -> Result<Value, JsonRpcError> {
         let dispatch = dispatch_in_foreground(&mut self.backend, target, restores_pointer, body);
+        let mut cleanup = dispatch.cleanup;
+        if let Some(evidence) = self.backend.take_activation_evidence() {
+            cleanup.message = Some(match cleanup.message.take() {
+                Some(message) => format!("{message}; {evidence}"),
+                None => evidence,
+            });
+        }
         if let Some(refusal) = dispatch.refusal {
             let mut result = DeliveryOutcome::refusal_result(policy, refusal);
             if let Some(object) = result.as_object_mut() {
-                object.insert("foreground".into(), json!(dispatch.cleanup));
+                object.insert("foreground".into(), json!(cleanup));
             }
             return Ok(result);
         }
-        if let Err(error) = dispatch.value.expect("a proved activation dispatches") {
-            // The transaction activated and then handed the session back around this failure, so
-            // its cleanup evidence is the only record of what happened to the user's foreground.
-            // It rides on the error rather than being dropped.
-            let mut failure = backend_error(error);
-            failure.data = Some(json!({ "foreground": dispatch.cleanup }));
-            return Err(failure);
-        }
+        let detail = match dispatch.value.expect("a proved activation dispatches") {
+            Ok(detail) => detail,
+            Err(mut failure) => {
+                // The transaction activated and then handed the session back around this failure,
+                // so its cleanup evidence is the only record of what happened to the user's
+                // foreground. It rides on the error rather than being dropped.
+                let mut data = match failure.data.take() {
+                    Some(Value::Object(data)) => data,
+                    _ => Map::new(),
+                };
+                data.insert("foreground".into(), json!(cleanup));
+                failure.data = Some(Value::Object(data));
+                return Err(failure);
+            }
+        };
 
-        let result = json!({
+        let mut result = json!({
             // This rung promises proved activation and exactly one dispatch. The hand-back remains
             // reported cleanup evidence, while verification proves whether the target acted.
-            "success": goal_success(&verification, dispatch.cleanup.activation_proved),
+            "success": goal_success(&verification, cleanup.activation_proved),
             "dispatch": {"success": true, "mechanism": candidate.mechanism},
             "verification": verification,
-            "foreground": dispatch.cleanup,
+            "foreground": cleanup,
         });
+        if let (Some(object), Value::Object(detail)) = (result.as_object_mut(), detail) {
+            object.extend(detail);
+        }
         Ok(delivered(result, policy, candidate.rung))
     }
 
@@ -1540,7 +1902,8 @@ impl<
         + TextRecognitionProvider
         + VisualObservationProvider
         + ReadableStateProvider
-        + BackgroundPixelPointer
+        + NativeInput
+        + BackgroundApplicationKeyboard
         + axon_core::RecordingEvidenceProvider,
 > ToolDispatcher for Router<B>
 {
@@ -1686,19 +2049,105 @@ fn bounded_ms(
 }
 
 fn app_query(params: &Map<String, Value>) -> AppQuery {
-    let app = params.get("app").and_then(Value::as_str);
-    let process_id = app.and_then(|value| value.strip_prefix("pid:").unwrap_or(value).parse().ok());
+    let mut query = params
+        .get("app")
+        .and_then(Value::as_str)
+        .map(query_for_app)
+        .unwrap_or(AppQuery {
+            process_id: None,
+            name: None,
+            identifier: None,
+        });
+    query.identifier = params
+        .get("identifier")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    query
+}
+
+/// The query one `app` string makes: a process id when it is one (bare or as `pid:<n>`), and
+/// otherwise a name the backend matches against both display names and bundle identifiers, which
+/// is what lets a recorded `{app: "com.apple.TextEdit", point}` replay.
+fn query_for_app(app: &str) -> AppQuery {
+    let process_id = app.strip_prefix("pid:").unwrap_or(app).parse().ok();
     AppQuery {
         process_id,
-        name: process_id
-            .is_none()
-            .then(|| app.map(str::to_owned))
-            .flatten(),
-        identifier: params
-            .get("identifier")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
+        name: process_id.is_none().then(|| app.to_owned()),
+        identifier: None,
     }
+}
+
+/// The part of the node at `index` (in the flattened order handles use) that its ancestors leave
+/// visible: its frame intersected with every ancestor frame. `None` when it has no frame or the
+/// intersection is empty.
+fn visible_frame(snapshot: &Snapshot, index: usize) -> Option<axon_core::Rect> {
+    fn clip(a: axon_core::Rect, b: axon_core::Rect) -> Option<axon_core::Rect> {
+        let (left, top) = (a.x.max(b.x), a.y.max(b.y));
+        let (right, bottom) = (
+            (a.x + a.width).min(b.x + b.width),
+            (a.y + a.height).min(b.y + b.height),
+        );
+        (right > left && bottom > top).then_some(axon_core::Rect {
+            x: left,
+            y: top,
+            width: right - left,
+            height: bottom - top,
+        })
+    }
+    /// Walks in the same pre-order `Snapshot::node` numbers nodes in, carrying the clip.
+    fn find(
+        node: &axon_core::Node,
+        clip_to: Option<axon_core::Rect>,
+        next: &mut usize,
+        wanted: usize,
+    ) -> Option<Option<axon_core::Rect>> {
+        let here = *next;
+        *next += 1;
+        let visible = match (node.frame, clip_to) {
+            (Some(frame), Some(bound)) => clip(frame, bound),
+            (Some(frame), None) => Some(frame),
+            (None, bound) => bound,
+        };
+        if here == wanted {
+            return Some(node.frame.and(visible));
+        }
+        node.children
+            .iter()
+            .find_map(|child| find(child, visible.or(clip_to), next, wanted))
+    }
+    let mut next = 0;
+    snapshot
+        .app
+        .windows
+        .iter()
+        .find_map(|window| find(&window.root, None, &mut next, index))
+        .flatten()
+}
+
+/// The text location a pointer request carries, inside its target or beside it.
+fn text_location(params: &Map<String, Value>) -> Option<Value> {
+    params
+        .get("target")
+        .and_then(|target| target.get("location"))
+        .or_else(|| params.get("location"))
+        .cloned()
+}
+
+/// Whether `point` is over a window of the expected process: the one the action was aimed at, or
+/// for an unaimed point, whichever application holds the foreground.
+fn point_belongs<B: NativeInput>(
+    backend: &mut B,
+    point: (f64, f64),
+    expected: Option<i32>,
+) -> Result<bool, axon_core::BackendError> {
+    let expected = match expected {
+        Some(process) => Some(process as i64),
+        None => backend
+            .frontmost_application()?
+            .and_then(|identity| backend.application_process_identifier(&identity)),
+    };
+    let owner = backend.point_owner(point)?;
+    Ok(owner.is_some() && owner.map(i64::from) == expected)
 }
 /// `keyboard` carries exactly one intent. Neither is an empty request and both at once is an
 /// ambiguous one; each is malformed rather than a delivery decision, so each is a transport error.
@@ -1734,9 +2183,6 @@ fn number_param(params: &Map<String, Value>, key: &str, default: f64) -> Result<
     }
 }
 
-fn pointer_target_is_point(target: &Value) -> bool {
-    target.get("point").is_some() || (target.get("x").is_some() && target.get("y").is_some())
-}
 /// Stamps the four stable delivery fields onto an action result.
 fn delivered(mut result: Value, policy: DeliveryPolicy, rung: DeliveryRung) -> Value {
     let success = result
@@ -2011,18 +2457,36 @@ mod tests {
             unreachable!()
         }
     }
-    impl BackgroundPixelPointer for EnumerationBackend {
-        fn plan_pixel_click(
-            &mut self,
-            _: &SnapshotHandle,
-            _: (f64, f64),
-        ) -> Result<PixelPlan, axon_core::BackendError> {
+    impl NativeInput for EnumerationBackend {
+        fn point_owner(&mut self, _: (f64, f64)) -> Result<Option<i32>, axon_core::BackendError> {
             unreachable!()
         }
-        fn dispatch_pixel_click(
+        fn focused_window_frame(
             &mut self,
-            _: &PixelTarget,
-        ) -> Result<PixelDispatch, PixelDispatchError> {
+            _: &AppQuery,
+        ) -> Result<Option<axon_core::Rect>, axon_core::BackendError> {
+            unreachable!()
+        }
+        fn scroll_wheel(
+            &mut self,
+            _: (f64, f64),
+            _: (f64, f64),
+        ) -> Result<Vec<(i32, i32)>, axon_core::BackendError> {
+            unreachable!()
+        }
+    }
+    impl BackgroundApplicationKeyboard for EnumerationBackend {
+        fn application_process(
+            &mut self,
+            _: &AppQuery,
+        ) -> Result<Option<ApplicationProcess>, axon_core::BackendError> {
+            unreachable!()
+        }
+        fn dispatch_application_keyboard(
+            &mut self,
+            _: &ApplicationProcess,
+            _: KeyboardIntent<'_>,
+        ) -> Result<ApplicationDispatch, BackgroundDispatchError> {
             unreachable!()
         }
     }
@@ -2313,52 +2777,6 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_click_forms_refuse_before_dispatch() {
-        for target in [
-            json!({"point":{"x":10,"y":20}}),
-            json!({"x":10,"y":20,"coordinateSpace":"screen"}),
-        ] {
-            let params = validated_params("click", json!({"target":target}));
-            let error = router_error(&mut Router::new(EnumerationBackend::new()), "click", params);
-            assert_eq!(error.code, -32004);
-            assert_eq!(error.data.as_ref().unwrap()["capability"], "point-target");
-            assert_eq!(error.data.as_ref().unwrap()["reason"], "not-implemented");
-        }
-    }
-
-    #[test]
-    fn canonical_scroll_defaults_and_unsupported_forms_refuse_before_dispatch() {
-        let defaulted = validated_params("scroll", json!({"target":{"app":"Notes","name":"List"}}));
-        assert_eq!(defaulted["deltaX"], 0);
-        assert_eq!(defaulted["deltaY"], -120);
-        let error = router_error(
-            &mut Router::new(EnumerationBackend::new()),
-            "scroll",
-            defaulted,
-        );
-        assert_eq!(error.code, -32004);
-        assert_eq!(
-            error.data.as_ref().unwrap()["capability"],
-            "directional-scroll"
-        );
-
-        for arguments in [
-            json!({"app":"Notes","deltaX":0,"deltaY":0}),
-            json!({"target":{"point":{"x":10,"y":20}},"deltaX":0,"deltaY":0}),
-            json!({"target":{"location":{"app":"Notes","text":"Bottom"}},"deltaX":0,"deltaY":0}),
-        ] {
-            let params = validated_params("scroll", arguments);
-            let error = router_error(
-                &mut Router::new(EnumerationBackend::new()),
-                "scroll",
-                params,
-            );
-            assert_eq!(error.code, -32004);
-            assert_eq!(error.data.as_ref().unwrap()["reason"], "not-implemented");
-        }
-    }
-
-    #[test]
     fn excluded_tools_are_capability_errors_before_dispatch() {
         for tool in ["drag", "permit"] {
             let (_, capability) = EXCLUDED.iter().find(|(name, _)| *name == tool).unwrap();
@@ -2417,5 +2835,982 @@ mod tests {
         let value = serde_json::to_value(snapshot).unwrap();
         assert_eq!(value.pointer("/app/name"), Some(&json!("Calculator")));
         assert!(value.get("application").is_none());
+    }
+
+    /// The macOS delivery table, end to end through the router against a backend that records
+    /// every activation and every post. Nothing here touches Core Graphics, so each assertion about
+    /// what was posted is an assertion about what the router asked for.
+    mod native_delivery {
+        use super::*;
+
+        const TEXTEDIT: i32 = 4242;
+        const PRIOR: i32 = 1000;
+        const OTHER: i32 = 5150;
+
+        /// The window, a text area that advertises no press, and a button that does, in the
+        /// flattened order handles index them.
+        const WINDOW: usize = 0;
+        const TEXT_AREA: usize = 1;
+        const BUTTON: usize = 2;
+        /// A role the capture's role table does not know, which advertises `AXPress` anyway.
+        const POPUP: usize = 3;
+
+        fn node(
+            role: &str,
+            title: Option<&str>,
+            actions: &[&str],
+            frame: axon_core::Rect,
+        ) -> axon_core::Node {
+            axon_core::Node {
+                role: role.into(),
+                subrole: None,
+                name: None,
+                title: title.map(str::to_owned),
+                label: None,
+                value: None,
+                description: None,
+                identifier: None,
+                actions: actions.iter().map(|action| action.to_string()).collect(),
+                frame: Some(frame),
+                editable: role == "AXTextArea",
+                focused: None,
+                enabled: Some(true),
+                children: Vec::new(),
+                child_count: None,
+                truncation_reason: None,
+            }
+        }
+
+        fn rect(x: f64, y: f64, width: f64, height: f64) -> axon_core::Rect {
+            axon_core::Rect {
+                x,
+                y,
+                width,
+                height,
+            }
+        }
+
+        struct NativeFake {
+            snapshot: Snapshot,
+            apps: Vec<(i32, &'static str, &'static str)>,
+            frontmost: Option<String>,
+            pointer: (f64, f64),
+            activations: Vec<String>,
+            /// Every post, in order: the only record of what reached the session.
+            dispatches: Vec<String>,
+            invokes: Vec<String>,
+            point_owner: Option<i32>,
+            window_origin: (f64, f64),
+            target_alive: bool,
+            denylist: &'static [DenylistEntry],
+            /// The window server's modifier state, and whether a keyboard post leaves Command
+            /// logically held in it, the way a chord with flags but no modifier keys did.
+            modifiers: ModifierState,
+            leaks_command: bool,
+        }
+
+        impl NativeFake {
+            fn new() -> Self {
+                let mut window = node(
+                    "AXWindow",
+                    Some("Untitled"),
+                    &[],
+                    rect(0.0, 0.0, 800.0, 600.0),
+                );
+                window.children = vec![
+                    node(
+                        "AXTextArea",
+                        Some("Body"),
+                        &[],
+                        rect(100.0, 100.0, 200.0, 100.0),
+                    ),
+                    node(
+                        "AXButton",
+                        Some("Save"),
+                        &["AXPress"],
+                        rect(10.0, 10.0, 40.0, 20.0),
+                    ),
+                    node(
+                        "AXPopUpButton",
+                        Some("Format"),
+                        &[],
+                        rect(60.0, 10.0, 80.0, 20.0),
+                    ),
+                ];
+                Self {
+                    snapshot: Snapshot::new(axon_core::Application {
+                        name: "TextEdit".into(),
+                        process_id: Some(TEXTEDIT as u32),
+                        identifier: Some("com.apple.TextEdit".into()),
+                        windows: vec![axon_core::Window {
+                            title: Some("Untitled".into()),
+                            root: window,
+                        }],
+                    }),
+                    apps: vec![
+                        (TEXTEDIT, "TextEdit", "com.apple.TextEdit"),
+                        (PRIOR, "Prior", "com.example.Prior"),
+                        (OTHER, "Other", "com.example.Other"),
+                    ],
+                    frontmost: Some("com.example.Prior".into()),
+                    pointer: (5.0, 5.0),
+                    activations: Vec::new(),
+                    dispatches: Vec::new(),
+                    invokes: Vec::new(),
+                    point_owner: Some(TEXTEDIT),
+                    window_origin: (0.0, 0.0),
+                    target_alive: true,
+                    denylist: background::DENYLIST,
+                    // The non-coalesced bit an idle session reports, which is not a held key.
+                    modifiers: ModifierState {
+                        combined_session: 0x2000_0000,
+                        hid_system: 0x2000_0000,
+                    },
+                    leaks_command: false,
+                }
+            }
+
+            fn find(&self, app: &AppQuery) -> Option<(i32, &'static str)> {
+                let mut matches = self.apps.iter().filter(|(pid, name, bundle)| {
+                    app.process_id.is_none_or(|wanted| wanted == *pid as u32)
+                        && app
+                            .identifier
+                            .as_deref()
+                            .is_none_or(|wanted| wanted == *bundle)
+                        && app.name.as_deref().is_none_or(|wanted| {
+                            wanted.eq_ignore_ascii_case(name) || wanted == *bundle
+                        })
+                });
+                match (matches.next(), matches.next()) {
+                    (Some((pid, _, bundle)), None) => Some((*pid, *bundle)),
+                    _ => None,
+                }
+            }
+        }
+
+        impl PlatformBackend for NativeFake {
+            fn capabilities(
+                &self,
+            ) -> Result<Vec<axon_core::CapabilityInfo>, axon_core::BackendError> {
+                Ok(Capability::ALL
+                    .into_iter()
+                    .map(|capability| axon_core::CapabilityInfo {
+                        capability,
+                        usable: true,
+                        restriction: None,
+                    })
+                    .collect())
+            }
+            fn enumerate_applications(
+                &self,
+            ) -> Result<Vec<axon_core::Application>, axon_core::BackendError> {
+                Ok(self
+                    .apps
+                    .iter()
+                    .map(|(pid, name, bundle)| axon_core::Application {
+                        name: (*name).into(),
+                        process_id: Some(*pid as u32),
+                        identifier: Some((*bundle).into()),
+                        windows: Vec::new(),
+                    })
+                    .collect())
+            }
+            fn capture(&mut self, _: &AppQuery) -> Result<Snapshot, axon_core::BackendError> {
+                Ok(self.snapshot.clone())
+            }
+            fn invoke(
+                &mut self,
+                _: &SnapshotHandle,
+                action: &str,
+            ) -> Result<(), axon_core::BackendError> {
+                self.invokes.push(action.into());
+                Ok(())
+            }
+            fn read_value(
+                &self,
+                _: &SnapshotHandle,
+            ) -> Result<Option<String>, axon_core::BackendError> {
+                Ok(None)
+            }
+            fn set_value(
+                &mut self,
+                _: &SnapshotHandle,
+                _: &str,
+            ) -> Result<(), axon_core::BackendError> {
+                unreachable!()
+            }
+            fn focus(&mut self, _: &SnapshotHandle) -> Result<(), axon_core::BackendError> {
+                unreachable!()
+            }
+            fn scroll(
+                &mut self,
+                _: &SnapshotHandle,
+                _: (f64, f64),
+            ) -> Result<(), axon_core::BackendError> {
+                self.invokes.push("AXScrollToVisible".into());
+                Ok(())
+            }
+            fn observe(
+                &mut self,
+                _: &AppQuery,
+                _: Duration,
+            ) -> Result<axon_core::Observation, axon_core::BackendError> {
+                unreachable!()
+            }
+            fn wait_for_value(
+                &mut self,
+                _: &SnapshotHandle,
+                _: &Value,
+                _: Duration,
+            ) -> Result<axon_core::Observation, axon_core::BackendError> {
+                unreachable!()
+            }
+            fn pointer_click(&mut self, point: (f64, f64)) -> Result<(), axon_core::BackendError> {
+                self.dispatches
+                    .push(format!("click {},{}", point.0, point.1));
+                self.pointer = point;
+                Ok(())
+            }
+            fn pointer_drag(
+                &mut self,
+                _: (f64, f64),
+                _: (f64, f64),
+                _: Duration,
+            ) -> Result<(), axon_core::BackendError> {
+                unreachable!()
+            }
+            fn keyboard(
+                &mut self,
+                _: &AppQuery,
+                intent: KeyboardIntent<'_>,
+            ) -> Result<(), axon_core::BackendError> {
+                self.dispatches.push(format!("hid {}", intent.as_str()));
+                if self.leaks_command {
+                    self.modifiers.combined_session |= input::FLAG_COMMAND;
+                    self.modifiers.hid_system |= input::FLAG_COMMAND;
+                }
+                Ok(())
+            }
+            fn screenshot(
+                &mut self,
+                _: &AppQuery,
+            ) -> Result<axon_core::Screenshot, axon_core::BackendError> {
+                unreachable!()
+            }
+            fn hit_test(
+                &mut self,
+                _: (f64, f64),
+            ) -> Result<Option<axon_core::Node>, axon_core::BackendError> {
+                Ok(None)
+            }
+            fn supports_foreground_transaction(&self) -> bool {
+                true
+            }
+            fn frontmost_application(&mut self) -> Result<Option<String>, axon_core::BackendError> {
+                Ok(self.frontmost.clone())
+            }
+            fn activate_application(
+                &mut self,
+                identity: &str,
+            ) -> Result<bool, axon_core::BackendError> {
+                self.activations.push(identity.into());
+                self.frontmost = Some(identity.into());
+                Ok(true)
+            }
+            fn application_process_identifier(&mut self, identity: &str) -> Option<i64> {
+                self.apps
+                    .iter()
+                    .find(|(_, _, bundle)| *bundle == identity)
+                    .map(|(pid, _, _)| *pid as i64)
+            }
+            fn pointer_location(&mut self) -> Result<Option<(f64, f64)>, axon_core::BackendError> {
+                Ok(Some(self.pointer))
+            }
+            fn move_pointer(&mut self, to: (f64, f64)) -> Result<bool, axon_core::BackendError> {
+                self.pointer = to;
+                Ok(true)
+            }
+        }
+
+        impl PointerTargetVerifier for NativeFake {
+            fn verify_pointer_target(
+                &mut self,
+                _: &SnapshotHandle,
+                _: (f64, f64),
+            ) -> Result<bool, axon_core::BackendError> {
+                Ok(self.point_owner == Some(TEXTEDIT))
+            }
+        }
+        impl TextRecognitionProvider for NativeFake {
+            fn recognize_text(
+                &mut self,
+                _: &AppQuery,
+            ) -> Result<Vec<axon_core::RecognizedText>, axon_core::BackendError> {
+                Ok(Vec::new())
+            }
+        }
+        impl VisualObservationProvider for NativeFake {
+            fn observe_visuals(
+                &mut self,
+                _: &AppQuery,
+                _: bool,
+                _: bool,
+            ) -> Result<VisualObservation, axon_core::BackendError> {
+                unreachable!()
+            }
+        }
+        impl ReadableStateProvider for NativeFake {
+            fn readable_state(
+                &self,
+                _: &SnapshotHandle,
+            ) -> Result<Map<String, Value>, axon_core::BackendError> {
+                unreachable!()
+            }
+        }
+        impl NativeInput for NativeFake {
+            fn point_owner(
+                &mut self,
+                _: (f64, f64),
+            ) -> Result<Option<i32>, axon_core::BackendError> {
+                Ok(self.point_owner)
+            }
+            fn focused_window_frame(
+                &mut self,
+                app: &AppQuery,
+            ) -> Result<Option<axon_core::Rect>, axon_core::BackendError> {
+                Ok(self
+                    .find(app)
+                    .map(|_| rect(self.window_origin.0, self.window_origin.1, 800.0, 600.0)))
+            }
+            fn scroll_wheel(
+                &mut self,
+                point: (f64, f64),
+                delta: (f64, f64),
+            ) -> Result<Vec<(i32, i32)>, axon_core::BackendError> {
+                self.dispatches.push(format!(
+                    "wheel {},{} by {},{}",
+                    point.0, point.1, delta.0, delta.1
+                ));
+                self.pointer = point;
+                Ok(input::wheel_steps(delta.0, delta.1))
+            }
+            fn modifier_state(&mut self) -> Option<ModifierState> {
+                Some(self.modifiers)
+            }
+            /// What the element itself answers: the pop-up button advertises a press that the
+            /// capture's role table never inferred, and everything else answers as captured.
+            fn advertised_actions(
+                &mut self,
+                handle: &SnapshotHandle,
+            ) -> Result<Option<Vec<String>>, axon_core::BackendError> {
+                let index = self.snapshot.index_for_handle(handle).unwrap();
+                if index == POPUP {
+                    return Ok(Some(vec!["AXPress".into(), "AXShowMenu".into()]));
+                }
+                Ok(self.snapshot.node(index).map(|node| node.actions.clone()))
+            }
+        }
+        impl BackgroundApplicationKeyboard for NativeFake {
+            fn application_process(
+                &mut self,
+                app: &AppQuery,
+            ) -> Result<Option<ApplicationProcess>, axon_core::BackendError> {
+                Ok(self.find(app).map(|(pid, bundle)| ApplicationProcess {
+                    process_identifier: pid,
+                    identity: bundle.into(),
+                }))
+            }
+            fn application_keyboard_denylist(&self) -> &'static [DenylistEntry] {
+                self.denylist
+            }
+            fn dispatch_application_keyboard(
+                &mut self,
+                process: &ApplicationProcess,
+                intent: KeyboardIntent<'_>,
+            ) -> Result<ApplicationDispatch, BackgroundDispatchError> {
+                if !self.target_alive {
+                    return Err(BackgroundDispatchError::Stale(format!(
+                        "{} is no longer running as process {}, so nothing was posted",
+                        process.identity, process.process_identifier
+                    )));
+                }
+                self.dispatches.push(format!(
+                    "pid {} {}",
+                    process.process_identifier,
+                    intent.as_str()
+                ));
+                Ok(ApplicationDispatch {
+                    frontmost_unchanged: true,
+                    pointer_unchanged: true,
+                })
+            }
+        }
+        impl axon_core::GlobalInputObserver for NativeFake {
+            fn start(
+                &mut self,
+                _: &axon_core::RecordingScope,
+            ) -> Result<(), axon_core::BackendError> {
+                unreachable!()
+            }
+            fn poll(
+                &mut self,
+                _: Duration,
+            ) -> Result<Vec<axon_core::RecordedInputEvent>, axon_core::BackendError> {
+                unreachable!()
+            }
+            fn stop(&mut self) -> Result<(), axon_core::BackendError> {
+                Ok(())
+            }
+            fn is_recording(&self) -> bool {
+                false
+            }
+        }
+        impl axon_core::RecordingEvidenceProvider for NativeFake {
+            fn read_focused(
+                &mut self,
+            ) -> Result<Option<axon_core::RecordedFocusedEvidence>, axon_core::BackendError>
+            {
+                Ok(None)
+            }
+            fn capture_snapshot(
+                &mut self,
+                _: &axon_core::RecordedAppIdentity,
+            ) -> Result<Option<Snapshot>, axon_core::BackendError> {
+                Ok(None)
+            }
+            fn settle(
+                &mut self,
+                _: usize,
+                _: &str,
+            ) -> Result<axon_core::RecordedSettleEvidence, axon_core::BackendError> {
+                Ok(Default::default())
+            }
+        }
+
+        fn router(backend: NativeFake) -> Router<NativeFake> {
+            Router::new(backend)
+        }
+
+        fn call(
+            router: &mut Router<NativeFake>,
+            tool: &str,
+            arguments: Value,
+        ) -> Result<Value, JsonRpcError> {
+            match router
+                .request(JsonRpcRequest::new(
+                    Some(JsonRpcId::Integer(1)),
+                    tool,
+                    Some(arguments),
+                ))
+                .unwrap()
+            {
+                JsonRpcResponse::Success(success) => Ok(success.result),
+                JsonRpcResponse::Failure(failure) => Err(failure.error),
+            }
+        }
+
+        fn ok(router: &mut Router<NativeFake>, tool: &str, arguments: Value) -> Value {
+            call(router, tool, arguments.clone())
+                .unwrap_or_else(|error| panic!("{tool} {arguments} failed: {error:?}"))
+        }
+
+        /// The semantic target for one element of the fake's snapshot, registered the way a
+        /// `look` registers it.
+        fn element(router: &mut Router<NativeFake>, index: usize) -> Value {
+            let snapshot = router.backend.snapshot.clone();
+            let names = router.register_snapshot(&snapshot);
+            let name = names
+                .iter()
+                .find(|name| name.source_index == index)
+                .unwrap_or_else(|| panic!("element {index} has a semantic name"))
+                .name
+                .clone();
+            json!({"app": "TextEdit", "name": name})
+        }
+
+        fn also_refused(result: &Value) -> String {
+            result["refusal"]["alsoRefused"].to_string()
+        }
+
+        const DEAF: DenylistEntry = DenylistEntry {
+            bundle_id: "com.apple.TextEdit",
+            reason: "its view reads only window-server routed key events",
+            evidence: &["textedit-keyboard-2099-01-01"],
+        };
+
+        #[test]
+        fn text_into_an_application_nobody_measured_is_delivered_at_the_application_rung() {
+            let mut router = router(NativeFake::new());
+            let result = ok(
+                &mut router,
+                "keyboard",
+                json!({"app": "TextEdit", "text": "hi"}),
+            );
+
+            assert_eq!(result["deliveryPolicy"], "backgroundOnly");
+            assert_eq!(result["delivery"], "application");
+            assert_eq!(result["dispatchSuccess"], true);
+            // Dispatch is not delivery: keyboard declares no postcondition.
+            assert_eq!(result["success"], false);
+            assert_eq!(result["dispatch"]["mechanism"], "CGEventPostToPid");
+            assert_eq!(
+                result["backgroundDelivery"]["targetApplication"],
+                "com.apple.TextEdit"
+            );
+            assert_eq!(result["backgroundDelivery"]["pointerAsserted"], false);
+            assert_eq!(
+                result["backgroundDelivery"]["variant"],
+                background::KEYBOARD_VARIANT
+            );
+            assert!(
+                router.backend.activations.is_empty(),
+                "nothing was activated"
+            );
+            assert_eq!(
+                router.backend.dispatches,
+                vec![format!("pid {TEXTEDIT} hi")]
+            );
+        }
+
+        #[test]
+        fn a_named_key_without_modifiers_also_travels_the_application_rung() {
+            let mut router = router(NativeFake::new());
+            let result = ok(
+                &mut router,
+                "keyboard",
+                json!({"app": "TextEdit", "key": "Return"}),
+            );
+            assert_eq!(result["delivery"], "application");
+            assert_eq!(
+                router.backend.dispatches,
+                vec![format!("pid {TEXTEDIT} Return")]
+            );
+        }
+
+        #[test]
+        fn a_denylisted_application_refuses_with_its_row_and_posts_nothing() {
+            let mut backend = NativeFake::new();
+            backend.denylist = &[DEAF];
+            let mut router = router(backend);
+            let result = ok(
+                &mut router,
+                "keyboard",
+                json!({"app": "TextEdit", "text": "hi"}),
+            );
+
+            assert_eq!(result["delivery"], Value::Null);
+            assert_eq!(result["refusal"]["reason"], "foregroundNotPermitted");
+            let obstacles = also_refused(&result);
+            assert!(
+                obstacles.contains("textedit-keyboard-2099-01-01"),
+                "{obstacles}"
+            );
+            assert!(obstacles.contains("\"application\""), "{obstacles}");
+            assert!(router.backend.dispatches.is_empty());
+        }
+
+        #[test]
+        fn a_chord_skips_the_application_rung_and_needs_the_foreground() {
+            let mut router = router(NativeFake::new());
+            let refused = ok(
+                &mut router,
+                "keyboard",
+                json!({"app": "TextEdit", "key": "cmd+s"}),
+            );
+            assert_eq!(refused["refusal"]["reason"], "foregroundNotPermitted");
+            assert!(
+                also_refused(&refused).contains("modified keystrokes were not measured"),
+                "{}",
+                also_refused(&refused)
+            );
+            assert!(router.backend.dispatches.is_empty());
+            assert!(router.backend.activations.is_empty());
+
+            let permitted = ok(
+                &mut router,
+                "keyboard",
+                json!({"app": "TextEdit", "key": "cmd+s", "deliveryPolicy": "foregroundPermitted"}),
+            );
+            assert_eq!(permitted["delivery"], "foreground");
+            assert_eq!(
+                permitted["dispatch"]["mechanism"],
+                "CGEventPost(kCGHIDEventTap)"
+            );
+            assert_eq!(permitted["foreground"]["activationProved"], true);
+            assert_eq!(permitted["foreground"]["restored"], true);
+            assert_eq!(permitted["foreground"]["priorApp"], "com.example.Prior");
+            assert_eq!(permitted["foreground"]["priorAppProcessIdentifier"], PRIOR);
+            // Keystrokes never move the pointer, so there was nothing to put back.
+            assert_eq!(permitted["foreground"]["pointerRestored"], Value::Null);
+            assert_eq!(
+                router.backend.activations,
+                vec![
+                    "com.apple.TextEdit".to_string(),
+                    "com.example.Prior".to_string()
+                ]
+            );
+            assert_eq!(router.backend.dispatches, vec!["hid cmd+s".to_string()]);
+        }
+
+        /// Every keyboard dispatch reports whether it left the session's modifiers as it found
+        /// them, at either rung, beside the pointer's own restoration.
+        #[test]
+        fn every_keyboard_dispatch_reports_that_it_restored_the_modifiers() {
+            let mut router = router(NativeFake::new());
+            let background = ok(
+                &mut router,
+                "keyboard",
+                json!({"app": "TextEdit", "text": "hi"}),
+            );
+            assert_eq!(background["backgroundDelivery"]["modifiersRestored"], true);
+            let chord = ok(
+                &mut router,
+                "keyboard",
+                json!({"app": "TextEdit", "key": "cmd+s", "deliveryPolicy": "foregroundPermitted"}),
+            );
+            assert_eq!(chord["foreground"]["modifiersRestored"], true);
+            assert_eq!(chord["dispatchSuccess"], true);
+        }
+
+        /// A chord that leaves Command logically held has turned every later keystroke on the
+        /// machine into a shortcut. The rung did not hold, so the action fails, and the masks say
+        /// what was left; the events were still posted, so `dispatchSuccess` says so.
+        #[test]
+        fn a_chord_that_leaves_a_modifier_held_fails_its_rung_but_reports_the_post() {
+            let mut backend = NativeFake::new();
+            backend.leaks_command = true;
+            let mut router = router(backend);
+            let result = ok(
+                &mut router,
+                "keyboard",
+                json!({"app": "TextEdit", "key": "cmd+s", "deliveryPolicy": "foregroundPermitted"}),
+            );
+            assert_eq!(result["delivery"], "foreground");
+            assert_eq!(result["dispatchSuccess"], true);
+            assert_eq!(result["success"], false);
+            assert_eq!(result["foreground"]["modifiersRestored"], false);
+            let message = result["message"].as_str().unwrap();
+            assert!(
+                message.contains("0x20000000 before and 0x20100000 after"),
+                "{message}"
+            );
+        }
+
+        #[test]
+        fn a_process_that_exits_between_plan_and_dispatch_is_stale_and_posts_nothing() {
+            let mut backend = NativeFake::new();
+            backend.target_alive = false;
+            let mut router = router(backend);
+            let error = call(
+                &mut router,
+                "keyboard",
+                json!({"app": "TextEdit", "text": "hi"}),
+            )
+            .unwrap_err();
+            assert_eq!(error.code, -32003);
+            assert!(router.backend.dispatches.is_empty());
+        }
+
+        #[test]
+        fn an_unaimed_keyboard_request_has_only_the_frontmost_and_only_when_permitted() {
+            let mut router = router(NativeFake::new());
+            let refused = ok(&mut router, "keyboard", json!({"text": "hi"}));
+            assert_eq!(refused["refusal"]["reason"], "foregroundNotPermitted");
+            assert!(
+                also_refused(&refused).contains("no process to post it to"),
+                "{}",
+                also_refused(&refused)
+            );
+            assert!(router.backend.dispatches.is_empty());
+
+            let permitted = ok(
+                &mut router,
+                "keyboard",
+                json!({"text": "hi", "deliveryPolicy": "foregroundPermitted"}),
+            );
+            assert_eq!(permitted["delivery"], "foreground");
+            assert_eq!(permitted["foreground"]["alreadyFrontmost"], true);
+            assert!(router.backend.activations.is_empty());
+            assert_eq!(router.backend.dispatches, vec!["hid hi".to_string()]);
+        }
+
+        #[test]
+        fn a_key_this_backend_cannot_press_is_malformed_rather_than_refused() {
+            let mut router = router(NativeFake::new());
+            for key in ["Insert", "cmd+é", "hyper+a"] {
+                let error = call(
+                    &mut router,
+                    "keyboard",
+                    json!({"app": "TextEdit", "key": key}),
+                )
+                .unwrap_err();
+                assert_eq!(error.code, -32602, "{key}");
+            }
+            assert!(router.backend.dispatches.is_empty());
+        }
+
+        #[test]
+        fn every_pointer_form_refuses_by_mechanism_under_background_only() {
+            let mut router = router(NativeFake::new());
+            let text_area = element(&mut router, TEXT_AREA);
+            for arguments in [
+                json!({"target": {"app": "com.apple.TextEdit", "point": {"x": 150, "y": 150}}}),
+                json!({"target": text_area}),
+                json!({"target": {"location": {"app": "TextEdit", "text": "Save"}}}),
+            ] {
+                let result = ok(&mut router, "click", arguments.clone());
+                assert_eq!(result["delivery"], Value::Null, "{arguments}");
+                assert_eq!(
+                    result["refusal"]["reason"], "foregroundNotPermitted",
+                    "{arguments}"
+                );
+                let obstacles = also_refused(&result);
+                assert!(obstacles.contains("window number 0"), "{obstacles}");
+                assert!(
+                    obstacles.contains("without the window server's hit testing"),
+                    "{obstacles}"
+                );
+            }
+            assert!(router.backend.dispatches.is_empty());
+            assert!(router.backend.activations.is_empty());
+            assert!(router.backend.invokes.is_empty());
+        }
+
+        #[test]
+        fn a_recorded_point_fallback_resolves_its_bundle_identifier_and_restores_the_pointer() {
+            let mut router = router(NativeFake::new());
+            let result = ok(
+                &mut router,
+                "click",
+                json!({
+                    "target": {"app": "com.apple.TextEdit", "point": {"x": 150, "y": 150}},
+                    "deliveryPolicy": "foregroundPermitted"
+                }),
+            );
+            assert_eq!(result["delivery"], "foreground");
+            assert_eq!(result["dispatchSuccess"], true);
+            assert_eq!(result["success"], false);
+            assert_eq!(result["foreground"]["activationProved"], true);
+            assert_eq!(result["foreground"]["pointerRestored"], true);
+            assert_eq!(router.backend.pointer, (5.0, 5.0));
+            assert_eq!(
+                router.backend.activations,
+                vec![
+                    "com.apple.TextEdit".to_string(),
+                    "com.example.Prior".to_string()
+                ]
+            );
+            assert_eq!(router.backend.dispatches, vec!["click 150,150".to_string()]);
+        }
+
+        #[test]
+        fn a_window_point_is_offset_by_the_focused_window_and_a_screenshot_point_is_refused() {
+            let mut backend = NativeFake::new();
+            backend.window_origin = (100.0, 50.0);
+            let mut router = router(backend);
+            ok(
+                &mut router,
+                "click",
+                json!({
+                    "target": {"app": "TextEdit", "coordinateSpace": "window", "point": {"x": 10, "y": 20}},
+                    "deliveryPolicy": "foregroundPermitted"
+                }),
+            );
+            assert_eq!(router.backend.dispatches, vec!["click 110,70".to_string()]);
+
+            let error = call(
+                &mut router,
+                "click",
+                json!({"target": {"app": "TextEdit", "coordinateSpace": "screenshot", "x": 1, "y": 2}}),
+            )
+            .unwrap_err();
+            assert_eq!(error.code, -32004);
+            assert_eq!(
+                error.data.unwrap()["capability"],
+                "screenshot-coordinate-space"
+            );
+        }
+
+        #[test]
+        fn a_point_over_another_application_is_stale_and_posts_nothing() {
+            let mut backend = NativeFake::new();
+            backend.point_owner = Some(OTHER);
+            let mut router = router(backend);
+            let error = call(
+                &mut router,
+                "click",
+                json!({
+                    "target": {"app": "TextEdit", "point": {"x": 150, "y": 150}},
+                    "deliveryPolicy": "foregroundPermitted"
+                }),
+            )
+            .unwrap_err();
+            assert_eq!(error.code, -32003);
+            // The session was still handed back, and the error says so.
+            assert_eq!(error.data.unwrap()["foreground"]["restored"], true);
+            assert!(router.backend.dispatches.is_empty());
+        }
+
+        #[test]
+        fn an_element_that_advertises_no_press_is_clicked_at_its_centre() {
+            let mut router = router(NativeFake::new());
+            let text_area = element(&mut router, TEXT_AREA);
+            let result = ok(
+                &mut router,
+                "click",
+                json!({"target": text_area, "deliveryPolicy": "foregroundPermitted"}),
+            );
+            assert_eq!(result["delivery"], "foreground");
+            assert!(result["resolution"].is_object());
+            assert!(
+                router.backend.invokes.is_empty(),
+                "no AXPress was attempted"
+            );
+            assert_eq!(router.backend.dispatches, vec!["click 200,150".to_string()]);
+        }
+
+        /// A document view reports the whole document's frame. Its centre is off screen, so the
+        /// click aims at the centre of what the window actually shows of it.
+        #[test]
+        fn an_element_taller_than_its_window_is_clicked_where_it_is_visible() {
+            let mut backend = NativeFake::new();
+            backend.snapshot.app.windows[0].root.children[0].frame =
+                Some(rect(100.0, 100.0, 200.0, 5000.0));
+            let mut router = router(backend);
+            let text_area = element(&mut router, TEXT_AREA);
+            ok(
+                &mut router,
+                "click",
+                json!({"target": text_area, "deliveryPolicy": "foregroundPermitted"}),
+            );
+            assert_eq!(router.backend.dispatches, vec!["click 200,350".to_string()]);
+        }
+
+        #[test]
+        fn an_element_scrolled_entirely_out_of_view_is_stale_and_posts_nothing() {
+            let mut backend = NativeFake::new();
+            backend.snapshot.app.windows[0].root.children[0].frame =
+                Some(rect(100.0, 900.0, 200.0, 100.0));
+            let mut router = router(backend);
+            let text_area = element(&mut router, TEXT_AREA);
+            let error = call(
+                &mut router,
+                "click",
+                json!({"target": text_area, "deliveryPolicy": "foregroundPermitted"}),
+            )
+            .unwrap_err();
+            assert_eq!(error.code, -32003);
+            assert!(router.backend.dispatches.is_empty());
+            assert!(
+                router.backend.activations.is_empty(),
+                "refused before the transaction"
+            );
+        }
+
+        #[test]
+        fn an_element_that_advertises_press_stays_semantic() {
+            let mut router = router(NativeFake::new());
+            let button = element(&mut router, BUTTON);
+            let result = ok(&mut router, "click", json!({"target": button}));
+            assert_eq!(result["delivery"], "semantic");
+            assert_eq!(result["dispatch"]["mechanism"], "AXPress");
+            assert_eq!(router.backend.invokes, vec!["AXPress".to_string()]);
+            assert!(router.backend.dispatches.is_empty());
+        }
+
+        /// The press is decided by what the element advertises, not by a role table: a pop-up
+        /// button the table does not know still presses semantically, in the background.
+        #[test]
+        fn an_element_outside_the_role_table_that_advertises_press_stays_semantic() {
+            let mut router = router(NativeFake::new());
+            let popup = element(&mut router, POPUP);
+            let result = ok(&mut router, "click", json!({"target": popup}));
+            assert_eq!(result["delivery"], "semantic");
+            assert_eq!(result["deliveryPolicy"], "backgroundOnly");
+            assert_eq!(router.backend.invokes, vec!["AXPress".to_string()]);
+            assert!(router.backend.dispatches.is_empty());
+            assert!(router.backend.activations.is_empty());
+        }
+
+        #[test]
+        fn the_default_scroll_refuses_by_mechanism_under_background_only() {
+            let mut router = router(NativeFake::new());
+            let text_area = element(&mut router, TEXT_AREA);
+            let params = validated_params("scroll", json!({"target": text_area}));
+            assert_eq!(params["deltaY"], -120);
+            let result = ok(&mut router, "scroll", Value::Object(params));
+
+            assert_eq!(result["refusal"]["reason"], "foregroundNotPermitted");
+            let obstacles = also_refused(&result);
+            assert!(
+                obstacles.contains("cannot carry a scroll delta"),
+                "{obstacles}"
+            );
+            assert!(obstacles.contains("window number 0"), "{obstacles}");
+            assert!(!obstacles.contains("directional-scroll"), "{obstacles}");
+            assert!(router.backend.dispatches.is_empty());
+        }
+
+        #[test]
+        fn a_permitted_wheel_scroll_reports_its_pixel_steps() {
+            let mut router = router(NativeFake::new());
+            let result = ok(
+                &mut router,
+                "scroll",
+                json!({"app": "TextEdit", "deltaY": -400, "deliveryPolicy": "foregroundPermitted"}),
+            );
+            assert_eq!(result["delivery"], "foreground");
+            assert_eq!(result["foreground"]["pointerRestored"], true);
+            assert_eq!(result["eventPath"]["units"], "pixel");
+            let steps = result["eventPath"]["steps"].as_array().unwrap();
+            assert_eq!(steps.len(), 4);
+            let total: i64 = steps
+                .iter()
+                .map(|step| step["deltaY"].as_i64().unwrap())
+                .sum();
+            assert_eq!(total, -400);
+            assert_eq!(
+                router.backend.dispatches,
+                vec!["wheel 400,300 by 0,-400".to_string()]
+            );
+        }
+
+        #[test]
+        fn a_zero_delta_with_a_semantic_target_stays_scroll_to_visible() {
+            let mut router = router(NativeFake::new());
+            let text_area = element(&mut router, TEXT_AREA);
+            let result = ok(
+                &mut router,
+                "scroll",
+                json!({"target": text_area, "deltaX": 0, "deltaY": 0}),
+            );
+            assert_eq!(result["delivery"], "semantic");
+            assert_eq!(
+                router.backend.invokes,
+                vec!["AXScrollToVisible".to_string()]
+            );
+            assert!(router.backend.dispatches.is_empty());
+        }
+
+        #[test]
+        fn a_scroll_with_nowhere_to_aim_is_malformed() {
+            let mut router = router(NativeFake::new());
+            for arguments in [
+                json!({"deltaY": -120}),
+                json!({"target": {"point": {"x": 1, "y": 2}}, "deltaX": 0, "deltaY": 0}),
+                json!({"app": "TextEdit", "deltaX": 0, "deltaY": 0}),
+            ] {
+                let error = call(&mut router, "scroll", arguments.clone()).unwrap_err();
+                assert_eq!(error.code, -32602, "{arguments}");
+            }
+            assert!(router.backend.dispatches.is_empty());
+        }
+
+        #[test]
+        fn the_window_handle_is_registered_too() {
+            // A guard on the fixture itself: the indices above name the elements they claim to.
+            let mut router = router(NativeFake::new());
+            assert_eq!(element(&mut router, WINDOW)["app"], "TextEdit");
+        }
     }
 }

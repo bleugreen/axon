@@ -1,6 +1,6 @@
 {
   "schemaVersion": "macos-acceptance-v1",
-  "generatedAt": "2026-08-16T19:44:22-04:00",
+  "generatedAt": "2026-11-01T16:58:33-08:00",
   "campaigns": [
     {
       "id": "bbl-2026-08-16",
@@ -15,6 +15,21 @@
         "screenRecording": "notNeeded"
       },
       "rawEvidence": "raw/bbl-2026-08-16.json",
+      "notes": null
+    },
+    {
+      "id": "bgsrv-mac-2026-11-01T165817",
+      "measuredAt": "2026-11-01T16:58:33-08:00",
+      "machine": "arm64 macOS bench",
+      "operatingSystem": "Version 26.6 (Build 25G72)",
+      "session": "interactive desktop session with a logged-in user",
+      "harness": "scripts/macos-toolkit-acceptance",
+      "permissions": {
+        "accessibility": "granted",
+        "automation": null,
+        "screenRecording": "notNeeded"
+      },
+      "rawEvidence": "raw/bgsrv-mac-2026-11-01T165817.jsonl",
       "notes": null
     }
   ],
@@ -722,6 +737,74 @@
       },
       "rawEvidence": "raw/bbl-2026-08-16.json#AxonAcceptanceWebView-keyboard",
       "remeasureWhen": "a macOS major release, which is what changes how AppKit routes a posted event"
+    },
+    {
+      "id": "ghostty-keyboard-2026-11-01",
+      "campaign": "bgsrv-mac-2026-11-01T165817",
+      "target": {
+        "label": "ghostty",
+        "kind": "terminal",
+        "identity": {
+          "bundleId": "com.mitchellh.ghostty",
+          "bundleShortVersion": "1.4.0",
+          "bundleVersion": "18457",
+          "versionSeries": "1.4",
+          "runtimeSignature": null,
+          "readableAtDispatch": true,
+          "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
+          "processStartTime": "Sun Nov  1 16:58:17 2026"
+        }
+      },
+      "action": "keyboard",
+      "mechanism": "CGEventPostToPid",
+      "variant": "keyDown+keyUp/source=null",
+      "verdict": "accepted",
+      "reason": "the target acted on input posted to its process while a decoy held the foreground and the real pointer did not move",
+      "observations": {
+        "dispatchAccepted": true,
+        "targetMutated": true,
+        "mutationEvidence": "the terminal's sentinel file read 'axon' before and 'axonaxon' after",
+        "eventReachedTarget": null,
+        "arrivalDetail": null,
+        "frontmostUnchanged": true,
+        "decoyFrontmost": true,
+        "pointerUnchanged": true,
+        "ownershipProved": true,
+        "pointerBefore": {
+          "x": 1914,
+          "y": 1074
+        },
+        "pointerAfter": {
+          "x": 1914,
+          "y": 1074
+        },
+        "frontmostBefore": "dev.axon.acceptance.decoy",
+        "frontmostAfter": "dev.axon.acceptance.decoy",
+        "targetPid": 39089,
+        "windowId": null,
+        "point": null,
+        "nonce": "22488097a587"
+      },
+      "controls": {
+        "before": {
+          "ran": true,
+          "acted": true,
+          "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
+          "detail": "the terminal's sentinel file read '' before and 'axon' after"
+        },
+        "after": {
+          "ran": true,
+          "acted": true,
+          "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
+          "detail": "the terminal's sentinel file read 'axonaxon' before and 'axonaxonaxon' after"
+        }
+      },
+      "freshState": {
+        "fresh": true,
+        "detail": "the measured keystrokes were the first synthetic input this target received: its foreground control was a keystroke, not a click"
+      },
+      "rawEvidence": "raw/bgsrv-mac-2026-11-01T165817.jsonl#ghostty-keyboard",
+      "remeasureWhen": "a Ghostty or macOS major release"
     }
   ]
 }

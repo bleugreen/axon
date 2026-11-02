@@ -1,9 +1,12 @@
 use crate::global_input::MacGlobalInputObserver;
 use crate::{
-    BackgroundPixelPointer, PixelDispatch, PixelDispatchError, PixelPlan, PixelTarget,
-    PointerTargetVerifier, ReadableStateProvider, VisualObservation, VisualObservationProvider,
+    ApplicationDispatch, ApplicationProcess, BackgroundApplicationKeyboard,
+    BackgroundDispatchError, NativeInput, PointerTargetVerifier, ReadableStateProvider,
+    VisualObservation, VisualObservationProvider,
     accessibility::{self, AxAccess},
     core_foundation::string_value,
+    input::{self, native::Destination},
+    workspace,
 };
 use serde_json::{Map, Value};
 
@@ -145,7 +148,10 @@ pub fn capability_report(permissions: MacPermissions) -> Vec<CapabilityInfo> {
         Capability::SetValue,
         Capability::Focus,
         Capability::Scroll,
+        Capability::PointerInput,
+        Capability::KeyboardInput,
         Capability::Screenshot,
+        Capability::HitTest,
         Capability::SerializeHistory,
         Capability::ObserveGlobalInput,
     ];
@@ -170,7 +176,7 @@ pub fn capability_report(permissions: MacPermissions) -> Vec<CapabilityInfo> {
                     } else if supported.contains(&capability) {
                         "Accessibility permission is not granted".into()
                     } else {
-                        "excluded from axon-mac v1".into()
+                        "not implemented by axon-mac".into()
                     }
                 }),
             }
@@ -201,6 +207,14 @@ struct CGSize {
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
     fn AXUIElementCreateApplication(pid: i32) -> AXUIElementRef;
+    fn AXUIElementCreateSystemWide() -> AXUIElementRef;
+    fn AXUIElementCopyElementAtPosition(
+        root: AXUIElementRef,
+        x: f32,
+        y: f32,
+        element: *mut AXUIElementRef,
+    ) -> i32;
+    fn AXUIElementGetPid(element: AXUIElementRef, pid: *mut i32) -> i32;
     fn AXUIElementCopyAttributeValue(
         element: AXUIElementRef,
         attribute: CFStringRef,
@@ -218,6 +232,7 @@ unsafe extern "C" {
         values: *mut CFArrayRef,
     ) -> i32;
     fn AXUIElementPerformAction(element: AXUIElementRef, action: CFStringRef) -> i32;
+    fn AXUIElementCopyActionNames(element: AXUIElementRef, names: *mut CFArrayRef) -> i32;
     fn AXUIElementSetAttributeValue(
         element: AXUIElementRef,
         attribute: CFStringRef,
@@ -240,6 +255,7 @@ unsafe extern "C" {
     fn CFArrayGetValueAtIndex(array: CFArrayRef, index: isize) -> *const c_void;
     fn CFRetain(value: CFTypeRef) -> CFTypeRef;
     fn CFRelease(value: CFTypeRef);
+    fn CFEqual(left: CFTypeRef, right: CFTypeRef) -> bool;
 }
 unsafe extern "C" {
     fn proc_listallpids(buffer: *mut c_void, buffersize: i32) -> i32;
@@ -328,6 +344,65 @@ fn frame(element: AXUIElementRef) -> Option<Rect> {
         height: s.height,
     })
 }
+/// The deepest element at a screen point, by the system-wide hit test.
+fn element_at(point: (f64, f64)) -> Option<Owned> {
+    let system = Owned(unsafe { AXUIElementCreateSystemWide() });
+    if system.0.is_null() {
+        return None;
+    }
+    let mut element = null();
+    let status = unsafe {
+        AXUIElementCopyElementAtPosition(system.0, point.0 as f32, point.1 as f32, &mut element)
+    };
+    (status == 0 && !element.is_null()).then(|| Owned(element))
+}
+
+fn element_pid(element: AXUIElementRef) -> Option<i32> {
+    let mut pid = 0;
+    (unsafe { AXUIElementGetPid(element, &mut pid) } == 0).then_some(pid)
+}
+
+fn contains(frame: Rect, point: (f64, f64)) -> bool {
+    point.0 >= frame.x
+        && point.0 <= frame.x + frame.width
+        && point.1 >= frame.y
+        && point.1 <= frame.y + frame.height
+}
+
+/// The process holding the foreground.
+///
+/// Read from the Accessibility system-wide element, which asks the window server now.
+/// `NSWorkspace.frontmostApplication` is only the fallback: it is refreshed by notifications on a
+/// main run loop this daemon never spins, so it can report an application that has since lost the
+/// foreground, which would make every activation look unproved.
+fn frontmost_process() -> Option<i32> {
+    let system = Owned(unsafe { AXUIElementCreateSystemWide() });
+    if !system.0.is_null()
+        && let Some(pid) =
+            attribute(system.0, "AXFocusedApplication").and_then(|app| element_pid(app.0))
+    {
+        return Some(pid);
+    }
+    workspace::workspace_frontmost_process()
+}
+
+/// The identity a running process is compared and activated by: its bundle identifier, or
+/// `pid:<n>` when it has none.
+fn identity_for(pid: i32) -> String {
+    workspace::identity_of(pid, workspace::running_application_identity(pid).1)
+}
+
+/// The single live process an identity names.
+fn process_for_identity(identity: &str) -> Option<i32> {
+    if let Some(pid) = identity.strip_prefix("pid:") {
+        return pid.parse().ok().filter(|pid| workspace::is_running(*pid));
+    }
+    match workspace::processes_with_bundle(identity).as_slice() {
+        [pid] => Some(*pid),
+        _ => None,
+    }
+}
+
 fn inferred_actions(role: &str) -> Vec<String> {
     match role {
         "AXButton" | "AXLink" | "AXCheckBox" | "AXRadioButton" | "AXMenuItem" | "AXMenuBarItem" => {
@@ -415,6 +490,10 @@ impl RunningApplication {
     /// `identifier` is the bundle identifier — what a caller, the Swift daemon, and the Windows and
     /// Linux backends all mean by an application identifier, and what this backend publishes in
     /// `Application::identifier`. An application without one cannot satisfy a query that names one.
+    ///
+    /// `name` is the single caller-facing `app` field, so it accepts either spelling: the display
+    /// name, or the bundle identifier. The recorder writes the bundle identifier into `app` because
+    /// it is the durable key, and the Swift daemon's `AppResolver` resolves it the same way.
     fn matches(&self, query: &AppQuery) -> bool {
         query
             .process_id
@@ -423,10 +502,13 @@ impl RunningApplication {
                 .identifier
                 .as_deref()
                 .is_none_or(|wanted| self.bundle_identifier.as_deref() == Some(wanted))
-            && query
-                .name
-                .as_deref()
-                .is_none_or(|wanted| self.name.eq_ignore_ascii_case(wanted))
+            && query.name.as_deref().is_none_or(|wanted| {
+                self.name.eq_ignore_ascii_case(wanted)
+                    || self
+                        .bundle_identifier
+                        .as_deref()
+                        .is_some_and(|bundle| bundle.eq_ignore_ascii_case(wanted))
+            })
     }
 }
 
@@ -504,13 +586,39 @@ fn recorded_app_query(app: &axon_core::RecordedAppIdentity) -> AppQuery {
 pub struct MacBackend {
     handles: HashMap<SnapshotHandle, Owned>,
     global_input: MacGlobalInputObserver,
+    /// What each activation call since the last take did, by primitive and return value.
+    activation_evidence: Vec<String>,
+    /// When this backend last brought an application forward. A pointer post waits out
+    /// [`POINTER_SETTLE_AFTER_ACTIVATION`] from here.
+    last_activation: Option<std::time::Instant>,
 }
+
+/// How long a pointer post waits after an activation before it lands: the acceptance campaign's
+/// foreground-control wait, which acted on every target it measured.
+///
+/// Being frontmost is not the same as having a key window, and AppKit's first-mouse rule makes a
+/// click on a window that is not yet key a key-making click rather than a delivered one for views
+/// such as `NSTextView`. A fixed wait stands in for the observable that would end it early; AX
+/// publishes no key-window attribute, and `AXMain` persists while an application is inactive, so
+/// it cannot tell the two states apart.
+const POINTER_SETTLE_AFTER_ACTIVATION: Duration = Duration::from_millis(600);
 impl MacBackend {
     pub fn new() -> Result<Self, BackendError> {
         Ok(Self {
             handles: HashMap::new(),
             global_input: MacGlobalInputObserver::default(),
+            activation_evidence: Vec::new(),
+            last_activation: None,
         })
+    }
+    /// Holds a pointer post until the most recent activation has had time to make its window key.
+    fn settle_after_activation(&self) {
+        if let Some(remaining) = self
+            .last_activation
+            .and_then(|at| POINTER_SETTLE_AFTER_ACTIVATION.checked_sub(at.elapsed()))
+        {
+            std::thread::sleep(remaining);
+        }
     }
     pub fn accessibility_enabled(&self) -> bool {
         accessibility::granted()
@@ -563,7 +671,7 @@ impl MacBackend {
                 continue;
             };
             let (name, bundle_identifier) =
-                crate::global_input::application_identity(pid, accessibility_name);
+                workspace::application_identity(pid, accessibility_name);
             found.push(RunningApplication {
                 process_id: pid,
                 name,
@@ -575,6 +683,15 @@ impl MacBackend {
     fn resolve(&self, app: &AppQuery) -> Result<RunningApplication, BackendError> {
         let (applications, access) = self.applications();
         resolve_running(applications, app, access)
+    }
+    /// The one application a query names, or `None` when it named none or more than one. A
+    /// withdrawn grant is still an error: it is not the same answer as "no such application".
+    fn resolve_process(&self, app: &AppQuery) -> Result<Option<RunningApplication>, BackendError> {
+        match self.resolve(app) {
+            Ok(application) => Ok(Some(application)),
+            Err(BackendError::Operation { .. }) => Ok(None),
+            Err(error) => Err(error),
+        }
     }
     fn element(&self, handle: &SnapshotHandle) -> Result<AXUIElementRef, BackendError> {
         self.handles
@@ -668,6 +785,66 @@ impl PlatformBackend for MacBackend {
 
     fn capabilities(&self) -> Result<Vec<CapabilityInfo>, BackendError> {
         Ok(capability_report(MacPermissions::read()))
+    }
+    /// Every half of the transaction is here: the foreground is read from the window server,
+    /// activation is requested and then read back, and the pointer is read and warped home. Posting
+    /// to the HID tap needs the same Accessibility grant the reads do.
+    fn supports_foreground_transaction(&self) -> bool {
+        self.accessibility_enabled()
+    }
+    fn frontmost_application(&mut self) -> Result<Option<String>, BackendError> {
+        Ok(frontmost_process().map(identity_for))
+    }
+    fn activate_application(&mut self, identity: &str) -> Result<bool, BackendError> {
+        let Some(pid) = process_for_identity(identity) else {
+            self.activation_evidence
+                .push(format!("{identity}: no single running process to activate"));
+            return Ok(false);
+        };
+        self.last_activation = Some(std::time::Instant::now());
+        let (primitive, accepted) =
+            workspace::activate(pid).unwrap_or(("NSRunningApplication lookup", false));
+        self.activation_evidence
+            .push(format!("{identity}: {primitive} returned {accepted}"));
+        // Cooperative activation can acknowledge a request from a background process and leave the
+        // foreground where it was. Asking the application itself through AXFrontmost is the
+        // fallback, tried only when the first request has visibly not taken effect.
+        let deadline = std::time::Instant::now() + Duration::from_millis(200);
+        while std::time::Instant::now() < deadline {
+            if frontmost_process() == Some(pid) {
+                return Ok(accepted);
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        unsafe extern "C" {
+            static kCFBooleanTrue: CFTypeRef;
+        }
+        let root = Owned(unsafe { AXUIElementCreateApplication(pid) });
+        let status = match cfstr("AXFrontmost") {
+            Ok(name) if !root.0.is_null() => unsafe {
+                AXUIElementSetAttributeValue(root.0, name.0, kCFBooleanTrue)
+            },
+            _ => accessibility::AX_ERROR_CANNOT_COMPLETE,
+        };
+        self.activation_evidence
+            .push(format!("{identity}: AXFrontmost returned AXError {status}"));
+        Ok(accepted || status == 0)
+    }
+    fn resolve_application(&mut self, app: &AppQuery) -> Result<Option<String>, BackendError> {
+        Ok(self
+            .application_process(app)?
+            .map(|process| process.identity))
+    }
+    fn application_process_identifier(&mut self, identity: &str) -> Option<i64> {
+        process_for_identity(identity).map(i64::from)
+    }
+    fn pointer_location(&mut self) -> Result<Option<(f64, f64)>, BackendError> {
+        input::native::pointer_location()
+            .map(Some)
+            .ok_or_else(|| op("pointerLocation", "CGEventCreate returned null"))
+    }
+    fn move_pointer(&mut self, to: (f64, f64)) -> Result<bool, BackendError> {
+        Ok(input::native::warp(to))
     }
     fn enumerate_applications(&self) -> Result<Vec<Application>, BackendError> {
         let (applications, access) = self.applications();
@@ -817,11 +994,10 @@ impl PlatformBackend for MacBackend {
     fn scroll(&mut self, target: &SnapshotHandle, _: (f64, f64)) -> Result<(), BackendError> {
         self.invoke(target, "AXScrollToVisible")
     }
-    fn keyboard(&mut self, _: &AppQuery, _: KeyboardIntent<'_>) -> Result<(), BackendError> {
-        Err(cap(
-            Capability::KeyboardInput,
-            "keyboard has no semantic AX action and pixel/foreground delivery are not implemented in v1",
-        ))
+    /// Global keyboard input through the HID tap. Only ever called inside a proved foreground
+    /// transaction, so the keystrokes reach the application that was just brought forward.
+    fn keyboard(&mut self, _: &AppQuery, intent: KeyboardIntent<'_>) -> Result<(), BackendError> {
+        post_keyboard(Destination::HidTap, intent)
     }
     fn observe(&mut self, _: &AppQuery, _: Duration) -> Result<Observation, BackendError> {
         Err(cap(Capability::ObserveChanges, "excluded from v1"))
@@ -834,11 +1010,9 @@ impl PlatformBackend for MacBackend {
     ) -> Result<Observation, BackendError> {
         Err(cap(Capability::ObserveChanges, "excluded from v1"))
     }
-    fn pointer_click(&mut self, _: (f64, f64)) -> Result<(), BackendError> {
-        Err(cap(
-            Capability::PointerInput,
-            "pixel and foreground delivery are not implemented in v1",
-        ))
+    fn pointer_click(&mut self, point: (f64, f64)) -> Result<(), BackendError> {
+        self.settle_after_activation();
+        input::native::click(point)
     }
     fn pointer_drag(
         &mut self,
@@ -858,8 +1032,122 @@ impl PlatformBackend for MacBackend {
         let pid = self.resolve(app)?.process_id;
         window_capture::capture(pid)?.screenshot()
     }
-    fn hit_test(&mut self, _: (f64, f64)) -> Result<Option<Node>, BackendError> {
-        Err(cap(Capability::HitTest, "excluded from v1"))
+    fn hit_test(&mut self, point: (f64, f64)) -> Result<Option<Node>, BackendError> {
+        Ok(element_at(point).map(|element| capture_node(element, 0, 0, &mut 0).node))
+    }
+}
+
+fn post_keyboard(destination: Destination, intent: KeyboardIntent<'_>) -> Result<(), BackendError> {
+    match intent {
+        KeyboardIntent::Text(text) => input::native::post_text(destination, text),
+        KeyboardIntent::Key(spec) => input::native::post_stroke(
+            destination,
+            input::stroke(spec).map_err(|error| cap(Capability::KeyboardInput, error))?,
+        ),
+    }
+}
+
+impl NativeInput for MacBackend {
+    fn point_owner(&mut self, point: (f64, f64)) -> Result<Option<i32>, BackendError> {
+        Ok(element_at(point).and_then(|element| element_pid(element.0)))
+    }
+    fn focused_window_frame(&mut self, app: &AppQuery) -> Result<Option<Rect>, BackendError> {
+        let Some(application) = self.resolve_process(app)? else {
+            return Ok(None);
+        };
+        let root = Owned(unsafe { AXUIElementCreateApplication(application.process_id) });
+        if root.0.is_null() {
+            return Ok(None);
+        }
+        Ok(["AXFocusedWindow", "AXMainWindow"]
+            .into_iter()
+            .find_map(|name| attribute(root.0, name).and_then(|window| frame(window.0))))
+    }
+    fn scroll_wheel(
+        &mut self,
+        point: (f64, f64),
+        delta: (f64, f64),
+    ) -> Result<Vec<(i32, i32)>, BackendError> {
+        self.settle_after_activation();
+        input::native::scroll(point, &input::wheel_steps(delta.0, delta.1))
+    }
+    /// `AXUIElementCopyActionNames` on the live element. An element that does not answer advertises
+    /// nothing, which is the Swift daemon's rule: a press it cannot confirm takes the pointer ladder.
+    fn advertised_actions(
+        &mut self,
+        handle: &SnapshotHandle,
+    ) -> Result<Option<Vec<String>>, BackendError> {
+        let element = self.element(handle)?;
+        let mut names = null();
+        if unsafe { AXUIElementCopyActionNames(element, &mut names) } != 0 || names.is_null() {
+            return Ok(Some(Vec::new()));
+        }
+        let names = Owned(names);
+        Ok(Some(
+            (0..unsafe { CFArrayGetCount(names.0) })
+                .filter_map(|index| string_value(unsafe { CFArrayGetValueAtIndex(names.0, index) }))
+                .collect(),
+        ))
+    }
+    fn modifier_state(&mut self) -> Option<crate::ModifierState> {
+        let (combined_session, hid_system) = input::native::modifier_flags();
+        Some(crate::ModifierState {
+            combined_session,
+            hid_system,
+        })
+    }
+    fn take_activation_evidence(&mut self) -> Option<String> {
+        (!self.activation_evidence.is_empty())
+            .then(|| std::mem::take(&mut self.activation_evidence).join("; "))
+    }
+}
+
+impl BackgroundApplicationKeyboard for MacBackend {
+    fn application_process(
+        &mut self,
+        app: &AppQuery,
+    ) -> Result<Option<ApplicationProcess>, BackendError> {
+        Ok(self
+            .resolve_process(app)?
+            .map(|application| ApplicationProcess {
+                process_identifier: application.process_id,
+                identity: workspace::identity_of(
+                    application.process_id,
+                    application.bundle_identifier,
+                ),
+            }))
+    }
+    fn dispatch_application_keyboard(
+        &mut self,
+        process: &ApplicationProcess,
+        intent: KeyboardIntent<'_>,
+    ) -> Result<ApplicationDispatch, BackgroundDispatchError> {
+        let pid = process.process_identifier;
+        // A pid that exited can be reused by an unrelated process, and posting to it would type
+        // into something nobody named. Checked immediately before the post, so nothing is sent.
+        if !workspace::is_running(pid) || identity_for(pid) != process.identity {
+            return Err(BackgroundDispatchError::Stale(format!(
+                "{} is no longer running as process {pid}, so nothing was posted",
+                process.identity
+            )));
+        }
+        let frontmost_before = frontmost_process();
+        let pointer_before = input::native::pointer_location();
+        post_keyboard(Destination::Process(pid), intent)
+            .map_err(BackgroundDispatchError::Backend)?;
+        // A key handler that activates its application does so in response to the event; a short
+        // settle lets that happen inside the window the two readings straddle.
+        std::thread::sleep(Duration::from_millis(50));
+        let pointer_after = input::native::pointer_location();
+        Ok(ApplicationDispatch {
+            frontmost_unchanged: frontmost_process() == frontmost_before,
+            pointer_unchanged: match (pointer_before, pointer_after) {
+                (Some(before), Some(after)) => {
+                    (before.0 - after.0).abs() < 0.5 && (before.1 - after.1).abs() < 0.5
+                }
+                _ => false,
+            },
+        })
     }
 }
 impl VisualObservationProvider for MacBackend {
@@ -886,33 +1174,48 @@ impl axon_core::TextRecognitionProvider for MacBackend {
         window_capture::capture(pid)?.recognize_text()
     }
 }
+/// How far up the Accessibility hierarchy a hit is walked looking for the target. Deeper than any
+/// real application nests, and a bound on a parent chain that a misbehaving one could make cyclic.
+const MAX_ANCESTRY: usize = 64;
+
 impl PointerTargetVerifier for MacBackend {
+    /// Whether a pointer posted at `point` lands on the resolved element: the hit is the element or
+    /// one of its descendants, or, for an element that does not hit-test as itself, the hit is in
+    /// the same process and the point is inside the element's frame.
     fn verify_pointer_target(
         &mut self,
-        _: &SnapshotHandle,
-        _: (f64, f64),
+        handle: &SnapshotHandle,
+        point: (f64, f64),
     ) -> Result<bool, BackendError> {
-        Ok(false)
+        let target = self.element(handle)?;
+        let Some(hit) = element_at(point) else {
+            return Ok(false);
+        };
+        let mut current = Some(hit.clone());
+        for _ in 0..MAX_ANCESTRY {
+            let Some(element) = current else { break };
+            if unsafe { CFEqual(element.0, target) } {
+                return Ok(true);
+            }
+            current = attribute(element.0, "AXParent");
+        }
+        Ok(element_pid(hit.0).is_some()
+            && element_pid(hit.0) == element_pid(target)
+            && frame(target).is_some_and(|frame| contains(frame, point)))
     }
-}
-impl BackgroundPixelPointer for MacBackend {
-    fn plan_pixel_click(
+
+    /// Recognized text has no element behind it, so the most the hit test can prove is that the
+    /// point is over a window of the application the text was read from.
+    fn verify_ocr_target(
         &mut self,
-        _: &SnapshotHandle,
-        _: (f64, f64),
-    ) -> Result<PixelPlan, BackendError> {
-        Ok(PixelPlan::unavailable(
-            "pixel delivery is not implemented in axon-mac v1",
-        ))
-    }
-    fn dispatch_pixel_click(
-        &mut self,
-        _: &PixelTarget,
-    ) -> Result<PixelDispatch, PixelDispatchError> {
-        Err(PixelDispatchError::Backend(cap(
-            Capability::PointerInput,
-            "pixel delivery is not implemented in axon-mac v1",
-        )))
+        app: &AppQuery,
+        point: (f64, f64),
+        _frame: Rect,
+    ) -> Result<bool, BackendError> {
+        let Some(application) = self.resolve_process(app)? else {
+            return Ok(false);
+        };
+        Ok(self.point_owner(point)? == Some(application.process_id))
     }
 }
 
@@ -928,15 +1231,69 @@ mod tests {
     #[test]
     fn all_capabilities_are_reported() {
         let backend = MacBackend::new().unwrap();
-        let capabilities = backend.capabilities().unwrap();
-        assert_eq!(capabilities.len(), Capability::ALL.len());
-        assert!(
-            !capabilities
+        assert_eq!(backend.capabilities().unwrap().len(), Capability::ALL.len());
+    }
+
+    /// Native input is usable exactly when Accessibility is, because posting to the HID tap, posting
+    /// to a process, and hit testing all need that grant. What stays unimplemented says so rather
+    /// than claiming a version it was excluded from.
+    #[test]
+    fn native_input_follows_the_accessibility_grant() {
+        for accessibility in [true, false] {
+            let report = capability_report(MacPermissions {
+                accessibility,
+                screen_recording: true,
+            });
+            for capability in [
+                Capability::PointerInput,
+                Capability::KeyboardInput,
+                Capability::HitTest,
+            ] {
+                let info = report
+                    .iter()
+                    .find(|info| info.capability == capability)
+                    .unwrap();
+                assert_eq!(info.usable, accessibility, "{capability:?}");
+                if !accessibility {
+                    assert_eq!(
+                        info.restriction.as_deref(),
+                        Some("Accessibility permission is not granted")
+                    );
+                }
+            }
+            let observe = report
                 .iter()
-                .find(|info| info.capability == Capability::KeyboardInput)
-                .unwrap()
-                .usable
-        );
+                .find(|info| info.capability == Capability::ObserveChanges)
+                .unwrap();
+            assert!(!observe.usable);
+            if accessibility {
+                assert_eq!(
+                    observe.restriction.as_deref(),
+                    Some("not implemented by axon-mac")
+                );
+            }
+        }
+    }
+
+    /// A recorded point fallback writes the bundle identifier into `app` (axn/208), and the single
+    /// `app` field resolves either spelling.
+    #[test]
+    fn an_app_string_resolves_by_display_name_or_bundle_identifier() {
+        let listed = || {
+            vec![
+                running(4242, "TextEdit", Some("com.apple.TextEdit")),
+                running(5150, "Notes", Some("com.apple.Notes")),
+            ]
+        };
+        for spelling in ["TextEdit", "textedit", "com.apple.TextEdit"] {
+            assert_eq!(
+                resolve_listed(listed(), &query(None, Some(spelling), None))
+                    .unwrap()
+                    .process_id,
+                4242,
+                "{spelling}"
+            );
+        }
     }
     /// The matching rule under an Accessibility API that answered normally, which is what the
     /// resolution tests below are about. Only the withdrawn-access tests pass another verdict.

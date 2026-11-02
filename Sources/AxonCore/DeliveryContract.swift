@@ -35,6 +35,9 @@ public enum DeliveryRung: String, Codable, Equatable, Sendable, CaseIterable {
     /// Target-bound input derived from verified window geometry, delivered without activating the
     /// application and without moving the real pointer.
     case pixel
+    /// Input bound to one application process, delivered without activating it and without
+    /// touching the pointer. Shared vocabulary only: no Swift delivery path emits it.
+    case application
     /// Global input devices: CGEvent posted to the HID tap, SendInput, XTest, or a virtual pointer.
     case foreground
 
@@ -43,7 +46,8 @@ public enum DeliveryRung: String, Codable, Equatable, Sendable, CaseIterable {
         switch self {
         case .semantic: return 0
         case .pixel: return 1
-        case .foreground: return 2
+        case .application: return 2
+        case .foreground: return 3
         }
     }
 

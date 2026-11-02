@@ -10,12 +10,15 @@ pub struct VirtualKey {
 const fn vk(code: u16, extended: bool) -> VirtualKey {
     VirtualKey { code, extended }
 }
-pub fn modifier_key(modifier: Modifier) -> VirtualKey {
+/// Windows has no Command key, so a chord naming one is refused here rather than pressed as the
+/// Windows key.
+pub fn modifier_key(modifier: Modifier) -> Result<VirtualKey, &'static str> {
     match modifier {
-        Modifier::Shift => vk(0x10, false),
-        Modifier::Control => vk(0x11, false),
-        Modifier::Alt => vk(0x12, false),
-        Modifier::Super => vk(0x5B, true),
+        Modifier::Shift => Ok(vk(0x10, false)),
+        Modifier::Control => Ok(vk(0x11, false)),
+        Modifier::Alt => Ok(vk(0x12, false)),
+        Modifier::Super => Ok(vk(0x5B, true)),
+        Modifier::Command => Err(axon_core::COMMAND_IS_MACOS_ONLY),
     }
 }
 /// The shared vocabulary's name for a Windows virtual key, or nothing when the key has no name in
@@ -114,7 +117,11 @@ mod tests {
             assert!(named_key(key).extended, "{key:?}");
         }
         assert!(!named_key(NamedKey::Return).extended);
-        assert_eq!(modifier_key(Modifier::Control).code, 0x11);
+        assert_eq!(modifier_key(Modifier::Control).unwrap().code, 0x11);
+        assert_eq!(
+            modifier_key(Modifier::Command),
+            Err(axon_core::COMMAND_IS_MACOS_ONLY)
+        );
     }
 
     /// The reverse table only earns its place if a recorded name is one this project can replay,

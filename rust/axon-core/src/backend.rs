@@ -304,6 +304,14 @@ pub trait PlatformBackend {
         Ok(None)
     }
 
+    /// The process behind an identity `frontmost_application` reported, so a foreground escalation
+    /// can say which process it took the foreground from. `None` when the backend cannot name one;
+    /// the identity string stays the authority either way.
+    fn application_process_identifier(&mut self, identity: &str) -> Option<i64> {
+        let _ = identity;
+        None
+    }
+
     /// Where the real pointer is now, in the same screen coordinates a dispatch is aimed with.
     ///
     /// `Ok(None)` is the answer of a backend with no pointer to speak of: a dispatch here cannot

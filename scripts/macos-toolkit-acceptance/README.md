@@ -191,6 +191,26 @@ rows, every one of them with both controls acting and every invariant held. See
 click, and every target acted on PID-targeted keystrokes — across three unrelated engines and a
 native AppKit control, with the decoy frontmost and the real pointer provably unmoved throughout.
 
+### Ghostty, 2026-11-01 (axn/204)
+
+One keyboard row was added on bgsrv-mac, macOS 26.6 (25G72), on a different machine and a newer
+macOS than the ten rows above, which were measured on 26.4. Ghostty 1.4.0 is keyboard-only because
+it was added to answer one question, and its readback is a sentinel file: the terminal runs a
+script that puts the line discipline in non-canonical mode and appends every byte it receives, so
+the measured variant stays exactly `keyDown+keyUp/source=null` of the typed characters. It was
+**accepted**, with both controls acting, the decoy frontmost throughout, and the pointer unmoved.
+axn/204's field report that pid-targeted keystrokes into Ghostty did nothing came from the Swift
+daemon's layout-translated construction, which is a different variant. The harness locates an
+application by bundle identifier, because a cask installed without sudo lives in `~/Applications`.
+
+### Live daemon evidence
+
+`live/axn230/` holds the transcript of the Rust daemon's live acceptance on the signed bench, not a
+campaign row: each request and response, with `look` trees condensed. It also holds the two
+recorded flows, their replay copies with `deliveryPolicy` added, and the replay results. The entry
+labelled `flow1-replay` overlapped the lane's own live loop and is not evidence; its rerun,
+`flow1-replay-acceptance`, is.
+
 ### One mechanism explains all ten rows
 
 The AppKit fixture reports every event `NSApplication` is handed, which makes the cause visible
@@ -237,21 +257,19 @@ through `NSRunningApplication`, and that is all. Two things it cannot read:
 - **What the window contains.** A native window and an embedded web view are the same window to the
   window server.
 
-So rows stay application-specific, and an unknown bundle identifier fails closed. This costs nothing
-here, because no target was measured to accept a click and there is therefore no click entry to
-widen or narrow.
+So a table keyed on applications could only be keyed on bundle identifiers. Neither half of the
+result needs one, because both are properties of the mechanism (see the contract below): no target
+accepts a click, and every target accepts a keystroke, for the same window-number reason.
 
-### The keyboard result is not a pixel rung, and is not this issue's to spend
+### The keyboard result is the application rung, not a pixel rung
 
-Every target acted on background keystrokes with the foreground and the pointer unchanged, which is
-a real and useful finding: it says an application-scoped background keyboard delivery is available on
-macOS today. It is deliberately *not* offered as a pixel rung. `docs/platform-spec.md` requires the
-pixel rung to be bound to a verified target window with coordinates derived from resolved geometry,
-and a pid-targeted keystroke is bound to an application and carries no coordinate at all. It is a
-different mechanism that happens to satisfy the same two invariants.
-
-The rows are committed so that whoever takes that question up has the measurement. Nothing in this
-issue authorizes it.
+Every target acted on background keystrokes with the foreground and the pointer unchanged. It is
+deliberately *not* a pixel rung: `docs/platform-spec.md` requires the pixel rung to be bound to a
+verified target window with coordinates derived from resolved geometry, and a pid-targeted keystroke
+is bound to an application and carries no coordinate at all. It is a different mechanism that
+happens to satisfy the same two invariants, and it has its own rung in the delivery vocabulary,
+`application`, between `pixel` and `foreground` (axn/230). The five keyboard rows are that rung's
+mechanism evidence.
 
 ## Rerun policy
 
@@ -265,48 +283,52 @@ The hermetic tests under `tests/` *are* suitable for the gate. They claim nothin
 claim that a row cannot say more than it measured, which is the property the future acceptance table
 depends on.
 
-## The AXN-125 consumer contract
+## The consumer contract
 
-This section is the handoff. Nothing in this directory implements a delivery decision, and no
-dormant table or parser is added here: a table with no caller cannot be reviewed against a caller,
-and would rot before it was used.
+**Home.** The table lives in `rust/axon-mac/src/background.rs`, and `Router::pointer_ladder` and
+`Router::keyboard_ladder` in `rust/axon-mac/src/lib.rs` are its only callers. Its tests hold every
+row it cites against `results.json`, so a re-measurement that flips a row breaks the build rather
+than leaving the table authorizing input on evidence that no longer says so.
 
-**Destination.** AXN-125 adds the acceptance table to `rust/axon-mac`, at pixel-candidate planning,
-*before* `dispatch_pixel_click`. Today that path is `BackgroundPixelPointer::plan_pixel_click`,
-`PixelPlan`, and `Router::pointer_ladder` in `rust/axon-mac/src/lib.rs`; when the implementation
-lands it should extract `rust/axon-mac/src/pixel.rs`, matching the shape
-`rust/axon-linux/src/pixel.rs` already has.
+**Pointer is a mechanism-level refusal.** No target accepts a pid-targeted click, and the cause is
+the mechanism, so the table has no per-application pointer entries at all: one refusal
+(`PID_POINTER_REFUSED`) names the mechanism, cites the five refused click rows and the
+`windowNumber 0` observation, and applies to every application. It says that macOS delivers no
+window-bound mouse event to a process, because a caller told "Safari declined this" would reasonably
+try a different application, and every application refuses for the same reason. Scroll is
+mouse-class and travels the same refusal; no pid-targeted wheel row was measured, and one action is
+one row. Should a future macOS deliver pid-targeted mouse events with a window association, this
+campaign is the thing that would detect it.
 
-**Shape.** Follow `rust/axon-linux/src/pixel.rs`. Each entry — accepted or refused — cites the stable
-row identifiers from `scripts/macos-toolkit-acceptance/results.json` in its `evidence` field, so the
-measurement behind a permission is one hop from the permission. A target with no matching entry
-refuses `backgroundPixelUnsupported`, and so does a target whose entry says refused; the difference
-is that a refused entry can say *why*, and an absent one can only say that nobody measured it.
+**Keyboard is mechanism-level availability, with a measured denylist.** The application rung is
+available for any target that resolves to a live process (identity: the bundle identifier, or
+`pid:<n>`), because key events are routed by the application to its own key window whatever the
+application is. Three things make it unavailable: a keystroke that holds a modifier (modified
+keystrokes were not measured; a chord is a different variant), a request that names no application,
+and an identity on the denylist. A denylist entry is `{bundle_id, reason, evidence}`, and its
+evidence must cite a refused row measured at exactly `keyDown+keyUp/source=null`. **The denylist
+ships empty.** A field report against another event construction does not qualify: it measured a
+different thing. Entries carry no version, because availability is a property of the mechanism and
+a version pin would carry no information about it.
 
-**What the measurement currently supports.** No target accepts a PID-targeted click, so the table
-AXN-125 writes has no accepting click entry to hold. That is a simpler outcome than Linux's, and it
-should be written as what it is: a refusal that names the mechanism rather than the application,
-citing the five refused rows and the `windowNumber 0` observation behind them. The refusal detail
-should say that macOS delivers no window-bound mouse event to a process, because a caller told
-"Safari declined this" would reasonably try a different application, and every application refuses
-for the same reason. Should a future macOS deliver pid-targeted mouse events with a window
-association, this campaign is the thing that would detect it.
+**"Unknown bundle identifier fails closed" applies to pointer tables only**, and on macOS it is moot:
+the pointer refusal covers every application, known or not.
 
 **The key is what a backend can read at dispatch time.** Holding a process identifier, `axon-mac`
-can read a bundle identifier and the bundle's own version through `NSRunningApplication`. That is
-what an entry may be keyed on. It may not be keyed on anything the campaign happened to know because
-it launched the target itself. Where macOS publishes no stable generic toolkit signature — and it
-publishes none: there is no macOS equivalent of the AT-SPI toolkit name Linux keys on — rows stay
-application-specific, and an unknown bundle identifier fails closed.
+can read a bundle identifier through `NSRunningApplication`. That is what a denylist entry is keyed
+on. It may not be keyed on anything the campaign happened to know because it launched the target
+itself.
 
 **Dispatch is not delivery.** A completed `CGEventPostToPid` remains dispatch evidence only. It never
 authorizes candidate availability and never authorizes goal success. `success` still requires
 readback or a declared `expects` postcondition, exactly as it does on the other two platforms.
 
-**Ladder behaviour.** Under `foregroundPermitted`, the router walks past a refused pixel candidate
-and preserves that obstacle through `alsoRefused`, which is the AXN-101 contract and the reason the
-field scenario reaches the foreground transaction that axn/195 repaired. Under `backgroundOnly`, the
-measured refusal is what the caller gets, named rather than generic.
+**Ladder behaviour.** Under `foregroundPermitted`, the router walks past the refused pixel and
+application candidates and preserves both obstacles through `alsoRefused`, which is the AXN-101
+contract and the reason the field scenario reaches the foreground transaction. Under
+`backgroundOnly`, the measured refusal is what the caller gets, named rather than generic. A
+keystroke the application rung can carry takes it under either policy, because the quietest rung
+that works is always the one taken.
 
 **One action, one row.** Click evidence authorizes clicks. It does not authorize keyboard, drag,
 scroll, or a different delivery variant — including a different event source or a different down/up

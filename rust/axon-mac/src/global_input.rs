@@ -28,8 +28,12 @@ const EVENT_SCROLL: u32 = 22;
 const EVENT_TAP_DISABLED_TIMEOUT: u32 = 0xffff_fffe;
 const EVENT_TAP_DISABLED_USER: u32 = 0xffff_ffff;
 const FIELD_KEYCODE: u32 = 9;
-const FIELD_SCROLL_Y: u32 = 11;
-const FIELD_SCROLL_X: u32 = 12;
+/// `kCGScrollWheelEventPointDeltaAxis1` and `Axis2`: the wheel delta in pixels, which is the unit
+/// the `scroll` tool's `deltaX`/`deltaY` and its replay are in. Fields 11 and 12 are the same
+/// delta in lines, roughly a tenth of the pixel value, and recording those made every replayed
+/// scroll about ten times too small.
+const FIELD_SCROLL_Y: u32 = 96;
+const FIELD_SCROLL_X: u32 = 97;
 const FLAG_COMMAND: u64 = 1 << 20;
 const FLAG_SHIFT: u64 = 1 << 17;
 const FLAG_CONTROL: u64 = 1 << 18;
@@ -99,14 +103,6 @@ unsafe extern "C" {
 #[link(name = "Carbon", kind = "framework")]
 unsafe extern "C" {
     fn IsSecureEventInputEnabled() -> bool;
-}
-#[link(name = "AppKit", kind = "framework")]
-unsafe extern "C" {}
-#[link(name = "objc")]
-unsafe extern "C" {
-    fn objc_getClass(name: *const c_char) -> *mut c_void;
-    fn sel_registerName(name: *const c_char) -> *mut c_void;
-    fn objc_msgSend();
 }
 
 fn operation(message: impl Into<String>) -> BackendError {
@@ -435,7 +431,18 @@ fn classify_key(event: CGEventRef) -> RecordedKeystroke {
         unsafe {
             CGEventKeyboardGetUnicodeString(event, chars.len(), &mut len, chars.as_mut_ptr());
         }
-        String::from_utf16_lossy(&chars[..len.min(chars.len())]).to_lowercase()
+        let typed = String::from_utf16_lossy(&chars[..len.min(chars.len())]).to_lowercase();
+        // A synthetic chord can arrive with no characters at all. Recording `cmd+` would write an
+        // action no replay can parse, so the key is recovered from its position instead.
+        if typed.is_empty() {
+            u16::try_from(keycode)
+                .ok()
+                .and_then(crate::input::ansi_character)
+                .map(String::from)
+                .unwrap_or_default()
+        } else {
+            typed
+        }
     });
     let mut parts = Vec::new();
     if flags & FLAG_COMMAND != 0 {
@@ -526,66 +533,7 @@ fn app_identity(element: AXUIElementRef) -> Option<RecordedAppIdentity> {
     })
 }
 
-/// How this backend names one running application: the display name a person would call it, and
-/// its bundle identifier.
-///
-/// Enumeration, capture, and the recorder all come through here, so a recorded artifact calls an
-/// application what `look` calls it. The localized name is what `AppResolver` in `Sources/AxonCore`
-/// both reports and resolves applications by; AXTitle names windows and elements there, never an
-/// application. `accessibility_name` is the `AXTitle` already read from the application element,
-/// used only as a fallback when `NSRunningApplication` has no localized name.
-pub(crate) fn application_identity(
-    pid: i32,
-    accessibility_name: String,
-) -> (String, Option<String>) {
-    let (native_name, bundle_identifier) = running_application_identity(pid);
-    (
-        native_name
-            .filter(|value| !value.is_empty())
-            .unwrap_or(accessibility_name),
-        bundle_identifier,
-    )
-}
-
-fn running_application_identity(pid: i32) -> (Option<String>, Option<String>) {
-    unsafe {
-        let class = objc_getClass(c"NSRunningApplication".as_ptr());
-        if class.is_null() {
-            return (None, None);
-        }
-        let application: unsafe extern "C" fn(*mut c_void, *mut c_void, i32) -> *mut c_void =
-            std::mem::transmute(objc_msgSend as *const ());
-        let app = application(
-            class,
-            sel_registerName(c"runningApplicationWithProcessIdentifier:".as_ptr()),
-            pid,
-        );
-        if app.is_null() {
-            return (None, None);
-        }
-        (
-            objc_string_property(app, c"localizedName"),
-            objc_string_property(app, c"bundleIdentifier"),
-        )
-    }
-}
-
-unsafe fn objc_string_property(object: *mut c_void, selector: &std::ffi::CStr) -> Option<String> {
-    let property: unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void =
-        unsafe { std::mem::transmute(objc_msgSend as *const ()) };
-    let value = unsafe { property(object, sel_registerName(selector.as_ptr())) };
-    if value.is_null() {
-        return None;
-    }
-    let utf8: unsafe extern "C" fn(*mut c_void, *mut c_void) -> *const c_char =
-        unsafe { std::mem::transmute(objc_msgSend as *const ()) };
-    let bytes = unsafe { utf8(value, sel_registerName(c"UTF8String".as_ptr())) };
-    (!bytes.is_null()).then(|| {
-        unsafe { std::ffi::CStr::from_ptr(bytes) }
-            .to_string_lossy()
-            .into_owned()
-    })
-}
+use crate::workspace::application_identity;
 
 fn element_evidence(element: AXUIElementRef) -> Option<RecordedElementEvidence> {
     let role = text_attribute(element, "AXRole")?;
@@ -792,6 +740,13 @@ mod tests {
         let mut enables = 0;
         assert!(recover_disabled_tap(EVENT_TAP_DISABLED_USER, || enables += 1));
         assert_eq!(enables, 1);
+    }
+    /// The recorded unit is the replayed unit. Pinned because the line fields sit one name away
+    /// in the Core Graphics header and read back plausible-looking numbers.
+    #[test]
+    fn scroll_deltas_are_read_from_the_pixel_fields() {
+        assert_eq!(FIELD_SCROLL_Y, 96, "kCGScrollWheelEventPointDeltaAxis1");
+        assert_eq!(FIELD_SCROLL_X, 97, "kCGScrollWheelEventPointDeltaAxis2");
     }
     #[test]
     fn callback_leaves_input_events_for_capture() {

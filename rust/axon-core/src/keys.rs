@@ -6,7 +6,13 @@ pub enum Modifier {
     Control,
     Alt,
     Super,
+    /// The macOS Command key. Parsed everywhere, so a chord a macOS recording wrote reads back;
+    /// only the macOS backend maps it, and the others refuse it with [`COMMAND_IS_MACOS_ONLY`].
+    Command,
 }
+
+/// What a backend without a Command key answers when a chord names one.
+pub const COMMAND_IS_MACOS_ONLY: &str = "the Command key exists only on macOS; use ctrl or super";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NamedKey {
@@ -60,6 +66,8 @@ const MODIFIERS: &[(&str, Modifier)] = &[
     ("option", Modifier::Alt),
     ("super", Modifier::Super),
     ("win", Modifier::Super),
+    ("cmd", Modifier::Command),
+    ("command", Modifier::Command),
 ];
 const NAMED_KEYS: &[(&str, NamedKey)] = &[
     ("return", NamedKey::Return),
@@ -111,9 +119,6 @@ pub fn parse_chord(spec: &str) -> Result<Chord, String> {
         .filter(|name| !name.trim().is_empty())
     {
         let lowered = name.trim().to_lowercase();
-        if lowered == "cmd" || lowered == "command" {
-            return Err("the Command key exists only on macOS; use ctrl or super".into());
-        }
         let modifier = MODIFIERS
             .iter()
             .find(|(candidate, _)| *candidate == lowered)
@@ -183,11 +188,21 @@ mod tests {
         assert_eq!(parse_chord("ctrl++").unwrap().key, Key::Character('+'));
     }
     #[test]
-    fn unknown_names_and_command_are_refused() {
+    fn unknown_names_are_refused() {
         assert!(parse_chord("Speling").unwrap_err().contains("Speling"));
-        assert_eq!(
-            parse_chord("cmd+shift+p").unwrap_err(),
-            "the Command key exists only on macOS; use ctrl or super"
-        );
+        assert!(parse_chord("hyper+p").unwrap_err().contains("hyper"));
+    }
+
+    /// Command parses on every platform so a chord a macOS recording wrote reads back; whether a
+    /// backend can press it is that backend's mapping decision, not the parser's.
+    #[test]
+    fn command_parses_under_both_spellings() {
+        for spec in ["cmd+shift+p", "Command+Shift+P"] {
+            assert_eq!(
+                parse_chord(spec).unwrap().modifiers,
+                vec![Modifier::Command, Modifier::Shift],
+                "{spec}"
+            );
+        }
     }
 }

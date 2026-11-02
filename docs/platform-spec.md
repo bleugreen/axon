@@ -156,13 +156,32 @@ by **observable side effect** rather than by the name of the API involved:
 | --- | --- |
 | `semantic` | An AX, UIA, or AT-SPI mutation that neither focused nor activated. An action that changes system focus is foreground regardless of which API finally mutated the target. |
 | `pixel` | Target-bound input derived from verified window geometry, delivered without activating the application and without moving the real pointer. |
+| `application` | Input bound to one application process, delivered without activating it and without touching the pointer. It carries no coordinate; the application routes it. |
 | `foreground` | Global input devices: `CGEvent` on the HID tap, `SendInput`, `XTest`, or a virtual pointer. |
 
-Backends enumerate an ordered ladder — semantic, then pixel, then foreground —
-and dispatch at the first rung the policy and the runtime allow. A rung that
-demonstrably did not take may advance; a rung that delivered must not, because a
-second dispatch would repeat an action the target may already have performed.
-Under `backgroundOnly` the ladder ends after pixel.
+Backends enumerate an ordered ladder — semantic, pixel, application, then
+foreground — and dispatch at the first rung the policy and the runtime allow. A
+rung that demonstrably did not take may advance; a rung that delivered must not,
+because a second dispatch would repeat an action the target may already have
+performed. Under `backgroundOnly` the ladder ends after application.
+
+The application rung exists because some input has a background mechanism that
+is real but cannot satisfy the pixel rule below: it is bound to a process, not to
+a verified window, and carries no coordinate to derive from geometry. Relabelling
+it `pixel` would claim a window binding it does not have; refusing it would throw
+away a measured background path. Its availability is a property of the
+mechanism, decided by a measurement, never an allowlist of applications: on
+macOS, `CGEventPostToPid` keystrokes reach the application's own key window
+whatever the application is, because the application routes key events itself
+(`scripts/macos-toolkit-acceptance`), so the rung is available for any target
+that resolves to a live process unless a refused row measured at the same event
+construction names it. The same campaign found that a pid-targeted mouse event
+carries window number 0 and reaches no window, which is why no pointer action has
+an application rung on any application. The rung keeps the background
+invariants: the frontmost application is read before and after the post and must
+be unchanged, the pointer is reported and never asserted, and a process that
+exited between planning and dispatch is a stale target with nothing posted.
+Dispatch at this rung is evidence, never goal success.
 
 A backend may only report `pixel` for a mechanism that is genuinely bound to a
 verified target. It must carry stable app and window identity, window-relative
@@ -265,7 +284,14 @@ pre-dispatch exits always restore because no input is pending.
 Activation is skipped when the target already holds the foreground. If activation
 cannot be proved, nothing is posted and the action refuses with
 `activationNotProved`. If a dispatch moves the real pointer, the pointer is
-captured and restored around it. If restoration fails after dispatch, the result
+captured and restored around it. A keyboard dispatch, at any rung, must leave the
+session's modifier state as it found it: a chord presses and releases its
+modifiers as keys, and the backend reads the window server's modifier state
+before and after and reports `modifiersRestored`. A modifier left logically held
+turns every later keystroke on the machine into a shortcut, so a state still
+changed after a bounded settle means the rung did not hold: `success` is false.
+`dispatchSuccess` stays true, because the events were posted and a caller told
+otherwise would retry and deliver them twice. If restoration fails after dispatch, the result
 keeps its `delivery`, `dispatchSuccess`, and verification evidence and reports
 the failed hand-back separately.
 
@@ -321,11 +347,12 @@ The pixel rung is implemented where a target-bound mechanism can satisfy those
 invariants, and refused honestly everywhere else. It is not universally
 available, and a backend must not claim it before a live probe passes.
 
-| platform | semantic | pixel | foreground |
-| --- | --- | --- | --- |
-| macOS | `AXPress`, `AXValue`, `AXScrollToVisible` | `CGEventPostToPid` against the target process, invariants proved after dispatch | Global `CGEvent`, transactional activate/dispatch/restore |
-| Windows | UIA `InvokePattern`, `ValuePattern`, `ScrollItemPattern`, none of which call `SetFocus` | Client-coordinate window messages to a leaf HWND bound through UIA ancestry, for window classes a live probe has verified; every other class refuses `backgroundPixelUnsupported` by name | `SendInput` after proved activation for clicks, text, named keys, and chords; the target remains frontmost after dispatch because Windows exposes no input-consumption boundary, while pointer restoration is still attempted and reported |
-| Linux | AT-SPI `Action.DoAction`, `EditableText.SetTextContents`, `Component.ScrollTo`, none of which take focus | `XSendEvent` to a window resolved from the target's own AT-SPI application, for toolkits a committed measurement recorded as acting on it: Chromium clicks, GTK 3 and Qt 6 keystrokes. Every other toolkit, and every version series nobody measured, refuses `backgroundPixelUnsupported` by name | `XTest` on an X11 session with an EWMH-capable window manager, transactional activate/dispatch/restore; withheld on every other session |
+| platform | semantic | pixel | application | foreground |
+| --- | --- | --- | --- | --- |
+| macOS, Swift daemon | `AXPress`, `AXValue`, `AXScrollToVisible` | `CGEventPostToPid` against the target process, invariants proved after dispatch | not emitted | Global `CGEvent`, transactional activate/dispatch/restore |
+| macOS, `axon-mac` | `AXPress` (only for an element whose live action list advertises it), `AXValue`, `AXScrollToVisible` | none: no mechanism binds pointer input to one window, and keyboard input has no window geometry | `CGEventPostToPid` for unmodified text and keys to a named application; chords, unaimed input, and every pointer action refuse by mechanism (`rust/axon-mac/src/background.rs`) | `CGEventPost(kCGHIDEventTap)` clicks, keystrokes, and pixel wheel bursts, transactional activate/dispatch/restore with the target re-verified by hit test after activation |
+| Windows | UIA `InvokePattern`, `ValuePattern`, `ScrollItemPattern`, none of which call `SetFocus` | Client-coordinate window messages to a leaf HWND bound through UIA ancestry, for window classes a live probe has verified; every other class refuses `backgroundPixelUnsupported` by name | none measured | `SendInput` after proved activation for clicks, text, named keys, and chords; the target remains frontmost after dispatch because Windows exposes no input-consumption boundary, while pointer restoration is still attempted and reported |
+| Linux | AT-SPI `Action.DoAction`, `EditableText.SetTextContents`, `Component.ScrollTo`, none of which take focus | `XSendEvent` to a window resolved from the target's own AT-SPI application, for toolkits a committed measurement recorded as acting on it: Chromium clicks, GTK 3 and Qt 6 keystrokes. Every other toolkit, and every version series nobody measured, refuses `backgroundPixelUnsupported` by name | none measured | `XTest` on an X11 session with an EWMH-capable window manager, transactional activate/dispatch/restore; withheld on every other session |
 
 On Linux the pixel rung's availability is a fact about the target's toolkit, and
 that fact is measured. `XSendEvent` against a window the backend resolved is the

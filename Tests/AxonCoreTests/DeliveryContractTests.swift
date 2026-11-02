@@ -257,8 +257,8 @@ private let foreground = DeliveryCandidate(rung: .foreground, capability: .globa
 
 @Test func allVocabularyValuesRoundTripThroughTheirWireNames() throws {
     #expect(DeliveryPolicy.allCases.map(\.rawValue) == ["backgroundOnly", "foregroundPermitted"])
-    #expect(DeliveryRung.allCases.map(\.rawValue) == ["semantic", "pixel", "foreground"])
-    #expect(DeliveryRung.allCases.map(\.order) == [0, 1, 2])
+    #expect(DeliveryRung.allCases.map(\.rawValue) == ["semantic", "pixel", "application", "foreground"])
+    #expect(DeliveryRung.allCases.map(\.order) == [0, 1, 2, 3])
     #expect(DeliveryCapability.allCases.map(\.rawValue) == [
         "semanticAction", "semanticValue", "backgroundPixelInput", "globalInput", "clipboard"
     ])

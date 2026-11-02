@@ -2,7 +2,7 @@
   "comment": "The delivery contract's wire vocabulary, in canonical order. Swift and Rust both assert against this file so neither side can rename or reorder a value alone.",
   "policies": ["backgroundOnly", "foregroundPermitted"],
   "defaultPolicy": "backgroundOnly",
-  "rungs": ["semantic", "pixel", "foreground"],
+  "rungs": ["semantic", "pixel", "application", "foreground"],
   "capabilities": [
     "semanticAction",
     "semanticValue",

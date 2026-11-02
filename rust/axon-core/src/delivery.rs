@@ -77,14 +77,24 @@ pub enum DeliveryRung {
     /// Target-bound input derived from verified window geometry, delivered without activating the
     /// application and without moving the real pointer.
     Pixel,
+    /// Input bound to one application process, delivered without activating it and without
+    /// touching the pointer; carries no coordinate.
+    ///
+    /// Distinct from `Pixel` because the binding is to a process rather than to a verified window:
+    /// the application routes the input itself. On macOS this is `CGEventPostToPid` keyboard
+    /// input, which the five `*-keyboard-2026-08-16` rows in
+    /// `scripts/macos-toolkit-acceptance/results.json` measured reaching the key window of
+    /// WebKit, Chromium, Electron, AppKit, and WKWebView targets alike.
+    Application,
     /// Global input devices: CGEvent on the HID tap, SendInput, XTest, or a virtual pointer.
     Foreground,
 }
 
 impl DeliveryRung {
-    pub const ALL: [DeliveryRung; 3] = [
+    pub const ALL: [DeliveryRung; 4] = [
         DeliveryRung::Semantic,
         DeliveryRung::Pixel,
+        DeliveryRung::Application,
         DeliveryRung::Foreground,
     ];
 
@@ -92,6 +102,7 @@ impl DeliveryRung {
         match self {
             DeliveryRung::Semantic => "semantic",
             DeliveryRung::Pixel => "pixel",
+            DeliveryRung::Application => "application",
             DeliveryRung::Foreground => "foreground",
         }
     }
@@ -101,7 +112,8 @@ impl DeliveryRung {
         match self {
             DeliveryRung::Semantic => 0,
             DeliveryRung::Pixel => 1,
-            DeliveryRung::Foreground => 2,
+            DeliveryRung::Application => 2,
+            DeliveryRung::Foreground => 3,
         }
     }
 
@@ -384,7 +396,7 @@ fn supersede(
 
 /// Chooses the rung an action will use before anything native happens.
 ///
-/// The ladder is fixed per action and ordered semantic, then pixel, then foreground. The planner's
+/// The ladder is fixed per action and ordered semantic, pixel, application, then foreground. The planner's
 /// only job is to answer which of those the caller's policy and the current runtime allow, and to
 /// explain the answer when it is none of them.
 pub fn select_delivery(
@@ -466,6 +478,7 @@ pub fn select_delivery(
             DeliveryRefusalReason::NoDeliveryCandidate,
             match after {
                 Some(DeliveryRung::Semantic) => DeliveryRung::Pixel,
+                Some(DeliveryRung::Pixel) => DeliveryRung::Application,
                 Some(_) => DeliveryRung::Foreground,
                 None => DeliveryRung::Semantic,
             },
@@ -642,6 +655,7 @@ fn pointer_matches(observed: (f64, f64), origin: (f64, f64)) -> bool {
 /// session is as the user left it.
 fn not_dispatched<T>(
     prior_app: Option<String>,
+    prior_app_process_identifier: Option<i64>,
     restored: bool,
     cleanup_message: &str,
     refusal_message: &str,
@@ -650,7 +664,7 @@ fn not_dispatched<T>(
         value: None,
         cleanup: ForegroundCleanup {
             prior_app,
-            prior_app_process_identifier: None,
+            prior_app_process_identifier,
             already_frontmost: false,
             activation_proved: false,
             restored,
@@ -726,6 +740,7 @@ where
         Err(_) => {
             return not_dispatched(
                 None,
+                None,
                 true,
                 "The prior foreground application could not be read; no events were posted",
                 "Foreground delivery could not read the application it would have to restore, so \
@@ -733,6 +748,9 @@ where
             );
         }
     };
+    let prior_process = prior
+        .as_deref()
+        .and_then(|prior| backend.application_process_identifier(prior));
     let already_frontmost = match target {
         None => true,
         Some(target) => prior.as_deref() == Some(target),
@@ -766,6 +784,7 @@ where
         let restored = restore(backend);
         return not_dispatched(
             prior_identity,
+            prior_process,
             restored,
             "No events were posted",
             "Foreground delivery could not prove the target became frontmost, so nothing was posted",
@@ -787,7 +806,7 @@ where
                     value: None,
                     cleanup: ForegroundCleanup {
                         prior_app: prior_identity,
-                        prior_app_process_identifier: None,
+                        prior_app_process_identifier: prior_process,
                         already_frontmost,
                         activation_proved: true,
                         restored,
@@ -822,7 +841,7 @@ where
         value: Some(value),
         cleanup: ForegroundCleanup {
             prior_app: prior_identity,
-            prior_app_process_identifier: None,
+            prior_app_process_identifier: prior_process,
             already_frontmost,
             activation_proved: true,
             restored,

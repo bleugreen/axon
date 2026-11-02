@@ -16,6 +16,13 @@
       "refusal": null
     },
     {
+      "name": "application-scoped keyboard delivery that cannot prove its goal",
+      "deliveryPolicy": "backgroundOnly",
+      "delivery": "application",
+      "dispatchSuccess": true,
+      "refusal": null
+    },
+    {
       "name": "policy refusal decided before any native side effect",
       "deliveryPolicy": "backgroundOnly",
       "delivery": null,

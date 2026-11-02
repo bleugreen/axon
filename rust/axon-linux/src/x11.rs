@@ -596,7 +596,8 @@ impl X11Session {
                     .modifiers
                     .into_iter()
                     .map(keys::keysym_for_modifier)
-                    .collect::<Vec<_>>();
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|error| capability(Capability::KeyboardInput, error))?;
                 Ok(vec![
                     mapping.stroke(keys::keysym_for(chord.key), &modifiers)?,
                 ])
