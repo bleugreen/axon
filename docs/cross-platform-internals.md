@@ -1682,7 +1682,7 @@ operations.
 The macOS product is being split into two processes. The daemon is `rust/axon-mac`, the outer
 `Axon.app`'s main executable and the only Axon process macOS grants anything to. The menu shell is
 `Axon Menu.app` (`Sources/AxonMenuApp`), nested at `Axon.app/Contents/Library/Applications`,
-unsigned for any entitlement and holding no TCC row. The shell links only `AxonClient`, the
+signed with no entitlements and holding no TCC row. The shell links only `AxonClient`, the
 privacy-free half of the Swift code (socket client, health and contract models, bundle and launchd
 plumbing, the updater). Nothing that calls a privacy-gated API is reachable from it, which the
 package graph enforces and `Tests/AxonClientTests/PrivacyBoundaryTests.swift` checks by scanning
