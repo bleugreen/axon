@@ -600,7 +600,6 @@ pub struct MacBackend {
 /// such as `NSTextView`. A fixed wait stands in for the observable that would end it early; AX
 /// publishes no key-window attribute, and `AXMain` persists while an application is inactive, so
 /// it cannot tell the two states apart.
-
 const POINTER_SETTLE_AFTER_ACTIVATION: Duration = Duration::from_millis(600);
 impl MacBackend {
     pub fn new() -> Result<Self, BackendError> {
