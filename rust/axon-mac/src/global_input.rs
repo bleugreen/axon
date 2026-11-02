@@ -100,14 +100,6 @@ unsafe extern "C" {
 unsafe extern "C" {
     fn IsSecureEventInputEnabled() -> bool;
 }
-#[link(name = "AppKit", kind = "framework")]
-unsafe extern "C" {}
-#[link(name = "objc")]
-unsafe extern "C" {
-    fn objc_getClass(name: *const c_char) -> *mut c_void;
-    fn sel_registerName(name: *const c_char) -> *mut c_void;
-    fn objc_msgSend();
-}
 
 fn operation(message: impl Into<String>) -> BackendError {
     BackendError::Operation {
@@ -526,66 +518,7 @@ fn app_identity(element: AXUIElementRef) -> Option<RecordedAppIdentity> {
     })
 }
 
-/// How this backend names one running application: the display name a person would call it, and
-/// its bundle identifier.
-///
-/// Enumeration, capture, and the recorder all come through here, so a recorded artifact calls an
-/// application what `look` calls it. The localized name is what `AppResolver` in `Sources/AxonCore`
-/// both reports and resolves applications by; AXTitle names windows and elements there, never an
-/// application. `accessibility_name` is the `AXTitle` already read from the application element,
-/// used only as a fallback when `NSRunningApplication` has no localized name.
-pub(crate) fn application_identity(
-    pid: i32,
-    accessibility_name: String,
-) -> (String, Option<String>) {
-    let (native_name, bundle_identifier) = running_application_identity(pid);
-    (
-        native_name
-            .filter(|value| !value.is_empty())
-            .unwrap_or(accessibility_name),
-        bundle_identifier,
-    )
-}
-
-fn running_application_identity(pid: i32) -> (Option<String>, Option<String>) {
-    unsafe {
-        let class = objc_getClass(c"NSRunningApplication".as_ptr());
-        if class.is_null() {
-            return (None, None);
-        }
-        let application: unsafe extern "C" fn(*mut c_void, *mut c_void, i32) -> *mut c_void =
-            std::mem::transmute(objc_msgSend as *const ());
-        let app = application(
-            class,
-            sel_registerName(c"runningApplicationWithProcessIdentifier:".as_ptr()),
-            pid,
-        );
-        if app.is_null() {
-            return (None, None);
-        }
-        (
-            objc_string_property(app, c"localizedName"),
-            objc_string_property(app, c"bundleIdentifier"),
-        )
-    }
-}
-
-unsafe fn objc_string_property(object: *mut c_void, selector: &std::ffi::CStr) -> Option<String> {
-    let property: unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void =
-        unsafe { std::mem::transmute(objc_msgSend as *const ()) };
-    let value = unsafe { property(object, sel_registerName(selector.as_ptr())) };
-    if value.is_null() {
-        return None;
-    }
-    let utf8: unsafe extern "C" fn(*mut c_void, *mut c_void) -> *const c_char =
-        unsafe { std::mem::transmute(objc_msgSend as *const ()) };
-    let bytes = unsafe { utf8(value, sel_registerName(c"UTF8String".as_ptr())) };
-    (!bytes.is_null()).then(|| {
-        unsafe { std::ffi::CStr::from_ptr(bytes) }
-            .to_string_lossy()
-            .into_owned()
-    })
-}
+use crate::workspace::application_identity;
 
 fn element_evidence(element: AXUIElementRef) -> Option<RecordedElementEvidence> {
     let role = text_attribute(element, "AXRole")?;
