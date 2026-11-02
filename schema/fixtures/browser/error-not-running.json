@@ -1,0 +1,10 @@
+{
+  "error" : {
+    "code" : -32603,
+    "message" : "Browser is not running: Safari"
+  },
+  "method" : "windows",
+  "params" : {
+    "app" : "com.apple.Safari"
+  }
+}

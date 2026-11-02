@@ -1,0 +1,29 @@
+{
+  "method" : "windows",
+  "params" : {
+    "app" : "Safari"
+  },
+  "result" : {
+    "authority" : "application_scripting",
+    "crossCheck" : {
+      "axWindowCount" : 2,
+      "matchingTitles" : 2,
+      "scriptedWindowCount" : 2,
+      "status" : "matched"
+    },
+    "windows" : [
+      {
+        "active" : true,
+        "id" : "window:1",
+        "index" : 1,
+        "title" : "Example Domain"
+      },
+      {
+        "active" : false,
+        "id" : "window:2",
+        "index" : 2,
+        "title" : "Second"
+      }
+    ]
+  }
+}

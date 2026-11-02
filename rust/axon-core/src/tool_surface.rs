@@ -613,6 +613,9 @@ mod tests {
             names(ToolBackend::Mac),
             [
                 "look",
+                "navigate",
+                "windows",
+                "tabs",
                 "find",
                 "wait_for_value",
                 "wait_for_stability",

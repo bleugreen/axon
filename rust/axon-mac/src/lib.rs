@@ -26,9 +26,16 @@ pub mod probe;
 
 #[cfg(target_os = "macos")]
 mod accessibility;
-#[cfg(target_os = "macos")]
+// The daemon that sends Apple events and answers consent is macOS-only; elsewhere these modules
+// are compiled for their hermetic tests, which drive the verb and ledger logic against a scripted
+// browser.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod apple_events;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod automation;
 mod background;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod browser;
 #[cfg(target_os = "macos")]
 mod core_foundation;
 #[cfg(target_os = "macos")]
@@ -46,9 +53,6 @@ pub use platform::MacBackend;
 /// names something the macOS daemon has no code path for, which stays a JSON-RPC error.
 const EXCLUDED: &[(&str, &str)] = &[
     ("drag", "PointerDrag"),
-    ("navigate", "BrowserScripting"),
-    ("windows", "BrowserScripting"),
-    ("tabs", "BrowserScripting"),
     ("debug.create", "DebugSession"),
     ("debug.start", "DebugSession"),
     ("debug.step", "DebugSession"),
@@ -104,6 +108,9 @@ pub struct Router<B> {
     observation_redaction: axon_core::ObservationRedactionContext,
     daemon: axon_core::NativeDaemonState,
     recorder: Option<axon_core::UserActionRecorder>,
+    /// The browser verbs. Absent, they refuse as an unavailable capability: the daemon installs
+    /// the service, and a router built without one has no browser to talk to.
+    browser: Option<Box<dyn browser::BrowserVerbs>>,
 }
 
 fn visual_observation_result(
@@ -482,8 +489,80 @@ impl<
             observation_redaction: Default::default(),
             daemon: Default::default(),
             recorder: None,
+            browser: None,
         }
     }
+
+    /// Serves `navigate`, `windows`, and `tabs` through `browser`. Only the macOS daemon installs
+    /// one outside the tests.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub(crate) fn with_browser(mut self, browser: Box<dyn browser::BrowserVerbs>) -> Self {
+        self.browser = Some(browser);
+        self
+    }
+
+    /// One browser verb. The parameter errors are worded as Swift's `ToolParamDecoder` words them,
+    /// and every other refusal comes from the service already in its wire shape.
+    fn browser_verb(
+        &mut self,
+        method: &str,
+        params: &Map<String, Value>,
+    ) -> Result<Value, JsonRpcError> {
+        let Some(service) = self.browser.as_deref() else {
+            return Err(capability_unavailable(
+                method,
+                "BrowserScripting",
+                "not-implemented",
+            ));
+        };
+        let app = browser_string(params, "app")?;
+        match method {
+            "navigate" => {
+                let url = browser_string(params, "url")?;
+                let result = service
+                    .navigate(app, url)
+                    .map_err(axon_core::BrowserError::into_rpc)?;
+                serde_json::to_value(result).map_err(internal_error)
+            }
+            "windows" => {
+                let windows = service
+                    .windows(app)
+                    .map_err(axon_core::BrowserError::into_rpc)?;
+                let scripted: Vec<String> =
+                    windows.iter().map(|window| window.title.clone()).collect();
+                // Accessibility is the cross-check, never the authority: a capture that fails
+                // leaves the scripted answer standing and says why it went unchecked.
+                let cross_check = match self.backend.capture(&query_for_app(app)) {
+                    Ok(snapshot) => axon_core::window_cross_check(
+                        &scripted,
+                        &snapshot
+                            .app
+                            .windows
+                            .iter()
+                            .filter_map(|window| window.title.clone())
+                            .collect::<Vec<_>>(),
+                    ),
+                    Err(error) => axon_core::CrossCheck::Unavailable {
+                        reason: format!("Accessibility cross-check unavailable: {error}"),
+                    },
+                };
+                serde_json::to_value(axon_core::WindowsReport {
+                    windows,
+                    authority: axon_core::ScriptingAuthority::ApplicationScripting,
+                    cross_check,
+                })
+                .map_err(internal_error)
+            }
+            _ => {
+                let window = browser_integer(params, "window")?;
+                let tabs = service
+                    .tabs(app, window)
+                    .map_err(axon_core::BrowserError::into_rpc)?;
+                serde_json::to_value(axon_core::TabsReport::new(tabs)).map_err(internal_error)
+            }
+        }
+    }
+
     fn register_snapshot(&mut self, snapshot: &Snapshot) -> Vec<axon_core::SemanticElementName> {
         let live_processes = self.backend.live_process_ids().ok();
         self.semantic_names.register_with_liveness(snapshot, |pid| {
@@ -955,6 +1034,10 @@ impl<
                 capability,
                 "not-implemented",
             ));
+        }
+        // Browser verbs deliver nothing to a window, so they take no delivery policy.
+        if matches!(method, "navigate" | "windows" | "tabs") {
+            return self.browser_verb(method, params);
         }
         // The policy is decoded before the target is resolved and before any backend call, so an
         // unknown value can never reach a native API.
@@ -2175,6 +2258,28 @@ fn required_str<'a>(p: &'a Map<String, Value>, key: &str) -> Result<&'a str, Jso
         .ok_or_else(|| rpc_error(-32602, format!("missing string parameter {key}")))
 }
 
+/// A required string, refused in Swift's words: absent and mistyped are different mistakes.
+fn browser_string<'a>(params: &'a Map<String, Value>, key: &str) -> Result<&'a str, JsonRpcError> {
+    match params.get(key) {
+        None | Some(Value::Null) => Err(rpc_error(
+            -32602,
+            format!("Missing string parameter: {key}"),
+        )),
+        Some(Value::String(value)) => Ok(value),
+        Some(_) => Err(rpc_error(-32602, format!("{key} must be a string"))),
+    }
+}
+
+fn browser_integer(params: &Map<String, Value>, key: &str) -> Result<Option<i64>, JsonRpcError> {
+    match params.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_i64()
+            .map(Some)
+            .ok_or_else(|| rpc_error(-32602, format!("{key} must be an integer"))),
+    }
+}
+
 fn number_param(params: &Map<String, Value>, key: &str, default: f64) -> Result<f64, JsonRpcError> {
     match params.get(key) {
         None => Ok(default),
@@ -2309,15 +2414,28 @@ mod tests {
     /// that can record and a backend whose Accessibility grant is denied.
     struct EnumerationBackend {
         global_input: bool,
+        /// The window titles a capture reports, for the browser cross-check. A capture of a
+        /// backend without them is a test asking for more than it set up.
+        window_titles: Option<Vec<String>>,
     }
 
     impl EnumerationBackend {
         fn new() -> Self {
-            Self { global_input: true }
+            Self {
+                global_input: true,
+                window_titles: None,
+            }
         }
         fn without_global_input() -> Self {
             Self {
                 global_input: false,
+                window_titles: None,
+            }
+        }
+        fn with_windows(titles: &[&str]) -> Self {
+            Self {
+                global_input: true,
+                window_titles: Some(titles.iter().map(|title| (*title).to_owned()).collect()),
             }
         }
     }
@@ -2348,7 +2466,36 @@ mod tests {
             Ok(vec![])
         }
         fn capture(&mut self, _: &AppQuery) -> Result<Snapshot, axon_core::BackendError> {
-            unreachable!()
+            let titles = self.window_titles.clone().expect("no capture was set up");
+            Ok(Snapshot::new(axon_core::Application {
+                name: "Safari".into(),
+                process_id: Some(42),
+                identifier: Some("com.apple.Safari".into()),
+                windows: titles
+                    .into_iter()
+                    .map(|title| axon_core::Window {
+                        title: Some(title.clone()),
+                        root: axon_core::Node {
+                            role: "AXWindow".into(),
+                            subrole: None,
+                            name: None,
+                            title: Some(title),
+                            label: None,
+                            value: None,
+                            description: None,
+                            identifier: None,
+                            actions: Vec::new(),
+                            frame: None,
+                            editable: false,
+                            focused: None,
+                            enabled: None,
+                            children: Vec::new(),
+                            child_count: None,
+                            truncation_reason: None,
+                        },
+                    })
+                    .collect(),
+            }))
         }
         fn invoke(&mut self, _: &SnapshotHandle, _: &str) -> Result<(), axon_core::BackendError> {
             unreachable!()
@@ -2789,11 +2936,159 @@ mod tests {
         assert_eq!(error.data.unwrap()["path"], "params.arguments.value");
     }
 
+    /// Every tool this backend has no code path for refuses through the router, typed, before
+    /// anything is dispatched.
     #[test]
-    fn excluded_tools_are_capability_errors_before_dispatch() {
-        for tool in ["drag", "navigate"] {
-            let (_, capability) = EXCLUDED.iter().find(|(name, _)| *name == tool).unwrap();
-            assert!(!capability.is_empty());
+    fn excluded_tools_are_capability_errors_through_the_router() {
+        let mut router = Router::new(EnumerationBackend::new());
+        for (tool, capability) in EXCLUDED {
+            let error = router_error(&mut router, tool, Map::new());
+            assert_eq!(error.code, -32004, "{tool}");
+            let data = error.data.unwrap();
+            assert_eq!(data["code"], "capability-unavailable", "{tool}");
+            assert_eq!(data["capability"], *capability, "{tool}");
+        }
+    }
+
+    /// The tool surface and the exclusion list are two declarations of one fact, so a tool the
+    /// surface advertises on this backend can never also be one it refuses outright.
+    #[test]
+    fn no_tool_advertised_on_mac_is_excluded() {
+        let advertised = axon_core::backend_tools(axon_core::ToolBackend::Mac).unwrap();
+        for tool in advertised {
+            let name = tool["name"].as_str().unwrap();
+            assert!(
+                EXCLUDED.iter().all(|(excluded, _)| *excluded != name),
+                "{name} is advertised on mac and excluded"
+            );
+        }
+    }
+
+    /// A router without a browser service refuses the verbs the same typed way.
+    #[test]
+    fn browser_verbs_without_a_service_are_unavailable() {
+        let error = router_error(
+            &mut Router::new(EnumerationBackend::new()),
+            "windows",
+            Map::from_iter([("app".to_owned(), json!("Safari"))]),
+        );
+        assert_eq!(error.code, -32004);
+        assert_eq!(error.data.unwrap()["capability"], "BrowserScripting");
+    }
+
+    /// Every file in `schema/fixtures/browser` is the Swift router's answer to one request. The
+    /// Rust router, over the real service and settle against a scripted browser and consent
+    /// host, gives exactly the same answer to the same request.
+    #[test]
+    fn the_router_answers_every_browser_fixture_exactly_as_swift_does() {
+        use crate::apple_events::AeError;
+        use crate::automation::{EVENT_NOT_PERMITTED, NO_ERR, WOULD_REQUIRE_CONSENT};
+        use crate::browser::{Dictionary, fake};
+
+        let directory =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schema/fixtures/browser");
+        let mut names: Vec<String> = std::fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .filter(|name| name != "url-cases.json")
+            .collect();
+        names.sort();
+        assert_eq!(
+            names.len(),
+            17,
+            "a fixture without a scenario here is unpinned"
+        );
+
+        for name in names {
+            let fixture: Value =
+                serde_json::from_str(&std::fs::read_to_string(directory.join(&name)).unwrap())
+                    .unwrap();
+            let navigation = || fake::navigation_state("navigate-verified.json");
+            let (dictionary, status, running, state, ax): (_, _, _, _, &[&str]) = match name
+                .as_str()
+            {
+                "navigate-verified.json" | "navigate-redirect.json" | "navigate-unsettled.json" => {
+                    let (dictionary, state) = fake::navigation_state(&name);
+                    (dictionary, NO_ERR, true, state, &[])
+                }
+                "windows-matched.json" => (
+                    Dictionary::SAFARI,
+                    NO_ERR,
+                    true,
+                    fake::State {
+                        windows: vec![
+                            fake::window("Example Domain", &[], 1),
+                            fake::window("Second", &[], 1),
+                        ],
+                        ..fake::State::default()
+                    },
+                    &["Second", "Example Domain"],
+                ),
+                "windows-partial.json" => (
+                    Dictionary::SAFARI,
+                    NO_ERR,
+                    true,
+                    fake::State {
+                        windows: vec![fake::window("Same", &[], 1), fake::window("Same", &[], 1)],
+                        ..fake::State::default()
+                    },
+                    &["Same", "Different"],
+                ),
+                "tabs.json" => (Dictionary::CHROME, NO_ERR, true, fake::tabs_state(), &[]),
+                "error-not-determined-checked.json" => (
+                    Dictionary::CHROME,
+                    WOULD_REQUIRE_CONSENT,
+                    true,
+                    navigation().1,
+                    &[],
+                ),
+                "error-denied-checked.json" => (
+                    Dictionary::SAFARI,
+                    EVENT_NOT_PERMITTED,
+                    true,
+                    navigation().1,
+                    &[],
+                ),
+                "error-denied-executed.json" => (
+                    Dictionary::SAFARI,
+                    NO_ERR,
+                    true,
+                    fake::State {
+                        refuse: Some(AeError::NotPermitted),
+                        ..navigation().1
+                    },
+                    &[],
+                ),
+                "error-not-running.json" => {
+                    (Dictionary::SAFARI, NO_ERR, false, navigation().1, &[])
+                }
+                _ => (
+                    Dictionary::SAFARI,
+                    NO_ERR,
+                    true,
+                    fake::State::default(),
+                    &[],
+                ),
+            };
+            let rig = fake::rig_with(dictionary, status, running, state);
+            let mut router = Router::new(EnumerationBackend::with_windows(ax))
+                .with_browser(Box::new(rig.service));
+            let response = serde_json::to_value(
+                router
+                    .request(JsonRpcRequest::new(
+                        Some(JsonRpcId::Integer(1)),
+                        fixture["method"].as_str().unwrap(),
+                        Some(fixture["params"].clone()),
+                    ))
+                    .unwrap(),
+            )
+            .unwrap();
+            let key = if fixture.get("error").is_some() {
+                "error"
+            } else {
+                "result"
+            };
+            assert_eq!(response.get(key), fixture.get(key), "{name}");
         }
     }
 

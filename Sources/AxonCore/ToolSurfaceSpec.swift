@@ -16,6 +16,8 @@ public struct ToolFacadeSet: OptionSet, Equatable, Sendable {
     public static let windows = ToolFacadeSet(rawValue: 1 << 2)
     public static let linux = ToolFacadeSet(rawValue: 1 << 3)
     public static let swiftOnly: ToolFacadeSet = [.swift]
+    /// The two macOS daemons: Swift and the Rust axon-mac backend.
+    public static let swiftAndMac: ToolFacadeSet = [.swift, .mac]
     public static let all: ToolFacadeSet = [.swift, .mac, .windows, .linux]
     public static let linuxOnly: ToolFacadeSet = [.linux]
 
@@ -187,14 +189,14 @@ public enum ToolSurfaceSpec {
         ToolSpec(name: "navigate", description: "Navigate the active tab of a supported browser through its application scripting dictionary and verify the URL by read-back once the tab settles.", params: [
             ToolParameterSpec("app", .string, required: true, description: "Safari or Google Chrome, by name or exact bundle identifier."),
             ToolParameterSpec("url", .string, required: true, description: "Absolute http or https URL, limited to 8192 bytes.")
-        ], availability: .swiftOnly),
+        ], availability: .swiftAndMac),
         ToolSpec(name: "windows", description: "Enumerate browser windows authoritatively through the supported app's scripting dictionary and cross-check them against AX when available.", params: [
             ToolParameterSpec("app", .string, required: true, description: "Safari or Google Chrome, by name or exact bundle identifier.")
-        ], availability: .swiftOnly),
+        ], availability: .swiftAndMac),
         ToolSpec(name: "tabs", description: "Enumerate browser tabs authoritatively through the supported app's scripting dictionary.", params: [
             ToolParameterSpec("app", .string, required: true, description: "Safari or Google Chrome, by name or exact bundle identifier."),
             ToolParameterSpec("window", .integer, description: "Optional one-based window index from windows().")
-        ], availability: .swiftOnly),
+        ], availability: .swiftAndMac),
         ToolSpec(
             name: "find",
             description: "Resolve an AX locator against a fresh app snapshot.",

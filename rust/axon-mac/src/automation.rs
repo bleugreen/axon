@@ -9,17 +9,20 @@
 //! for a sender/target pair, and a later `tccutil reset` cannot reach into a running process. The
 //! ledger here records every answer this process received, from either determination, so the menu
 //! can decide whether its item has anything left to offer without putting the question to macOS on
-//! every open, and so a denial can say when it may be stale. This ports `AppleEventAnswerLedger`
-//! and `BrowserAutomationConsentRequester` in `Sources/AxonCore/BrowserAutomation.swift`; the
-//! executed leg's sticky-denial rule arrives with the browser verbs that would produce it.
+//! every open, and so a denial can say when it may be stale. The browser verbs consult the same
+//! ledger silently before they send, and record the one answer only a sent event can produce: a
+//! refusal of the event itself. This ports `AppleEventAnswerLedger`,
+//! `AppleEventAuthorizationService`, and `BrowserAutomationConsentRequester` in
+//! `Sources/AxonCore/BrowserAutomation.swift`.
 
+use crate::browser::Dictionary;
 use axon_core::{
     AutomationAuthorization, AutomationLeg, AutomationRequestReport, AutomationStatusReport,
-    BrowserConsentState, ConsentNeed, ConsentOutcome, JsonRpcError, consent_in_progress,
+    BrowserCapability, BrowserConsentState, BrowserError, BrowserRefusalData, BrowserRefusalReason,
+    ConsentNeed, ConsentOutcome, JsonRpcError, consent_in_progress,
 };
 use std::{
     collections::HashMap,
-    ffi::c_void,
     sync::{
         Mutex,
         atomic::{AtomicBool, Ordering},
@@ -27,26 +30,51 @@ use std::{
 };
 
 pub(crate) const NO_ERR: i32 = 0;
-pub(crate) const EVENT_NOT_PERMITTED: i32 = -1743;
-pub(crate) const WOULD_REQUIRE_CONSENT: i32 = -1744;
+pub(crate) use crate::apple_events::{EVENT_NOT_PERMITTED, WOULD_REQUIRE_CONSENT};
 
-/// A browser Axon can script, and the one list every consent path resolves against.
+/// A browser Axon can script, and the one list every consent path and every verb resolves
+/// against.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SupportedBrowser {
     pub bundle_identifier: &'static str,
     pub name: &'static str,
+    pub dictionary: Dictionary,
 }
 
-pub(crate) const SUPPORTED_BROWSERS: &[SupportedBrowser] = &[
-    SupportedBrowser {
-        bundle_identifier: "com.apple.Safari",
-        name: "Safari",
-    },
-    SupportedBrowser {
-        bundle_identifier: "com.google.Chrome",
-        name: "Google Chrome",
-    },
-];
+pub(crate) const SAFARI: SupportedBrowser = SupportedBrowser {
+    bundle_identifier: "com.apple.Safari",
+    name: "Safari",
+    dictionary: Dictionary::SAFARI,
+};
+
+pub(crate) const CHROME: SupportedBrowser = SupportedBrowser {
+    bundle_identifier: "com.google.Chrome",
+    name: "Google Chrome",
+    dictionary: Dictionary::CHROME,
+};
+
+pub(crate) const SUPPORTED_BROWSERS: &[SupportedBrowser] = &[SAFARI, CHROME];
+
+impl SupportedBrowser {
+    /// The browser a caller named: by display name, Chrome's short name, or exact bundle
+    /// identifier, ignoring case.
+    pub(crate) fn named(query: &str) -> Option<Self> {
+        match query.to_lowercase().as_str() {
+            "safari" | "com.apple.safari" => Some(SAFARI),
+            "google chrome" | "chrome" | "com.google.chrome" => Some(CHROME),
+            _ => None,
+        }
+    }
+}
+
+/// Which surface asked for the authorization that was refused. Remediation depends on it: a
+/// verb's refusal can send the user to the menu's consent gesture, and the gesture's own refusal
+/// cannot send them back to itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Origin {
+    BrowserVerb,
+    ConsentGesture,
+}
 
 /// The two system facts consent depends on, separated so the decision logic can be exercised
 /// without touching TCC.
@@ -98,35 +126,53 @@ fn failure_detail(app: &str, status: i32) -> String {
     format!("Could not determine Automation permission for {app} (OSStatus {status})")
 }
 
-/// The explanation for a consent request that did not end in a grant.
+/// Why an authorization was refused, worded for the surface that asked.
 ///
-/// The gesture is the end of the road, so no sentence here may send the user back to it. A recorded
-/// denial is changed in System Settings; an undetermined answer after a prompt means macOS never
-/// showed the dialog, which only a fresh daemon process can retry.
-fn refusal_detail(app: &str, decision: &Decision) -> String {
-    let mut sentences = match authorization(decision.status) {
-        AutomationAuthorization::Denied => vec![
-            format!("Automation permission for {app} is denied."),
-            format!(
-                "macOS will not present the consent dialog again while a denial is recorded, so \
-                 enable {app} beneath Axon in System Settings > Privacy & Security > Automation. \
-                 If Axon is not listed there at all, macOS refused without recording anything, \
-                 which no setting on this Mac can change: install the latest Axon and try again."
-            ),
-        ],
-        AutomationAuthorization::NotDetermined => vec![
-            format!("Automation permission for {app} has not been granted."),
-            "macOS neither presented the consent dialog nor recorded an answer, so there is \
-             nothing to enable in System Settings > Privacy & Security > Automation yet. Restart \
-             the daemon with `launchctl kickstart -k gui/$(id -u)/dev.axon.daemon` to retry from \
-             a fresh process; if the dialog still does not appear, install the latest Axon."
-                .to_owned(),
-        ],
-        AutomationAuthorization::Granted | AutomationAuthorization::Failed => {
-            return failure_detail(app, decision.status);
+/// A verb's remediation names the menu's Browser Automation item, the one step the user has not
+/// taken yet; until consent has been requested once there is no Axon row in System Settings, so an
+/// undetermined grant is never pointed there. The gesture is the end of the road, so none of its
+/// sentences may send the user back to it: a recorded denial is changed in System Settings, and an
+/// undetermined answer after a prompt means macOS never showed the dialog, which only a fresh
+/// daemon process can retry.
+fn denial_message(
+    app: &str,
+    authorization: AutomationAuthorization,
+    origin: Origin,
+    answered_earlier_in_this_process: bool,
+) -> String {
+    let denied = authorization == AutomationAuthorization::Denied;
+    let mut sentences = vec![format!(
+        "Automation permission for {app} {}.",
+        if denied {
+            "is denied"
+        } else {
+            "has not been granted"
         }
-    };
-    if decision.answered_earlier_in_this_process {
+    )];
+    sentences.push(match (origin, denied) {
+        (Origin::BrowserVerb, false) => "Open the Axon menu bar item and choose Browser \
+             Automation... to grant it. Axon does not appear in System Settings > Privacy & \
+             Security > Automation until consent has been requested once."
+            .to_owned(),
+        (Origin::BrowserVerb, true) => format!(
+            "If Axon is listed in System Settings > Privacy & Security > Automation, enable {app} \
+             beneath it. If it is not listed, open the Axon menu bar item and choose Browser \
+             Automation... to request consent."
+        ),
+        (Origin::ConsentGesture, true) => format!(
+            "macOS will not present the consent dialog again while a denial is recorded, so \
+             enable {app} beneath Axon in System Settings > Privacy & Security > Automation. \
+             If Axon is not listed there at all, macOS refused without recording anything, \
+             which no setting on this Mac can change: install the latest Axon and try again."
+        ),
+        (Origin::ConsentGesture, false) => "macOS neither presented the consent dialog nor \
+             recorded an answer, so there is nothing to enable in System Settings > Privacy & \
+             Security > Automation yet. Restart the daemon with `launchctl kickstart -k \
+             gui/$(id -u)/dev.axon.daemon` to retry from a fresh process; if the dialog still \
+             does not appear, install the latest Axon."
+            .to_owned(),
+    });
+    if answered_earlier_in_this_process {
         sentences.push(format!(
             "The Axon daemon already resolved Automation for {app} earlier in this session and \
              macOS can answer from what the process holds, so this may not reflect current \
@@ -135,6 +181,49 @@ fn refusal_detail(app: &str, decision: &Decision) -> String {
         ));
     }
     sentences.join(" ")
+}
+
+/// The explanation for a consent request that did not end in a grant.
+fn refusal_detail(app: &str, decision: &Decision) -> String {
+    match authorization(decision.status) {
+        status @ (AutomationAuthorization::Denied | AutomationAuthorization::NotDetermined) => {
+            denial_message(
+                app,
+                status,
+                Origin::ConsentGesture,
+                decision.answered_earlier_in_this_process,
+            )
+        }
+        AutomationAuthorization::Granted | AutomationAuthorization::Failed => {
+            failure_detail(app, decision.status)
+        }
+    }
+}
+
+/// A browser verb's refusal for want of consent.
+pub(crate) fn verb_denial(
+    browser: &SupportedBrowser,
+    authorization: AutomationAuthorization,
+    leg: AutomationLeg,
+    status: i32,
+    answered_earlier_in_this_process: bool,
+) -> BrowserError {
+    BrowserError::NotGranted {
+        message: denial_message(
+            browser.name,
+            authorization,
+            Origin::BrowserVerb,
+            answered_earlier_in_this_process,
+        ),
+        data: BrowserRefusalData {
+            capability: BrowserCapability::BrowserAutomation,
+            reason: BrowserRefusalReason::AutomationNotGranted,
+            app: browser.name.into(),
+            authorization,
+            leg,
+            native_status: Some(status),
+        },
+    }
 }
 
 impl ConsentService {
@@ -146,8 +235,13 @@ impl ConsentService {
         }
     }
 
+    #[cfg(target_os = "macos")]
     pub(crate) fn system() -> Self {
         Self::new(Box::new(SystemAutomationHost))
+    }
+
+    pub(crate) fn is_running(&self, bundle_identifier: &str) -> bool {
+        self.host.is_running(bundle_identifier)
     }
 
     fn held(&self, bundle_identifier: &str) -> Option<Answer> {
@@ -156,6 +250,71 @@ impl ConsentService {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(bundle_identifier)
             .copied()
+    }
+
+    /// The one way an answer enters the ledger.
+    ///
+    /// An executed-leg denial contradicts a passing determination for the same target: the
+    /// determination said yes and the event itself was refused. For the rest of this process's
+    /// life the determination is known to answer wrongly there, so its `noErr` must not retire the
+    /// denial, and with it the menu item carrying the only remediation. Only the dialog replaces
+    /// it, because that answer is a person deciding now; otherwise the daemon restarts and the
+    /// ledger starts empty.
+    fn record(&self, bundle_identifier: &str, answer: Answer) {
+        let mut ledger = self
+            .ledger
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if ledger
+            .get(bundle_identifier)
+            .is_some_and(|held| held.leg == AutomationLeg::Executed)
+            && answer.leg != AutomationLeg::Prompted
+        {
+            return;
+        }
+        ledger.insert(bundle_identifier.to_owned(), answer);
+    }
+
+    /// The silent check every browser verb makes before it sends: never prompts, and refuses
+    /// with the remediation a verb's caller can act on.
+    pub(crate) fn check(&self, browser: &SupportedBrowser) -> Result<(), BrowserError> {
+        let answered_earlier = self.held(browser.bundle_identifier).is_some();
+        let decision = self.determine(browser.bundle_identifier, false, answered_earlier);
+        match authorization(decision.status) {
+            AutomationAuthorization::Granted => Ok(()),
+            status @ (AutomationAuthorization::Denied | AutomationAuthorization::NotDetermined) => {
+                Err(verb_denial(
+                    browser,
+                    status,
+                    AutomationLeg::Checked,
+                    decision.status,
+                    decision.answered_earlier_in_this_process,
+                ))
+            }
+            AutomationAuthorization::Failed => Err(BrowserError::AuthorizationFailed {
+                app: browser.name.into(),
+                status: decision.status,
+            }),
+        }
+    }
+
+    /// The event itself was refused after the check passed. That is macOS answering this
+    /// process, so the ledger takes it; otherwise the passing check would be the last word, the
+    /// menu would retire its consent item, and this refusal, which names that item, would point at
+    /// a surface that is gone.
+    pub(crate) fn record_executed_denial(&self, browser: &SupportedBrowser) {
+        self.record(
+            browser.bundle_identifier,
+            Answer {
+                status: EVENT_NOT_PERMITTED,
+                leg: AutomationLeg::Executed,
+            },
+        );
+        eprintln!(
+            "axon-mac: automation authorization target={} leg=executed status={EVENT_NOT_PERMITTED} \
+             answeredEarlierInThisProcess=false",
+            browser.bundle_identifier
+        );
     }
 
     /// One determination, recorded and logged. The host call runs outside the ledger lock: the
@@ -174,10 +333,7 @@ impl ConsentService {
         // An unexpected status means the call failed rather than that macOS answered, so it must
         // not make a later denial claim this process holds a stale answer.
         if matches!(status, NO_ERR | EVENT_NOT_PERMITTED | WOULD_REQUIRE_CONSENT) {
-            self.ledger
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .insert(bundle_identifier.to_owned(), Answer { status, leg });
+            self.record(bundle_identifier, Answer { status, leg });
         }
         eprintln!(
             "axon-mac: automation authorization target={bundle_identifier} leg={} status={status} \
@@ -279,6 +435,30 @@ impl ConsentService {
         // Read once, before the first leg, so this request's own silent leg does not read back as
         // an earlier answer.
         let answered_earlier = self.held(browser.bundle_identifier).is_some();
+        // An event macOS refused after a determination passed is a denial no determination will
+        // reproduce: asking again returns the same wrong `noErr`, the gesture would report a grant
+        // and retire its own item, and the refusal that sent the user here would lead nowhere.
+        if let Some(held) = self.held(browser.bundle_identifier)
+            && held.leg == AutomationLeg::Executed
+            && held.status == EVENT_NOT_PERMITTED
+        {
+            eprintln!(
+                "axon-mac: automation authorization target={} leg=executed status={} \
+                 answeredEarlierInThisProcess=true source=ledger",
+                browser.bundle_identifier, held.status
+            );
+            return ConsentOutcome {
+                app: browser.name.into(),
+                bundle_identifier: browser.bundle_identifier.into(),
+                granted: false,
+                detail: Some(denial_message(
+                    browser.name,
+                    AutomationAuthorization::Denied,
+                    Origin::ConsentGesture,
+                    answered_earlier,
+                )),
+            };
+        }
         let initial = self.determine(browser.bundle_identifier, false, answered_earlier);
         // Only an undetermined grant can be prompted for. macOS will not present a dialog over a
         // recorded denial, so prompting there would only repeat the answer.
@@ -305,59 +485,13 @@ fn leg_name(leg: AutomationLeg) -> &'static str {
     }
 }
 
-/// `AEDesc`, which the Apple Event Manager headers pack to two-byte alignment: twelve bytes with
-/// the data handle at offset four on arm64, measured on bgsrv-mac. Only ever handed to the API by
-/// pointer.
-#[repr(C, packed(2))]
-struct AEDesc {
-    descriptor_type: u32,
-    data_handle: *mut c_void,
-}
-
-const TYPE_APPLICATION_BUNDLE_ID: u32 = u32::from_be_bytes(*b"bund");
-const TYPE_WILD_CARD: u32 = u32::from_be_bytes(*b"****");
-
-#[link(name = "CoreServices", kind = "framework")]
-unsafe extern "C" {
-    fn AECreateDesc(type_code: u32, data: *const c_void, size: isize, result: *mut AEDesc) -> i16;
-    fn AEDeterminePermissionToAutomateTarget(
-        target: *const AEDesc,
-        event_class: u32,
-        event_id: u32,
-        ask_user_if_needed: u8,
-    ) -> i32;
-    fn AEDisposeDesc(desc: *mut AEDesc) -> i16;
-}
-
+#[cfg(target_os = "macos")]
 pub(crate) struct SystemAutomationHost;
 
+#[cfg(target_os = "macos")]
 impl AutomationHost for SystemAutomationHost {
     fn determine(&self, bundle_identifier: &str, ask: bool) -> i32 {
-        let mut target = AEDesc {
-            descriptor_type: 0,
-            data_handle: std::ptr::null_mut(),
-        };
-        let created = unsafe {
-            AECreateDesc(
-                TYPE_APPLICATION_BUNDLE_ID,
-                bundle_identifier.as_ptr().cast(),
-                bundle_identifier.len() as isize,
-                &raw mut target,
-            )
-        };
-        if created != 0 {
-            return i32::from(created);
-        }
-        let status = unsafe {
-            AEDeterminePermissionToAutomateTarget(
-                &raw const target,
-                TYPE_WILD_CARD,
-                TYPE_WILD_CARD,
-                u8::from(ask),
-            )
-        };
-        unsafe { AEDisposeDesc(&raw mut target) };
-        status
+        crate::apple_events::system::determine_permission(bundle_identifier, ask)
     }
 
     fn is_running(&self, bundle_identifier: &str) -> bool {
@@ -626,9 +760,146 @@ mod tests {
     }
 
     #[test]
-    fn the_bundle_id_descriptor_type_codes_match_the_headers() {
-        assert_eq!(TYPE_APPLICATION_BUNDLE_ID, 0x6275_6e64);
-        assert_eq!(TYPE_WILD_CARD, 0x2a2a_2a2a);
-        assert_eq!(std::mem::size_of::<AEDesc>(), 12);
+    fn browsers_are_named_the_way_swift_names_them() {
+        for query in ["Safari", "SAFARI", "com.apple.Safari", "com.apple.safari"] {
+            assert_eq!(
+                SupportedBrowser::named(query),
+                Some(super::SAFARI),
+                "{query}"
+            );
+        }
+        for query in ["Google Chrome", "chrome", "Chrome", "com.google.Chrome"] {
+            assert_eq!(
+                SupportedBrowser::named(query),
+                Some(super::CHROME),
+                "{query}"
+            );
+        }
+        for query in ["Firefox", "Safari Technology Preview", "google", ""] {
+            assert_eq!(SupportedBrowser::named(query), None, "{query}");
+        }
+    }
+
+    fn refusal(error: BrowserError) -> (String, BrowserRefusalData) {
+        match error {
+            BrowserError::NotGranted { message, data } => (message, data),
+            other => panic!("expected a consent refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_verb_check_never_prompts_and_names_the_menu_gesture() {
+        let fake = Fake {
+            running: vec![SAFARI],
+            checked: HashMap::from([(SAFARI, WOULD_REQUIRE_CONSENT)]),
+            ..Fake::default()
+        };
+        let (message, data) = refusal(service(&fake).check(&super::SAFARI).unwrap_err());
+        assert_eq!(
+            *fake.calls.lock().unwrap(),
+            vec![(SAFARI.to_owned(), false)]
+        );
+        assert_eq!(data.authorization, AutomationAuthorization::NotDetermined);
+        assert_eq!(data.leg, AutomationLeg::Checked);
+        assert_eq!(data.native_status, Some(WOULD_REQUIRE_CONSENT));
+        assert!(message.contains("choose Browser Automation... to grant it"));
+
+        let denied = Fake {
+            checked: HashMap::from([(SAFARI, EVENT_NOT_PERMITTED)]),
+            ..Fake::default()
+        };
+        let consent = service(&denied);
+        let (message, data) = refusal(consent.check(&super::SAFARI).unwrap_err());
+        assert_eq!(data.authorization, AutomationAuthorization::Denied);
+        assert!(message.contains("System Settings > Privacy & Security > Automation"));
+        assert!(!message.contains("earlier in this session"));
+        let (again, _) = refusal(consent.check(&super::SAFARI).unwrap_err());
+        assert!(again.contains("earlier in this session"), "{again}");
+
+        let failing = Fake {
+            checked: HashMap::from([(SAFARI, -50)]),
+            ..Fake::default()
+        };
+        assert_eq!(
+            service(&failing).check(&super::SAFARI).unwrap_err(),
+            BrowserError::AuthorizationFailed {
+                app: "Safari".into(),
+                status: -50
+            }
+        );
+    }
+
+    /// The determination answers `noErr` for a target whose events macOS refuses, so a passing
+    /// check after the refusal must not retire it, or the menu's only remediation disappears.
+    #[test]
+    fn a_passing_check_does_not_retire_an_executed_denial() {
+        let fake = Fake {
+            running: vec![SAFARI],
+            checked: HashMap::from([(SAFARI, NO_ERR)]),
+            ..Fake::default()
+        };
+        let consent = service(&fake);
+        consent.check(&super::SAFARI).unwrap();
+        consent.record_executed_denial(&super::SAFARI);
+        consent.check(&super::SAFARI).unwrap();
+
+        let status = consent.status();
+        assert_eq!(status.need, ConsentNeed::Explain);
+        assert_eq!(
+            status.browsers[0].status,
+            Some(AutomationAuthorization::Denied)
+        );
+        assert_eq!(status.browsers[0].leg, Some(AutomationLeg::Executed));
+    }
+
+    #[test]
+    fn only_a_prompted_answer_replaces_an_executed_denial() {
+        let consent = service(&Fake::default());
+        consent.record_executed_denial(&super::SAFARI);
+        let executed = Answer {
+            status: EVENT_NOT_PERMITTED,
+            leg: AutomationLeg::Executed,
+        };
+        for leg in [AutomationLeg::Checked, AutomationLeg::Executed] {
+            consent.record(
+                SAFARI,
+                Answer {
+                    status: NO_ERR,
+                    leg,
+                },
+            );
+            assert_eq!(consent.held(SAFARI), Some(executed), "{leg:?}");
+        }
+        let prompted = Answer {
+            status: NO_ERR,
+            leg: AutomationLeg::Prompted,
+        };
+        consent.record(SAFARI, prompted);
+        assert_eq!(consent.held(SAFARI), Some(prompted));
+    }
+
+    /// Asking the determination again would return the same wrong `noErr` and report a grant, so
+    /// the gesture answers from the held denial without asking macOS at all.
+    #[test]
+    fn the_gesture_honors_an_executed_denial_without_asking_again() {
+        let fake = Fake {
+            running: vec![SAFARI],
+            checked: HashMap::from([(SAFARI, NO_ERR)]),
+            prompted: HashMap::from([(SAFARI, NO_ERR)]),
+            ..Fake::default()
+        };
+        let consent = service(&fake);
+        consent.record_executed_denial(&super::SAFARI);
+        let report = consent.request().unwrap();
+
+        assert!(fake.calls.lock().unwrap().is_empty(), "no determination");
+        assert!(!report.outcomes[0].granted);
+        let detail = report.outcomes[0].detail.as_deref().unwrap();
+        assert!(detail.starts_with("Automation permission for Safari is denied."));
+        assert!(
+            !detail.contains("Browser Automation..."),
+            "the gesture must not point at itself"
+        );
+        assert_eq!(report.need, ConsentNeed::Explain);
     }
 }

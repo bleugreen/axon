@@ -1,0 +1,11 @@
+{
+  "error" : {
+    "code" : -32602,
+    "message" : "Window index must be greater than zero: 0"
+  },
+  "method" : "tabs",
+  "params" : {
+    "app" : "Safari",
+    "window" : 0
+  }
+}

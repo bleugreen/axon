@@ -1,0 +1,20 @@
+{
+  "method" : "navigate",
+  "params" : {
+    "app" : "Safari",
+    "url" : "https://example.com"
+  },
+  "result" : {
+    "navigation" : {
+      "app" : "com.apple.Safari",
+      "elapsedMs" : 480,
+      "requestedURL" : "https://example.com",
+      "settleEvidence" : "stable_readback",
+      "settled" : true,
+      "success" : true,
+      "title" : "Example Domain",
+      "url" : "https://example.com/",
+      "verification" : "dictionary_readback"
+    }
+  }
+}

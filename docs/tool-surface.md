@@ -213,7 +213,10 @@ prompt for it: they check the existing grant and refuse immediately without it.
 Consent is requested deliberately from the daemon menu's Browser Automation item,
 and a permission error names the state Axon observed and the remediation that
 matches it. Apple Events are bounded by a 15-second
-timeout. These operations never accept script source.
+timeout, and on the Rust macOS daemon a call's events share one budget, so `navigate`
+returns within about 24 seconds however slowly a browser answers. Both macOS daemons
+serve these verbs with the same answers. These operations never accept script
+source.
 
 `wait_for_value(target, contains|equals|matches)` repeatedly resolves an app-scoped
 semantic name and reads the unique target's readable state until one predicate holds

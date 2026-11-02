@@ -1,0 +1,10 @@
+{
+  "error" : {
+    "code" : -32602,
+    "message" : "Unsupported browser: Firefox. Supported browsers are Safari and Google Chrome."
+  },
+  "method" : "windows",
+  "params" : {
+    "app" : "Firefox"
+  }
+}

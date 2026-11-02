@@ -1,0 +1,11 @@
+{
+  "error" : {
+    "code" : -32602,
+    "message" : "Invalid navigation URL: an absolute http or https URL is required"
+  },
+  "method" : "navigate",
+  "params" : {
+    "app" : "Safari",
+    "url" : "file:///tmp/private"
+  }
+}

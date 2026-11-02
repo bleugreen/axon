@@ -11,9 +11,9 @@ SCHEMA_PRODUCT_VERSION: Final = "0.3.6"
 AVAILABILITY: Final[Mapping[str, Mapping[str, bool]]] = {
     "capture_screen": {"linux": True, "mac": False, "swift": False, "windows": False},
     "look": {"linux": True, "mac": True, "swift": True, "windows": True},
-    "navigate": {"linux": False, "mac": False, "swift": True, "windows": False},
-    "windows": {"linux": False, "mac": False, "swift": True, "windows": False},
-    "tabs": {"linux": False, "mac": False, "swift": True, "windows": False},
+    "navigate": {"linux": False, "mac": True, "swift": True, "windows": False},
+    "windows": {"linux": False, "mac": True, "swift": True, "windows": False},
+    "tabs": {"linux": False, "mac": True, "swift": True, "windows": False},
     "find": {"linux": True, "mac": True, "swift": True, "windows": True},
     "wait_for_value": {"linux": True, "mac": True, "swift": True, "windows": True},
     "wait_for_stability": {"linux": True, "mac": True, "swift": True, "windows": True},

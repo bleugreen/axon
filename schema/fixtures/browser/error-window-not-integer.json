@@ -1,0 +1,11 @@
+{
+  "error" : {
+    "code" : -32602,
+    "message" : "window must be an integer"
+  },
+  "method" : "tabs",
+  "params" : {
+    "app" : "Safari",
+    "window" : "2"
+  }
+}
