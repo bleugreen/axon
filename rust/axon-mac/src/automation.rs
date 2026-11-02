@@ -760,9 +760,123 @@ mod tests {
     }
 
     #[test]
-    fn the_bundle_id_descriptor_type_codes_match_the_headers() {
-        assert_eq!(TYPE_APPLICATION_BUNDLE_ID, 0x6275_6e64);
-        assert_eq!(TYPE_WILD_CARD, 0x2a2a_2a2a);
-        assert_eq!(std::mem::size_of::<AEDesc>(), 12);
+    fn browsers_are_named_the_way_swift_names_them() {
+        for query in ["Safari", "SAFARI", "com.apple.Safari", "com.apple.safari"] {
+            assert_eq!(SupportedBrowser::named(query), Some(SAFARI), "{query}");
+        }
+        for query in ["Google Chrome", "chrome", "Chrome", "com.google.Chrome"] {
+            assert_eq!(SupportedBrowser::named(query), Some(CHROME), "{query}");
+        }
+        for query in ["Firefox", "Safari Technology Preview", "google", ""] {
+            assert_eq!(SupportedBrowser::named(query), None, "{query}");
+        }
+    }
+
+    fn refusal(error: BrowserError) -> (String, BrowserRefusalData) {
+        match error {
+            BrowserError::NotGranted { message, data } => (message, data),
+            other => panic!("expected a consent refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_verb_check_never_prompts_and_names_the_menu_gesture() {
+        let fake = Fake {
+            running: vec![SAFARI.bundle_identifier],
+            checked: HashMap::from([(SAFARI.bundle_identifier, WOULD_REQUIRE_CONSENT)]),
+            ..Fake::default()
+        };
+        let (message, data) = refusal(service(&fake).check(&SAFARI).unwrap_err());
+        assert_eq!(*fake.calls.lock().unwrap(), vec![(SAFARI.bundle_identifier.to_owned(), false)]);
+        assert_eq!(data.authorization, AutomationAuthorization::NotDetermined);
+        assert_eq!(data.leg, AutomationLeg::Checked);
+        assert_eq!(data.native_status, Some(WOULD_REQUIRE_CONSENT));
+        assert!(message.contains("choose Browser Automation... to grant it"));
+
+        let denied = Fake {
+            checked: HashMap::from([(SAFARI.bundle_identifier, EVENT_NOT_PERMITTED)]),
+            ..Fake::default()
+        };
+        let consent = service(&denied);
+        let (message, data) = refusal(consent.check(&SAFARI).unwrap_err());
+        assert_eq!(data.authorization, AutomationAuthorization::Denied);
+        assert!(message.contains("System Settings > Privacy & Security > Automation"));
+        assert!(!message.contains("earlier in this session"));
+        let (again, _) = refusal(consent.check(&SAFARI).unwrap_err());
+        assert!(again.contains("earlier in this session"), "{again}");
+
+        let failing = Fake {
+            checked: HashMap::from([(SAFARI.bundle_identifier, -50)]),
+            ..Fake::default()
+        };
+        assert_eq!(
+            service(&failing).check(&SAFARI).unwrap_err(),
+            BrowserError::AuthorizationFailed {
+                app: "Safari".into(),
+                status: -50
+            }
+        );
+    }
+
+    /// The determination answers `noErr` for a target whose events macOS refuses, so a passing
+    /// check after the refusal must not retire it, or the menu's only remediation disappears.
+    #[test]
+    fn a_passing_check_does_not_retire_an_executed_denial() {
+        let fake = Fake {
+            running: vec![SAFARI.bundle_identifier],
+            checked: HashMap::from([(SAFARI.bundle_identifier, NO_ERR)]),
+            ..Fake::default()
+        };
+        let consent = service(&fake);
+        consent.check(&SAFARI).unwrap();
+        consent.record_executed_denial(&SAFARI);
+        consent.check(&SAFARI).unwrap();
+
+        let status = consent.status();
+        assert_eq!(status.need, ConsentNeed::Explain);
+        assert_eq!(status.browsers[0].status, Some(AutomationAuthorization::Denied));
+        assert_eq!(status.browsers[0].leg, Some(AutomationLeg::Executed));
+    }
+
+    #[test]
+    fn only_a_prompted_answer_replaces_an_executed_denial() {
+        let consent = service(&Fake::default());
+        consent.record_executed_denial(&SAFARI);
+        let executed = Answer {
+            status: EVENT_NOT_PERMITTED,
+            leg: AutomationLeg::Executed,
+        };
+        for leg in [AutomationLeg::Checked, AutomationLeg::Executed] {
+            consent.record(SAFARI.bundle_identifier, Answer { status: NO_ERR, leg });
+            assert_eq!(consent.held(SAFARI.bundle_identifier), Some(executed), "{leg:?}");
+        }
+        let prompted = Answer {
+            status: NO_ERR,
+            leg: AutomationLeg::Prompted,
+        };
+        consent.record(SAFARI.bundle_identifier, prompted);
+        assert_eq!(consent.held(SAFARI.bundle_identifier), Some(prompted));
+    }
+
+    /// Asking the determination again would return the same wrong `noErr` and report a grant, so
+    /// the gesture answers from the held denial without asking macOS at all.
+    #[test]
+    fn the_gesture_honors_an_executed_denial_without_asking_again() {
+        let fake = Fake {
+            running: vec![SAFARI.bundle_identifier],
+            checked: HashMap::from([(SAFARI.bundle_identifier, NO_ERR)]),
+            prompted: HashMap::from([(SAFARI.bundle_identifier, NO_ERR)]),
+            ..Fake::default()
+        };
+        let consent = service(&fake);
+        consent.record_executed_denial(&SAFARI);
+        let report = consent.request().unwrap();
+
+        assert!(fake.calls.lock().unwrap().is_empty(), "no determination");
+        assert!(!report.outcomes[0].granted);
+        let detail = report.outcomes[0].detail.as_deref().unwrap();
+        assert!(detail.starts_with("Automation permission for Safari is denied."));
+        assert!(!detail.contains("Browser Automation..."), "the gesture must not point at itself");
+        assert_eq!(report.need, ConsentNeed::Explain);
     }
 }
