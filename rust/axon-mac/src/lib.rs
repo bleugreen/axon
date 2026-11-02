@@ -4,12 +4,12 @@ use axon_core::{
     AppQuery, AxnRunner, Capability, DeliveryCandidate, DeliveryCapability, DeliveryOutcome,
     DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung, DeliverySelection,
     DiffPolicy, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId,
-    JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, PointerContract,
-    ResolutionStatus, RunEnvelope, SemanticElementName, SemanticLookup, SemanticNameRegistry,
+    JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, PointSpace, PointTarget,
+    PointerContract, ResolutionStatus, RunEnvelope, SemanticElementName, SemanticLookup, SemanticNameRegistry,
     SemanticSelection, SinceToken, Snapshot, SnapshotHandle, TextLocationResolver,
     TextLocationSource, TextLocationTarget, TextRecognitionProvider, ToolDispatcher,
-    classify_semantic_diff, dispatch_in_foreground, goal_success, look_since_response, prepare_run,
-    select_delivery,
+    classify_semantic_diff, dispatch_in_foreground, goal_success, look_since_response,
+    pointer_target_is_point, prepare_run, select_delivery,
 };
 use serde_json::{Map, Value, json};
 use std::{
@@ -836,21 +836,46 @@ impl<
                 Ok(json!({"handle": handle, "resolution": resolution}))
             }
             "click" => {
-                if let Some(location) = params
-                    .get("target")
-                    .and_then(|target| target.get("location"))
-                    .or_else(|| params.get("location"))
-                {
-                    return self.click_text_location(&location.clone(), policy);
+                if let Some(location) = text_location(params) {
+                    let (target, point, resolution) = self.resolve_text_location(&location)?;
+                    // A resolved text location is a click like any other. It travels the same
+                    // ladder and the same transaction; a separate path here is how a caller ends up
+                    // with global pointer input under a policy that forbids it.
+                    return self.deliver_pointer(
+                        policy,
+                        PointerAction::Click,
+                        target,
+                        point,
+                        resolution,
+                    );
                 }
-                if params.get("target").is_some_and(pointer_target_is_point) {
-                    return Err(capability_unavailable(
-                        "click",
-                        "point-target",
-                        "not-implemented",
-                    ));
+                if let Some(target) = params.get("target").filter(|t| pointer_target_is_point(t)) {
+                    let (target, point) = self.point_target("click", &target.clone(), params)?;
+                    return self.deliver_pointer(
+                        policy,
+                        PointerAction::Click,
+                        target,
+                        point,
+                        Value::Null,
+                    );
                 }
                 let (handle, resolution) = self.resolve(params)?;
+                // The semantic rung is offered only to an element that advertises the action.
+                // Discovering its absence from the AX error instead leaked kAXErrorActionUnsupported
+                // to the caller for every text area and window that was ever clicked.
+                let presses = self
+                    .snapshot_node(&handle)
+                    .is_some_and(|node| node.actions.iter().any(|action| action == "AXPress"));
+                if !presses {
+                    let point = self.element_point(&handle)?;
+                    return self.deliver_pointer(
+                        policy,
+                        PointerAction::Click,
+                        ClickTarget::Element(handle),
+                        point,
+                        json!(resolution),
+                    );
+                }
                 self.backend
                     .invoke(&handle, "AXPress")
                     .map_err(backend_error)?;
@@ -878,23 +903,24 @@ impl<
                 // The intent is validated before the ladder, so a malformed request is an error
                 // rather than a refusal.
                 let intent = keyboard_intent(params)?;
-                let ladder = self.keyboard_ladder();
-                let Some(candidate) = self.selected(&ladder, policy) else {
-                    return Ok(self.refusal(&ladder, policy));
-                };
+                if let KeyboardIntent::Key(spec) = intent {
+                    input::stroke(spec).map_err(|error| rpc_error(-32602, error))?;
+                }
                 let app = app_query(params);
                 // `keyboard` naming no application is explicitly addressed at whatever holds the
-                // foreground: nothing to activate, nothing to restore. Naming one makes it aimed,
-                // and the transaction compares and activates the backend's own identity for that
-                // application rather than the display name the request carried.
-                let aimed = app.name.is_some() || app.identifier.is_some();
-                let target = if aimed {
+                // foreground: nothing to activate, nothing to restore, and no process to post to.
+                // Naming one makes it aimed, and both the application rung and the transaction
+                // use the backend's own identity for that application rather than the display
+                // name the request carried.
+                let aimed =
+                    app.name.is_some() || app.identifier.is_some() || app.process_id.is_some();
+                let process = if aimed {
                     match self
                         .backend
-                        .resolve_application(&app)
+                        .application_process(&app)
                         .map_err(backend_error)?
                     {
-                        Some(identity) => Some(identity),
+                        Some(process) => Some(process),
                         // Falling through to the frontmost here would post keystrokes into whatever
                         // the user happens to be working in, having been asked for something else.
                         None => {
@@ -913,17 +939,43 @@ impl<
                 } else {
                     None
                 };
+                let plan = self
+                    .backend
+                    .plan_application_keyboard(process.clone(), intent);
+                let ladder = self.keyboard_ladder(&plan);
+                let Some(candidate) = self.selected(&ladder, policy) else {
+                    return Ok(self.refusal(&ladder, policy));
+                };
+                let verification =
+                    json!({"verified":false,"reason":"keyboard input has no declared postcondition"});
+                if candidate.rung == DeliveryRung::Application {
+                    let ApplicationPlan::Bound(bound) = plan else {
+                        unreachable!("the application rung is only offered for a bound plan")
+                    };
+                    return self.dispatch_application(
+                        policy,
+                        &candidate,
+                        &bound,
+                        intent,
+                        verification,
+                    );
+                }
                 self.foreground_dispatch(
                     policy,
                     &candidate,
-                    target
-                        .as_deref()
-                        .map_or(ForegroundTarget::Frontmost, ForegroundTarget::Application),
+                    process.as_ref().map_or(ForegroundTarget::Frontmost, |process| {
+                        ForegroundTarget::Application(&process.identity)
+                    }),
                     // Keyboard input never touches the cursor, and capturing a pointer it does not
                     // move would report a restoration that never happened.
                     false,
-                    json!({"verified":false,"reason":"keyboard input has no declared postcondition"}),
-                    move |backend| backend.keyboard(&app, intent),
+                    verification,
+                    move |backend| {
+                        backend
+                            .keyboard(&app, intent)
+                            .map(|_| Value::Null)
+                            .map_err(backend_error)
+                    },
                 )
             }
             "invoke" => {
@@ -939,30 +991,24 @@ impl<
                 ))
             }
             "scroll" => {
-                // These defaults mirror the generated public schema. Any amount or directional
-                // request is unsupported by AXScrollToVisible and must be refused before target
-                // resolution can capture an application or call another native API.
+                // These defaults mirror the generated public schema: pixels, with -120 one notch.
                 let dx = number_param(params, "deltaX", 0.0)?;
                 let dy = number_param(params, "deltaY", -120.0)?;
-                if dx != 0.0 || dy != 0.0 {
-                    return Err(capability_unavailable(
-                        "scroll",
-                        "directional-scroll",
-                        "not-implemented",
-                    ));
+                if !(dx.is_finite() && dy.is_finite()) {
+                    return Err(rpc_error(-32602, "deltaX and deltaY must be finite"));
                 }
-                let Some(target) = params.get("target") else {
-                    return Err(capability_unavailable(
-                        "scroll",
-                        "semantic-target",
-                        "not-implemented",
-                    ));
-                };
-                if pointer_target_is_point(target) || target.get("location").is_some() {
-                    return Err(capability_unavailable(
-                        "scroll",
-                        "non-semantic-target",
-                        "not-implemented",
+                if dx != 0.0 || dy != 0.0 {
+                    return self.scroll_wheel(params, policy, (dx, dy));
+                }
+                // A zero delta asks for the semantic scroll: bring an element into view.
+                let semantic = params.get("target").filter(|target| {
+                    !pointer_target_is_point(target) && target.get("location").is_none()
+                });
+                if semantic.is_none() {
+                    return Err(rpc_error(
+                        -32602,
+                        "a scroll with no delta brings a semantic target into view, so it requires \
+                         one; a point, a text location, or an app scrolls only by a nonzero delta",
                     ));
                 }
                 let (handle, resolution) = self.resolve(params)?;
@@ -980,47 +1026,107 @@ impl<
         }
     }
 
-    /// The ladder for a pointer action: no semantic rung, a pixel rung the backend answers for per
-    /// target, and `SendInput` behind the explicit opt-in.
-    fn pointer_ladder(&self, plan: &PixelPlan) -> Vec<DeliveryCandidate> {
-        vec![
-            match plan {
-                PixelPlan::Bound(_) => DeliveryCandidate::available(
-                    DeliveryRung::Pixel,
-                    DeliveryCapability::BackgroundPixelInput,
-                    PIXEL_MECHANISM,
-                ),
-                // The plan's own reason travels intact. A generic "unsupported" here would leave a
-                // caller unable to tell an elevated window from an unrecognized control class.
-                PixelPlan::Unavailable { reason, .. } => DeliveryCandidate::unavailable(
-                    DeliveryRung::Pixel,
-                    DeliveryCapability::BackgroundPixelInput,
-                    PIXEL_MECHANISM,
-                    DeliveryRefusalReason::BackgroundPixelUnsupported,
-                    reason.clone(),
-                ),
-            },
-            match plan {
-                // An obstacle that blocks every synthetic input at this target blocks the loud
-                // rung too, and saying so is what stops the refusal from recommending an opt-in
-                // that would buy a dispatch macOS discards.
-                PixelPlan::Unavailable {
-                    reason,
-                    blocks_global_input: true,
-                } => DeliveryCandidate::unavailable(
-                    DeliveryRung::Foreground,
-                    DeliveryCapability::GlobalInput,
-                    "SendInput",
-                    DeliveryRefusalReason::NoDeliveryCandidate,
-                    reason.clone(),
-                ),
-                _ => self.foreground_candidate(Capability::PointerInput, "SendInput"),
-            },
-        ]
+    /// A wheel scroll, aimed at whatever the request named.
+    ///
+    /// The point is resolved in a fixed order: a semantic target's element centre, a point target,
+    /// a text location's resolved point, or the centre of `app`'s focused window. A request naming
+    /// none of them has nowhere to scroll.
+    fn scroll_wheel(
+        &mut self,
+        params: &Map<String, Value>,
+        policy: DeliveryPolicy,
+        delta: (f64, f64),
+    ) -> Result<Value, JsonRpcError> {
+        let action = PointerAction::Wheel(delta);
+        if let Some(location) = text_location(params) {
+            let (target, point, resolution) = self.resolve_text_location(&location)?;
+            return self.deliver_pointer(policy, action, target, point, resolution);
+        }
+        match params.get("target") {
+            Some(target) if pointer_target_is_point(target) => {
+                let (target, point) = self.point_target("scroll", &target.clone(), params)?;
+                self.deliver_pointer(policy, action, target, point, Value::Null)
+            }
+            Some(_) => {
+                let (handle, resolution) = self.resolve(params)?;
+                let point = self.element_point(&handle)?;
+                self.deliver_pointer(
+                    policy,
+                    action,
+                    ClickTarget::Element(handle),
+                    point,
+                    json!(resolution),
+                )
+            }
+            None => {
+                let Some(app) = params
+                    .get("app")
+                    .and_then(Value::as_str)
+                    .filter(|app| !app.is_empty())
+                else {
+                    return Err(rpc_error(
+                        -32602,
+                        "scroll requires a target or an app to aim the wheel at",
+                    ));
+                };
+                let frame = self
+                    .backend
+                    .focused_window_frame(&query_for_app(app))
+                    .map_err(backend_error)?
+                    .ok_or_else(|| {
+                        rpc_error(-32002, format!("{app} has no focused window to scroll"))
+                    })?;
+                let point = (
+                    frame.x + frame.width / 2.0,
+                    frame.y + frame.height / 2.0,
+                );
+                self.deliver_pointer(
+                    policy,
+                    action,
+                    ClickTarget::Point(Some(app.to_owned())),
+                    point,
+                    Value::Null,
+                )
+            }
+        }
     }
 
-    /// The ladder for keyboard input, whose pixel rung is permanently absent by construction.
-    fn keyboard_ladder(&self) -> Vec<DeliveryCandidate> {
+    /// The ladder for a pointer action: no background rung, for reasons that are properties of
+    /// macOS rather than of the target, and the HID tap behind the explicit opt-in.
+    fn pointer_ladder(&self, action: PointerAction) -> Vec<DeliveryCandidate> {
+        let mut ladder = Vec::with_capacity(4);
+        if let PointerAction::Wheel(_) = action {
+            ladder.push(DeliveryCandidate::unavailable(
+                DeliveryRung::Semantic,
+                DeliveryCapability::SemanticAction,
+                "AXScrollToVisible",
+                DeliveryRefusalReason::NoDeliveryCandidate,
+                NO_SEMANTIC_SCROLL_DELTA,
+            ));
+        }
+        ladder.extend([
+            DeliveryCandidate::unavailable(
+                DeliveryRung::Pixel,
+                DeliveryCapability::BackgroundPixelInput,
+                PIXEL_MECHANISM,
+                DeliveryRefusalReason::BackgroundPixelUnsupported,
+                NO_WINDOW_BOUND_POINTER,
+            ),
+            DeliveryCandidate::unavailable(
+                DeliveryRung::Application,
+                DeliveryCapability::BackgroundPixelInput,
+                APPLICATION_MECHANISM,
+                DeliveryRefusalReason::BackgroundPixelUnsupported,
+                background::PID_POINTER_REFUSED,
+            ),
+            self.foreground_candidate(Capability::PointerInput, FOREGROUND_MECHANISM),
+        ]);
+        ladder
+    }
+
+    /// The ladder for keyboard input: no pixel rung by construction, the application rung as
+    /// the plan answers it, and the HID tap behind the explicit opt-in.
+    fn keyboard_ladder(&self, plan: &ApplicationPlan) -> Vec<DeliveryCandidate> {
         vec![
             DeliveryCandidate::unavailable(
                 DeliveryRung::Pixel,
@@ -1029,7 +1135,31 @@ impl<
                 DeliveryRefusalReason::BackgroundPixelUnsupported,
                 NO_KEYBOARD_GEOMETRY,
             ),
-            self.foreground_candidate(Capability::KeyboardInput, "SendInput"),
+            match (plan, self.capability_restriction(Capability::KeyboardInput)) {
+                // Posting to a process needs the same Accessibility grant the HID tap does.
+                (ApplicationPlan::Bound(_), Some(restriction)) => DeliveryCandidate::unavailable(
+                    DeliveryRung::Application,
+                    DeliveryCapability::BackgroundPixelInput,
+                    APPLICATION_MECHANISM,
+                    DeliveryRefusalReason::NoDeliveryCandidate,
+                    restriction,
+                ),
+                (ApplicationPlan::Bound(_), None) => DeliveryCandidate::available(
+                    DeliveryRung::Application,
+                    DeliveryCapability::BackgroundPixelInput,
+                    APPLICATION_MECHANISM,
+                ),
+                // The plan's own reason travels intact, so a caller can tell a chord nobody
+                // measured from a request that named no application.
+                (ApplicationPlan::Unavailable(reason), _) => DeliveryCandidate::unavailable(
+                    DeliveryRung::Application,
+                    DeliveryCapability::BackgroundPixelInput,
+                    APPLICATION_MECHANISM,
+                    DeliveryRefusalReason::BackgroundPixelUnsupported,
+                    reason.clone(),
+                ),
+            },
+            self.foreground_candidate(Capability::KeyboardInput, FOREGROUND_MECHANISM),
         ]
     }
 
@@ -1089,8 +1219,12 @@ impl<
         Some(NO_FOREGROUND_TRANSACTION.to_string())
     }
 
-    /// Dispatches one action at the selected rung, inside a foreground transaction when the rung is
-    /// the foreground one.
+    /// Dispatches one action inside a foreground transaction.
+    ///
+    /// `body` runs only after activation is proved. It may still decline with an error, such as a
+    /// target that moved, and it returns any detail of its own to merge into the result. Either way
+    /// the transaction hands the session back, and its cleanup evidence travels with what the
+    /// caller receives.
     fn foreground_dispatch(
         &mut self,
         policy: DeliveryPolicy,
@@ -1098,33 +1232,50 @@ impl<
         target: ForegroundTarget<'_>,
         restores_pointer: bool,
         verification: Value,
-        body: impl FnOnce(&mut B) -> Result<(), axon_core::BackendError>,
+        body: impl FnOnce(&mut B) -> Result<Value, JsonRpcError>,
     ) -> Result<Value, JsonRpcError> {
         let dispatch = dispatch_in_foreground(&mut self.backend, target, restores_pointer, body);
+        let mut cleanup = dispatch.cleanup;
+        if let Some(evidence) = self.backend.take_activation_evidence() {
+            cleanup.message = Some(match cleanup.message.take() {
+                Some(message) => format!("{message}; {evidence}"),
+                None => evidence,
+            });
+        }
         if let Some(refusal) = dispatch.refusal {
             let mut result = DeliveryOutcome::refusal_result(policy, refusal);
             if let Some(object) = result.as_object_mut() {
-                object.insert("foreground".into(), json!(dispatch.cleanup));
+                object.insert("foreground".into(), json!(cleanup));
             }
             return Ok(result);
         }
-        if let Err(error) = dispatch.value.expect("a proved activation dispatches") {
-            // The transaction activated and then handed the session back around this failure, so
-            // its cleanup evidence is the only record of what happened to the user's foreground.
-            // It rides on the error rather than being dropped.
-            let mut failure = backend_error(error);
-            failure.data = Some(json!({ "foreground": dispatch.cleanup }));
-            return Err(failure);
-        }
+        let detail = match dispatch.value.expect("a proved activation dispatches") {
+            Ok(detail) => detail,
+            Err(mut failure) => {
+                // The transaction activated and then handed the session back around this failure,
+                // so its cleanup evidence is the only record of what happened to the user's
+                // foreground. It rides on the error rather than being dropped.
+                let mut data = match failure.data.take() {
+                    Some(Value::Object(data)) => data,
+                    _ => Map::new(),
+                };
+                data.insert("foreground".into(), json!(cleanup));
+                failure.data = Some(Value::Object(data));
+                return Err(failure);
+            }
+        };
 
-        let result = json!({
+        let mut result = json!({
             // This rung promises proved activation and exactly one dispatch. The hand-back remains
             // reported cleanup evidence, while verification proves whether the target acted.
-            "success": goal_success(&verification, dispatch.cleanup.activation_proved),
+            "success": goal_success(&verification, cleanup.activation_proved),
             "dispatch": {"success": true, "mechanism": candidate.mechanism},
             "verification": verification,
-            "foreground": dispatch.cleanup,
+            "foreground": cleanup,
         });
+        if let (Some(object), Value::Object(detail)) = (result.as_object_mut(), detail) {
+            object.extend(detail);
+        }
         Ok(delivered(result, policy, candidate.rung))
     }
 
@@ -1750,19 +1901,58 @@ fn bounded_ms(
 }
 
 fn app_query(params: &Map<String, Value>) -> AppQuery {
-    let app = params.get("app").and_then(Value::as_str);
-    let process_id = app.and_then(|value| value.strip_prefix("pid:").unwrap_or(value).parse().ok());
+    let mut query = params
+        .get("app")
+        .and_then(Value::as_str)
+        .map(query_for_app)
+        .unwrap_or(AppQuery {
+            process_id: None,
+            name: None,
+            identifier: None,
+        });
+    query.identifier = params
+        .get("identifier")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    query
+}
+
+/// The query one `app` string makes: a process id when it is one (bare or as `pid:<n>`), and
+/// otherwise a name the backend matches against both display names and bundle identifiers, which
+/// is what lets a recorded `{app: "com.apple.TextEdit", point}` replay.
+fn query_for_app(app: &str) -> AppQuery {
+    let process_id = app.strip_prefix("pid:").unwrap_or(app).parse().ok();
     AppQuery {
         process_id,
-        name: process_id
-            .is_none()
-            .then(|| app.map(str::to_owned))
-            .flatten(),
-        identifier: params
-            .get("identifier")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
+        name: process_id.is_none().then(|| app.to_owned()),
+        identifier: None,
     }
+}
+
+/// The text location a pointer request carries, inside its target or beside it.
+fn text_location(params: &Map<String, Value>) -> Option<Value> {
+    params
+        .get("target")
+        .and_then(|target| target.get("location"))
+        .or_else(|| params.get("location"))
+        .cloned()
+}
+
+/// Whether `point` is over a window of the expected process: the one the action was aimed at, or
+/// for an unaimed point, whichever application holds the foreground.
+fn point_belongs<B: NativeInput>(
+    backend: &mut B,
+    point: (f64, f64),
+    expected: Option<i32>,
+) -> Result<bool, axon_core::BackendError> {
+    let expected = match expected {
+        Some(process) => Some(process as i64),
+        None => backend
+            .frontmost_application()?
+            .and_then(|identity| backend.application_process_identifier(&identity)),
+    };
+    let owner = backend.point_owner(point)?;
+    Ok(owner.is_some() && owner.map(i64::from) == expected)
 }
 /// `keyboard` carries exactly one intent. Neither is an empty request and both at once is an
 /// ambiguous one; each is malformed rather than a delivery decision, so each is a transport error.
@@ -1798,9 +1988,6 @@ fn number_param(params: &Map<String, Value>, key: &str, default: f64) -> Result<
     }
 }
 
-fn pointer_target_is_point(target: &Value) -> bool {
-    target.get("point").is_some() || (target.get("x").is_some() && target.get("y").is_some())
-}
 /// Stamps the four stable delivery fields onto an action result.
 fn delivered(mut result: Value, policy: DeliveryPolicy, rung: DeliveryRung) -> Value {
     let success = result
