@@ -254,6 +254,19 @@ pub trait NativeInput: PlatformBackend {
     fn modifier_state(&mut self) -> Option<ModifierState> {
         None
     }
+
+    /// The actions a resolved element advertises right now, asked of the element itself.
+    ///
+    /// The captured node's `actions` on macOS come from a role table, which knows six roles; a
+    /// pop-up button, disclosure triangle, or outline row that supports `AXPress` is not among
+    /// them. `Ok(None)` means this backend cannot ask, and the router falls back to the capture.
+    fn advertised_actions(
+        &mut self,
+        handle: &SnapshotHandle,
+    ) -> Result<Option<Vec<String>>, axon_core::BackendError> {
+        let _ = handle;
+        Ok(None)
+    }
 }
 
 /// The window server's modifier flags, in both states a later event can inherit them from.
@@ -310,8 +323,9 @@ fn settled_modifier_state<B: NativeInput>(
 /// `backgroundDelivery`), beside the pointer's.
 ///
 /// A keyboard dispatch must leave the session's modifiers as it found them. One that does not has
-/// left a key logically held for every later keystroke on the machine, the user's included, which
-/// is why a changed state fails the dispatch rather than only being reported.
+/// left a key logically held for every later keystroke on the machine, the user's included, so a
+/// changed state means the rung did not hold and `success` is false. `dispatchSuccess` stays true:
+/// the events were posted, and a caller told otherwise would retry and type them twice.
 fn stamp_modifier_readback(
     result: &mut Value,
     section: &str,
@@ -342,11 +356,7 @@ fn stamp_modifier_readback(
             None => problem,
         };
         object.insert("message".into(), json!(message));
-        object.insert("dispatchSuccess".into(), json!(false));
         object.insert("success".into(), json!(false));
-        if let Some(Value::Object(dispatch)) = object.get_mut("dispatch") {
-            dispatch.insert("success".into(), json!(false));
-        }
     }
 }
 
@@ -985,9 +995,18 @@ impl<
                 // The semantic rung is offered only to an element that advertises the action.
                 // Discovering its absence from the AX error instead leaked kAXErrorActionUnsupported
                 // to the caller for every text area and window that was ever clicked.
-                let presses = self
-                    .snapshot_node(&handle)
-                    .is_some_and(|node| node.actions.iter().any(|action| action == "AXPress"));
+                let advertised = match self
+                    .backend
+                    .advertised_actions(&handle)
+                    .map_err(backend_error)?
+                {
+                    Some(actions) => actions,
+                    None => self
+                        .snapshot_node(&handle)
+                        .map(|node| node.actions.clone())
+                        .unwrap_or_default(),
+                };
+                let presses = advertised.iter().any(|action| action == "AXPress");
                 if !presses {
                     let point = self.element_point(&handle)?;
                     return self.deliver_pointer(
@@ -2833,6 +2852,8 @@ mod tests {
         const WINDOW: usize = 0;
         const TEXT_AREA: usize = 1;
         const BUTTON: usize = 2;
+        /// A role the capture's role table does not know, which advertises `AXPress` anyway.
+        const POPUP: usize = 3;
 
         fn node(
             role: &str,
@@ -3170,6 +3191,18 @@ mod tests {
             fn modifier_state(&mut self) -> Option<ModifierState> {
                 Some(self.modifiers)
             }
+            /// What the element itself answers: the pop-up button advertises a press that the
+            /// capture's role table never inferred, and everything else answers as captured.
+            fn advertised_actions(
+                &mut self,
+                handle: &SnapshotHandle,
+            ) -> Result<Option<Vec<String>>, axon_core::BackendError> {
+                let index = self.snapshot.index_for_handle(handle).unwrap();
+                if index == POPUP {
+                    return Ok(Some(vec!["AXPress".into(), "AXShowMenu".into()]));
+                }
+                Ok(self.snapshot.node(index).map(|node| node.actions.clone()))
+            }
         }
         impl BackgroundApplicationKeyboard for NativeFake {
             fn application_process(
@@ -3434,9 +3467,10 @@ mod tests {
         }
 
         /// A chord that leaves Command logically held has turned every later keystroke on the
-        /// machine into a shortcut. That is a failed dispatch, and the masks say what was left.
+        /// machine into a shortcut. The rung did not hold, so the action fails, and the masks say
+        /// what was left; the events were still posted, so `dispatchSuccess` says so.
         #[test]
-        fn a_chord_that_leaves_a_modifier_held_is_a_failed_dispatch() {
+        fn a_chord_that_leaves_a_modifier_held_fails_its_rung_but_reports_the_post() {
             let mut backend = NativeFake::new();
             backend.leaks_command = true;
             let mut router = router(backend);
@@ -3446,8 +3480,8 @@ mod tests {
                 json!({"app": "TextEdit", "key": "cmd+s", "deliveryPolicy": "foregroundPermitted"}),
             );
             assert_eq!(result["delivery"], "foreground");
-            assert_eq!(result["dispatchSuccess"], false);
-            assert_eq!(result["dispatch"]["success"], false);
+            assert_eq!(result["dispatchSuccess"], true);
+            assert_eq!(result["success"], false);
             assert_eq!(result["foreground"]["modifiersRestored"], false);
             let message = result["message"].as_str().unwrap();
             assert!(
@@ -3676,6 +3710,20 @@ mod tests {
             assert_eq!(result["dispatch"]["mechanism"], "AXPress");
             assert_eq!(router.backend.invokes, vec!["AXPress".to_string()]);
             assert!(router.backend.dispatches.is_empty());
+        }
+
+        /// The press is decided by what the element advertises, not by a role table: a pop-up
+        /// button the table does not know still presses semantically, in the background.
+        #[test]
+        fn an_element_outside_the_role_table_that_advertises_press_stays_semantic() {
+            let mut router = router(NativeFake::new());
+            let popup = element(&mut router, POPUP);
+            let result = ok(&mut router, "click", json!({"target": popup}));
+            assert_eq!(result["delivery"], "semantic");
+            assert_eq!(result["deliveryPolicy"], "backgroundOnly");
+            assert_eq!(router.backend.invokes, vec!["AXPress".to_string()]);
+            assert!(router.backend.dispatches.is_empty());
+            assert!(router.backend.activations.is_empty());
         }
 
         #[test]

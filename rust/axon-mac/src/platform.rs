@@ -232,6 +232,7 @@ unsafe extern "C" {
         values: *mut CFArrayRef,
     ) -> i32;
     fn AXUIElementPerformAction(element: AXUIElementRef, action: CFStringRef) -> i32;
+    fn AXUIElementCopyActionNames(element: AXUIElementRef, names: *mut CFArrayRef) -> i32;
     fn AXUIElementSetAttributeValue(
         element: AXUIElementRef,
         attribute: CFStringRef,
@@ -1069,6 +1070,24 @@ impl NativeInput for MacBackend {
     ) -> Result<Vec<(i32, i32)>, BackendError> {
         self.settle_after_activation();
         input::native::scroll(point, &input::wheel_steps(delta.0, delta.1))
+    }
+    /// `AXUIElementCopyActionNames` on the live element. An element that does not answer advertises
+    /// nothing, which is the Swift daemon's rule: a press it cannot confirm takes the pointer ladder.
+    fn advertised_actions(
+        &mut self,
+        handle: &SnapshotHandle,
+    ) -> Result<Option<Vec<String>>, BackendError> {
+        let element = self.element(handle)?;
+        let mut names = null();
+        if unsafe { AXUIElementCopyActionNames(element, &mut names) } != 0 || names.is_null() {
+            return Ok(Some(Vec::new()));
+        }
+        let names = Owned(names);
+        Ok(Some(
+            (0..unsafe { CFArrayGetCount(names.0) })
+                .filter_map(|index| string_value(unsafe { CFArrayGetValueAtIndex(names.0, index) }))
+                .collect(),
+        ))
     }
     fn modifier_state(&mut self) -> Option<crate::ModifierState> {
         let (combined_session, hid_system) = input::native::modifier_flags();

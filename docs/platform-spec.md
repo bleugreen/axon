@@ -289,8 +289,9 @@ session's modifier state as it found it: a chord presses and releases its
 modifiers as keys, and the backend reads the window server's modifier state
 before and after and reports `modifiersRestored`. A modifier left logically held
 turns every later keystroke on the machine into a shortcut, so a state still
-changed after a bounded settle fails the dispatch rather than only being
-reported. If restoration fails after dispatch, the result
+changed after a bounded settle means the rung did not hold: `success` is false.
+`dispatchSuccess` stays true, because the events were posted and a caller told
+otherwise would retry and deliver them twice. If restoration fails after dispatch, the result
 keeps its `delivery`, `dispatchSuccess`, and verification evidence and reports
 the failed hand-back separately.
 
@@ -349,7 +350,7 @@ available, and a backend must not claim it before a live probe passes.
 | platform | semantic | pixel | application | foreground |
 | --- | --- | --- | --- | --- |
 | macOS, Swift daemon | `AXPress`, `AXValue`, `AXScrollToVisible` | `CGEventPostToPid` against the target process, invariants proved after dispatch | not emitted | Global `CGEvent`, transactional activate/dispatch/restore |
-| macOS, `axon-mac` | `AXPress` (only for an element that advertises it), `AXValue`, `AXScrollToVisible` | none: no mechanism binds pointer input to one window, and keyboard input has no window geometry | `CGEventPostToPid` for unmodified text and keys to a named application; chords, unaimed input, and every pointer action refuse by mechanism (`rust/axon-mac/src/background.rs`) | `CGEventPost(kCGHIDEventTap)` clicks, keystrokes, and pixel wheel bursts, transactional activate/dispatch/restore with the target re-verified by hit test after activation |
+| macOS, `axon-mac` | `AXPress` (only for an element whose live action list advertises it), `AXValue`, `AXScrollToVisible` | none: no mechanism binds pointer input to one window, and keyboard input has no window geometry | `CGEventPostToPid` for unmodified text and keys to a named application; chords, unaimed input, and every pointer action refuse by mechanism (`rust/axon-mac/src/background.rs`) | `CGEventPost(kCGHIDEventTap)` clicks, keystrokes, and pixel wheel bursts, transactional activate/dispatch/restore with the target re-verified by hit test after activation |
 | Windows | UIA `InvokePattern`, `ValuePattern`, `ScrollItemPattern`, none of which call `SetFocus` | Client-coordinate window messages to a leaf HWND bound through UIA ancestry, for window classes a live probe has verified; every other class refuses `backgroundPixelUnsupported` by name | none measured | `SendInput` after proved activation for clicks, text, named keys, and chords; the target remains frontmost after dispatch because Windows exposes no input-consumption boundary, while pointer restoration is still attempted and reported |
 | Linux | AT-SPI `Action.DoAction`, `EditableText.SetTextContents`, `Component.ScrollTo`, none of which take focus | `XSendEvent` to a window resolved from the target's own AT-SPI application, for toolkits a committed measurement recorded as acting on it: Chromium clicks, GTK 3 and Qt 6 keystrokes. Every other toolkit, and every version series nobody measured, refuses `backgroundPixelUnsupported` by name | none measured | `XTest` on an X11 session with an EWMH-capable window manager, transactional activate/dispatch/restore; withheld on every other session |
 
