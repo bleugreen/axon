@@ -693,7 +693,7 @@ pub mod browser_url {
             Some(mark) => (&rest[..mark], Some(&rest[mark + 1..])),
             None => (rest, None),
         };
-        let (scheme, rest) = match rest.find(|c| matches!(c, ':' | '/')) {
+        let (scheme, rest) = match rest.find([':', '/']) {
             Some(colon) if rest.as_bytes()[colon] == b':' && colon > 0 => {
                 let scheme = &rest[..colon];
                 if !valid_scheme(scheme) {

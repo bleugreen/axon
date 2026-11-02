@@ -570,14 +570,18 @@ pub(crate) mod system {
                 .collect()
         }
 
-        const FRONT_WINDOW: &str =
-            "'obj '{ 'form':'indx', 'want':'cwin', 'seld':1, 'from':null() }";
-
-        fn property_of(code: &str, from: &str) -> String {
-            format!("'obj '{{ 'form':'prop', 'want':'prop', 'seld':'{code}', 'from':{from} }}")
+        fn element(class: &str, index: i32, from: &str) -> String {
+            format!("'obj '{{ 'want':'{class}', 'from':{from}, 'form':'indx', 'seld':{index} }}")
         }
 
-        /// The strings AppleScript's own events printed when intercepted on bgsrv-mac and local.
+        fn property_of(code: &str, from: &str) -> String {
+            format!("'obj '{{ 'want':'prop', 'from':{from}, 'form':'prop', 'seld':'{code}' }}")
+        }
+
+        /// Every key and value AppleScript's own events carried when intercepted on bgsrv-mac and
+        /// local. AppleScript's printout lists a specifier's keys as form, want, seld, from, and
+        /// `CreateObjSpecifier`'s as want, from, form, seld; a record is keyed, so the order is not
+        /// part of what the browser receives, and these strings use the order this code produces.
         #[test]
         fn events_are_encoded_the_way_applescript_encodes_them() {
             for (dictionary, current, url) in [
@@ -636,8 +640,7 @@ pub(crate) mod system {
                 params(&Dictionary::CHROME.active_index(2), &[KEY_DIRECT_OBJECT]),
                 [property_of("acTI", window_two)]
             );
-            let tab_three =
-                format!("'obj '{{ 'form':'indx', 'want':'bTab', 'seld':3, 'from':{window_two} }}");
+            let tab_three = element("bTab", 3, window_two);
             assert_eq!(
                 params(
                     &AeQuery::Get(Dictionary::SAFARI.tab_property(2, 3, Dictionary::SAFARI.url)),

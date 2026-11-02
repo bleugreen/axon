@@ -876,7 +876,7 @@ mod tests {
                 ]
             );
             assert_eq!(
-                rig.service.tabs("Safari", Some(2)).unwrap(),
+                rig.service.tabs(app, Some(2)).unwrap(),
                 vec![BrowserTab::new(
                     2,
                     1,
@@ -886,7 +886,7 @@ mod tests {
                 )]
             );
             assert_eq!(
-                rig.service.tabs("Safari", Some(3)).unwrap_err(),
+                rig.service.tabs(app, Some(3)).unwrap_err(),
                 BrowserError::InvalidWindow(3)
             );
         }
