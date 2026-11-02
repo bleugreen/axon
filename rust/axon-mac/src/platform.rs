@@ -592,13 +592,15 @@ pub struct MacBackend {
     last_activation: Option<std::time::Instant>,
 }
 
-/// How long a pointer post waits after an activation before it lands.
+/// How long a pointer post waits after an activation before it lands: the acceptance campaign's
+/// foreground-control wait, which acted on every target it measured.
 ///
-/// Being frontmost is not the same as having a key window. AppKit's first-mouse rule spends the
-/// first click on a window that is not yet key on making it key, and `NSTextView` does not accept
-/// that click as a click: on bgsrv-mac (axn/230) a click posted about 120 ms after the frontmost
-/// readback succeeded was delivered and placed no caret. The acceptance campaign's foreground
-/// control, which acted on every target, waits 600 ms after activating; this matches it.
+/// Being frontmost is not the same as having a key window, and AppKit's first-mouse rule makes a
+/// click on a window that is not yet key a key-making click rather than a delivered one for views
+/// such as `NSTextView`. A fixed wait stands in for the observable that would end it early; AX
+/// publishes no key-window attribute, and `AXMain` persists while an application is inactive, so
+/// it cannot tell the two states apart.
+
 const POINTER_SETTLE_AFTER_ACTIVATION: Duration = Duration::from_millis(600);
 impl MacBackend {
     pub fn new() -> Result<Self, BackendError> {
