@@ -230,6 +230,9 @@ class Target:
     kind: str = ""
     remeasure_when: str = ""
     unavailable: str | None = None
+    #: Which actions this target is measured for. A target added to answer one question carries
+    #: only that one, rather than a row for the other that measures nothing it was added for.
+    actions: tuple[str, ...] = ("click", "keyboard")
 
     def launch(self, action: str) -> Launched:
         raise NotImplementedError
@@ -754,6 +757,92 @@ class ElectronTarget(Target):
     def close(self) -> None:
         if self.process and self.process.poll() is None:
             self.process.terminate()
+        self.process = None
+
+
+GHOSTTY_SCRIPT = """#!/bin/sh
+# Every byte the terminal receives goes straight to the sentinel file: non-canonical mode hands
+# each keystroke to cat as it arrives, so no Return is needed to see it and the measured
+# variant stays exactly keyDown+keyUp of the typed characters.
+stty -icanon -echo min 1
+exec cat >> "$1"
+"""
+
+
+class GhosttyTarget(Target):
+    """Ghostty, measured for keyboard only (axn/204).
+
+    A terminal exposes nothing to read back through Accessibility, so its shell is replaced by a
+    script that appends everything typed into it to a sentinel file, and the file is the readback.
+    Click is not measured: pid-targeted pointer input is refused by mechanism on every
+    application, and a Ghostty click row would only measure that again.
+    """
+
+    kind = "terminal"
+    label = "ghostty"
+    actions = ("keyboard",)
+
+    def __init__(self, probe: Probe, workdir: Path) -> None:
+        self.probe = probe
+        self.workdir = workdir
+        self.remeasure_when = "a Ghostty or macOS major release"
+        self.application = Path("/Applications/Ghostty.app")
+        self.unavailable = None if self.application.exists() else "Ghostty is not installed"
+        self.process: subprocess.Popen | None = None
+        self.sentinel: Path | None = None
+        self.nonce = ""
+
+    def launch(self, action: str) -> Launched:
+        self.nonce = uuid.uuid4().hex[:12]
+        self.workdir.mkdir(parents=True, exist_ok=True)
+        script = self.workdir / "ghostty-sentinel.sh"
+        script.write_text(GHOSTTY_SCRIPT)
+        script.chmod(0o755)
+        self.sentinel = self.workdir / f"ghostty-{self.nonce}.txt"
+        self.sentinel.write_text("")
+        self.process = subprocess.Popen(
+            [
+                str(self.application / "Contents" / "MacOS" / "ghostty"),
+                f"--command={script} {self.sentinel}",
+                "--window-save-state=never",
+                "--confirm-close-surface=false",
+                "--quit-after-last-window-closed=true",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        deadline = time.monotonic() + READY_TIMEOUT
+        while time.monotonic() < deadline:
+            windows = self.probe("windows", pid=self.process.pid).get("windows", [])
+            if any(window.get("onScreen") for window in windows):
+                break
+            time.sleep(0.5)
+        else:
+            raise RuntimeError("Ghostty never put a window on screen")
+        # The shell script has to have set the terminal mode before the first keystroke.
+        time.sleep(1.5)
+        return Launched(pid=self.process.pid, nonce=self.nonce, point=None, detail={"sentinel": str(self.sentinel)})
+
+    def identity(self, pid: int) -> dict:
+        return bundle_identity(self.probe, pid)
+
+    def snapshot(self) -> dict:
+        return {"text": self.sentinel.read_text() if self.sentinel and self.sentinel.exists() else None}
+
+    def mutation(self, action: str, before: dict, after: dict) -> tuple[bool, str]:
+        changed = (after.get("text") or "") != (before.get("text") or "")
+        return (
+            changed,
+            f"the terminal's sentinel file read {before.get('text')!r} before and {after.get('text')!r} after",
+        )
+
+    def close(self) -> None:
+        if self.process and self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
         self.process = None
 
 
@@ -1388,6 +1477,7 @@ def main(argv: list[str] | None = None) -> int:
             webview_url=f"{page_url}?webview=1",
             bundle_id="dev.axon.acceptance.webview",
         ),
+        GhosttyTarget(probe, bundles / "ghostty"),
     ]
     wanted = set(arguments.only.split(",")) if arguments.only else None
 
@@ -1405,7 +1495,7 @@ def main(argv: list[str] | None = None) -> int:
         for target in targets:
             if wanted and target.label not in wanted:
                 continue
-            for action in ("click", "keyboard"):
+            for action in target.actions:
                 print(f"measuring {target.label} {action}", file=sys.stderr)
                 trial = Trial(probe, reports, target, action, decoy, campaign_id, park_at)
                 try:
