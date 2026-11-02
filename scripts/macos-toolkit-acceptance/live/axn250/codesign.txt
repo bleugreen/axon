@@ -1,0 +1,54 @@
+## codesign -dvvv /tmp/AxonBench-axn250/AxonMacDev.app
+Executable=/private/tmp/AxonBench-axn250/AxonMacDev.app/Contents/MacOS/AxonMacDev
+Identifier=dev.axon.mac-bench
+Format=app bundle with Mach-O thin (arm64)
+CodeDirectory v=20500 size=10974 flags=0x10000(runtime) hashes=332+7 location=embedded
+Hash type=sha256 size=32
+CandidateCDHash sha256=d814190780afdbf4e8fd52ccbfc3795b79007027
+CandidateCDHashFull sha256=d814190780afdbf4e8fd52ccbfc3795b790070277d4c9e007260cf43fa1d3a1e
+Hash choices=sha256
+CMSDigest=d814190780afdbf4e8fd52ccbfc3795b790070277d4c9e007260cf43fa1d3a1e
+CMSDigestType=2
+CDHash=d814190780afdbf4e8fd52ccbfc3795b79007027
+Signature size=4682
+Authority=Developer ID Application: Mitchell Bryan Lewis (JBS95V8M7P)
+Authority=Developer ID Certification Authority
+Authority=Apple Root CA
+Signed Time=Nov 2, 2026 at 2:48:18 PM
+Info.plist entries=9
+TeamIdentifier=JBS95V8M7P
+Runtime Version=26.5.0
+Sealed Resources version=2 rules=13 files=4
+Internal requirements count=1 size=180
+## codesign -d --entitlements - /tmp/AxonBench-axn250/AxonMacDev.app
+Executable=/private/tmp/AxonBench-axn250/AxonMacDev.app/Contents/MacOS/AxonMacDev
+[Dict]
+	[Key] com.apple.security.automation.apple-events
+	[Value]
+		[Bool] true
+
+## codesign -dvvv /tmp/AxonBench-axn250/AxonMacDev.app/Contents/Library/Applications/Axon Menu.app
+Executable=/private/tmp/AxonBench-axn250/AxonMacDev.app/Contents/Library/Applications/Axon Menu.app/Contents/MacOS/AxonMenu
+Identifier=dev.axon.mac-bench.menu
+Format=app bundle with Mach-O thin (arm64)
+CodeDirectory v=20500 size=2787 flags=0x10000(runtime) hashes=80+3 location=embedded
+Hash type=sha256 size=32
+CandidateCDHash sha256=dd8e7932b26a41137d53ededadb2ec8e9f5c30a0
+CandidateCDHashFull sha256=dd8e7932b26a41137d53ededadb2ec8e9f5c30a0eb7cf4ba1f42ae6532fb0ca5
+Hash choices=sha256
+CMSDigest=dd8e7932b26a41137d53ededadb2ec8e9f5c30a0eb7cf4ba1f42ae6532fb0ca5
+CMSDigestType=2
+CDHash=dd8e7932b26a41137d53ededadb2ec8e9f5c30a0
+Signature size=4682
+Authority=Developer ID Application: Mitchell Bryan Lewis (JBS95V8M7P)
+Authority=Developer ID Certification Authority
+Authority=Apple Root CA
+Signed Time=Nov 2, 2026 at 2:48:18 PM
+Info.plist entries=8
+TeamIdentifier=JBS95V8M7P
+Runtime Version=26.5.0
+Sealed Resources version=2 rules=13 files=1
+Internal requirements count=1 size=184
+## codesign -d --entitlements - /tmp/AxonBench-axn250/AxonMacDev.app/Contents/Library/Applications/Axon Menu.app
+Executable=/private/tmp/AxonBench-axn250/AxonMacDev.app/Contents/Library/Applications/Axon Menu.app/Contents/MacOS/AxonMenu
+
