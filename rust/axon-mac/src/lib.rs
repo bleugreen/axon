@@ -2562,7 +2562,11 @@ mod tests {
             panic!("a backend without a usable observer must refuse recording.start")
         };
         assert_eq!(failure.error.code, -32004);
-        let data = failure.error.data.expect("a typed refusal carries data");
+        let data = failure
+            .error
+            .data
+            .clone()
+            .expect("a typed refusal carries data");
         assert_eq!(data["kind"], "capability-unavailable");
         assert_eq!(data["capability"], "observeGlobalInput");
         assert_eq!(data["code"], "accessibility-denied");
