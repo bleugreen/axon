@@ -81,7 +81,7 @@ pub struct RecordingDestination {
     pub before_block_id: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordingStatus {
     pub recording: bool,
@@ -91,6 +91,19 @@ pub struct RecordingStatus {
     pub scope: Option<RecordingScope>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub destination: Option<RecordingDestination>,
+}
+
+/// The result of `recording.stop`: the authored script and where it was meant to go.
+///
+/// `destination` is always present, `null` for a recording made without one, because a client
+/// routes on it: a destination means insert into that editor document, none means review.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingResult {
+    pub session_id: String,
+    pub destination: Option<RecordingDestination>,
+    pub script: String,
+    pub action_count: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -261,12 +274,12 @@ fn recording_result(
         message: "recording could not be serialized".into(),
         data: Some(json!({"reason":error.to_string()})),
     })?;
-    Ok(json!({
-        "sessionId": session_id,
-        "destination": destination,
-        "script": script,
-        "actionCount": action_count,
-    }))
+    value(RecordingResult {
+        session_id,
+        destination,
+        script,
+        action_count,
+    })
 }
 
 fn invalid(path: &str, reason: &str) -> JsonRpcError {

@@ -30,7 +30,7 @@ if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
   exit 1
 fi
 
-SWIFT_VERSION_FILE="Sources/AxonCore/AxonVersion.swift"
+SWIFT_VERSION_FILE="Sources/AxonClient/AxonVersion.swift"
 CARGO_WORKSPACE_FILE="rust/Cargo.toml"
 TYPESCRIPT_PACKAGE_FILE="sdk/ts/package.json"
 PYTHON_PACKAGE_FILE="sdk/python/pyproject.toml"

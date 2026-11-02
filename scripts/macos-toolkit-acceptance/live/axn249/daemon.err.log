@@ -1,0 +1,6 @@
+axon-mac: automation authorization target=com.apple.Safari leg=checked status=-1744 answeredEarlierInThisProcess=false
+axon-mac: automation authorization target=com.apple.Safari leg=checked status=-1744 answeredEarlierInThisProcess=true
+axon-mac: automation authorization target=com.apple.Safari leg=prompted status=0 answeredEarlierInThisProcess=false
+axon-mac: automation authorization target=com.apple.Safari leg=checked status=-1744 answeredEarlierInThisProcess=false
+axon-mac: automation authorization target=com.apple.Safari leg=checked status=-1744 answeredEarlierInThisProcess=true
+axon-mac: automation authorization target=com.apple.Safari leg=prompted status=-1743 answeredEarlierInThisProcess=false

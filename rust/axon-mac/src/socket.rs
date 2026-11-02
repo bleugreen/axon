@@ -1,12 +1,14 @@
 //! Production Unix-socket daemon and MCP stdio facade for the Rust macOS backend.
 use crate::{
-    MacBackend, Router, parse_request,
+    MacBackend, Router, accessibility,
+    automation::ConsentService,
+    parse_request,
     platform::{MacPermissions, capability_report},
 };
 use axon_core::{
-    CapabilityState, DaemonProvenance, DaemonReport, HealthPlatform, JsonRpcId, JsonRpcRequest,
-    JsonRpcResponse, PermissionState, SessionHealth, ToolBackend, backend_tools, health::reason,
-    validate_tools_call,
+    CapabilityState, DaemonProvenance, DaemonReport, HealthPlatform, JsonRpcError, JsonRpcId,
+    JsonRpcRequest, JsonRpcResponse, PermissionState, SHELL_CONTRACT_VERSION, SessionHealth,
+    ToolBackend, backend_tools, health::reason, validate_tools_call,
 };
 use serde_json::{Value, json};
 use std::{
@@ -107,7 +109,7 @@ pub fn request(line: &str) -> io::Result<String> {
     });
     let timeout = if matches!(
         method.as_deref(),
-        Some("run" | "wait_for_value" | "wait_for_stability")
+        Some("run" | "wait_for_value" | "wait_for_stability" | "automation.request")
     ) {
         LONG_REQUEST_TIMEOUT
     } else {
@@ -158,6 +160,7 @@ pub fn serve() -> io::Result<()> {
         .map_err(io::Error::other)?
         .map_err(io::Error::other)?;
     let stopping = Arc::new(AtomicBool::new(false));
+    let consent = Arc::new(ConsentService::system());
     let listener = UnixListener::bind(&path)?;
     listener.set_nonblocking(true)?;
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
@@ -167,9 +170,10 @@ pub fn serve() -> io::Result<()> {
             Ok((stream, _)) => {
                 let router = router_tx.clone();
                 let stopping = Arc::clone(&stopping);
+                let consent = Arc::clone(&consent);
                 let endpoint = path.clone();
                 thread::spawn(move || {
-                    if let Err(error) = answer(stream, &router, &endpoint, &stopping) {
+                    if let Err(error) = answer(stream, &router, &consent, &endpoint, &stopping) {
                         eprintln!("axon-mac: dropped a client connection: {error}");
                     }
                 });
@@ -193,6 +197,7 @@ pub fn serve() -> io::Result<()> {
 fn answer(
     mut stream: UnixStream,
     router: &mpsc::Sender<RouterRequest>,
+    consent: &ConsentService,
     endpoint: &std::path::Path,
     stopping: &AtomicBool,
 ) -> io::Result<()> {
@@ -201,7 +206,7 @@ fn answer(
     if BufReader::new(stream.try_clone()?).read_line(&mut line)? == 0 {
         return Ok(());
     }
-    let (response, stop) = dispatch(line.trim(), router, endpoint);
+    let (response, stop) = dispatch(line.trim(), router, consent, endpoint);
     write_response(&mut stream, &response)?;
     if stop {
         stopping.store(true, Ordering::Release);
@@ -249,9 +254,31 @@ fn permission_states(permissions: MacPermissions) -> Vec<PermissionState> {
     ]
 }
 
+/// The menu shell's methods take no parameters; anything else is a caller bug worth naming.
+fn no_params(request: &JsonRpcRequest) -> Result<(), JsonRpcError> {
+    match &request.params {
+        None | Some(Value::Null) => Ok(()),
+        Some(Value::Object(params)) if params.is_empty() => Ok(()),
+        Some(_) => Err(JsonRpcError {
+            code: -32602,
+            message: format!("Invalid params: {} accepts no fields", request.method),
+            data: Some(json!({"path":"params","reason":"accepts no fields"})),
+        }),
+    }
+}
+
+fn reply<T: serde::Serialize>(id: JsonRpcId, outcome: Result<T, JsonRpcError>) -> Value {
+    serde_json::to_value(match outcome {
+        Ok(result) => JsonRpcResponse::success(id, serde_json::to_value(result).unwrap()),
+        Err(error) => JsonRpcResponse::failure(id, error),
+    })
+    .unwrap()
+}
+
 fn dispatch(
     line: &str,
     router: &mpsc::Sender<RouterRequest>,
+    consent: &ConsentService,
     endpoint: &std::path::Path,
 ) -> (Value, bool) {
     let request = match parse_request(line) {
@@ -262,6 +289,22 @@ fn dispatch(
         return (Value::Null, false);
     };
     match request.method.as_str() {
+        // The menu shell's permission methods are answered here, on the connection thread, for
+        // the same reason `health` is: the backend worker is serialized and may be owned by a
+        // replay for minutes, and `automation.request` blocks for as long as a consent dialog is
+        // on screen. Neither touches backend state; the consent ledger has its own lock.
+        "permit" => (
+            reply(id, no_params(&request).map(|_| accessibility::permit())),
+            false,
+        ),
+        "automation.status" => (
+            reply(id, no_params(&request).map(|_| consent.status())),
+            false,
+        ),
+        "automation.request" => (
+            reply(id, no_params(&request).and_then(|_| consent.request())),
+            false,
+        ),
         "health" => {
             // Health deliberately does not take the mutable router lock. A replay or wait may own
             // backend state for minutes, but status must remain a truthful liveness probe.
@@ -291,6 +334,7 @@ fn dispatch(
                     executable_path,
                     version,
                 }),
+                shell_contract: Some(SHELL_CONTRACT_VERSION),
                 session,
                 permissions: permission_states(permissions),
                 capabilities: CapabilityState::complete(&reported),
@@ -489,12 +533,21 @@ mod tests {
         ))
         .unwrap();
 
-        let (response, stop) = dispatch(&request, &router, std::path::Path::new("/tmp/test.sock"));
+        let (response, stop) = dispatch(
+            &request,
+            &router,
+            &no_browsers(),
+            std::path::Path::new("/tmp/test.sock"),
+        );
 
         assert!(!stop);
         assert_eq!(
             response.pointer("/result/provenance/backend"),
             Some(&json!("rust-axon-mac"))
+        );
+        assert_eq!(
+            response.pointer("/result/shellContract"),
+            Some(&json!(SHELL_CONTRACT_VERSION))
         );
         assert!(response.pointer("/result/provenance/processId").is_some());
         assert!(
@@ -503,6 +556,66 @@ mod tests {
                 .is_some()
         );
     }
+    /// A consent service whose host reports no browser running, so nothing reaches TCC.
+    fn no_browsers() -> ConsentService {
+        struct NoBrowsers;
+        impl crate::automation::AutomationHost for NoBrowsers {
+            fn determine(&self, _: &str, _: bool) -> i32 {
+                panic!("no browser is running, so nothing may be determined")
+            }
+            fn is_running(&self, _: &str) -> bool {
+                false
+            }
+        }
+        ConsentService::new(Box::new(NoBrowsers))
+    }
+
+    fn call(method: &str, params: Value, router: &mpsc::Sender<RouterRequest>) -> Value {
+        let request = serde_json::to_string(&JsonRpcRequest::new(
+            Some(JsonRpcId::Integer(1)),
+            method,
+            Some(params),
+        ))
+        .unwrap();
+        dispatch(
+            &request,
+            router,
+            &no_browsers(),
+            std::path::Path::new("/tmp/test.sock"),
+        )
+        .0
+    }
+
+    /// The consent methods never reach the serialized backend worker, so a worker that is busy
+    /// for minutes (or gone) cannot stall the menu.
+    #[test]
+    fn consent_methods_bypass_an_unavailable_backend_worker() {
+        let (router, receiver) = mpsc::channel();
+        drop(receiver);
+
+        let status = call("automation.status", json!({}), &router);
+        assert_eq!(status.pointer("/result/need"), Some(&json!("none")));
+        assert_eq!(
+            status.pointer("/result/browsers/0/bundleIdentifier"),
+            Some(&json!("com.apple.Safari"))
+        );
+        let request = call("automation.request", json!({}), &router);
+        assert_eq!(request.pointer("/result/outcomes"), Some(&json!([])));
+    }
+
+    #[test]
+    fn shell_methods_refuse_parameters() {
+        let (router, _receiver) = mpsc::channel();
+        for method in ["permit", "automation.status", "automation.request"] {
+            let response = call(method, json!({"extra": true}), &router);
+            assert_eq!(
+                response.pointer("/error/code"),
+                Some(&json!(-32602)),
+                "{method}"
+            );
+        }
+    }
+
     #[test]
     fn ownership_lock_refuses_a_second_server() {
         let path = std::env::temp_dir().join(format!("axon-mac-lock-{}", std::process::id()));
@@ -565,6 +678,7 @@ mod tests {
                 "find",
                 "wait_for_value",
                 "wait_for_stability",
+                "permit",
                 "run",
                 "save",
                 "click",

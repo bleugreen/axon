@@ -37,7 +37,7 @@ pub const EPHEMERAL_PATH_MARKERS: &[&str] = &[
 ///
 /// `daemon install` registers the invoking executable, so invoking it from a build directory
 /// registers a path that disappears on the next clean and a registration that can never start
-/// again. Mirrored by `DaemonRegistrationPath` in `Sources/AxonCore/LaunchAgentManager.swift`.
+/// again. Mirrored by `DaemonRegistrationPath` in `Sources/AxonClient/LaunchAgentManager.swift`.
 pub fn ephemeral_path_warning(path: &str) -> Option<String> {
     let marker = EPHEMERAL_PATH_MARKERS
         .iter()

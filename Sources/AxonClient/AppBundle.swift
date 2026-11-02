@@ -28,6 +28,36 @@ public struct AppBundle: Equatable, Sendable {
     /// The relative path of the CLI inside the daemon bundle.
     public static let bundledCLIRelativePath = "Contents/Resources/bin/axon"
 
+    /// The identifier of the nested menu shell bundle.
+    public static let axonMenuIdentifier = "com.bleugreen.axon.menu"
+
+    /// Where the menu shell lives inside the daemon bundle, beside the editor.
+    ///
+    /// Not in `Contents/MacOS`: a second executable there is attributed to the outer bundle's
+    /// identity by nothing, and becomes a privacy subject keyed by its path. A nested application
+    /// is its own subject, which is what lets the shell hold no grant at all.
+    public static let nestedMenuRelativePath = "Contents/Library/Applications/Axon Menu.app"
+
+    /// The `.app` that encloses a bundle nested at `Contents/Library/Applications`, by shape alone.
+    ///
+    /// Identity is left to the caller, because callers want different things: the editor accepts
+    /// only Axon's own outer bundle, while the menu shell must also run inside a bench bundle that
+    /// carries a different identifier.
+    public static func enclosingApp(ofNested nestedBundleURL: URL) -> URL? {
+        var enclosing = nestedBundleURL.standardizedFileURL
+        // <Nested>.app / Applications / Library / Contents -> the enclosing .app
+        for _ in 0..<4 {
+            enclosing.deleteLastPathComponent()
+        }
+        guard enclosing.pathExtension == "app",
+              nestedBundleURL.standardizedFileURL.deletingLastPathComponent().path
+                == enclosing.appendingPathComponent("Contents/Library/Applications").path
+        else {
+            return nil
+        }
+        return enclosing
+    }
+
     /// Returns the editor nested inside a daemon bundle only when both halves identify as Axon and
     /// declare the same release version. Launch Services can retain older registrations for years,
     /// so falling back by bundle identifier would silently pair a current recorder with an
@@ -65,12 +95,7 @@ public struct AppBundle: Equatable, Sendable {
         from editorBundleURL: URL,
         fileManager: FileManager = .default
     ) -> URL? {
-        var daemonBundleURL = editorBundleURL.standardizedFileURL
-        // Axon Editor.app / Applications / Library / Contents -> the enclosing .app
-        for _ in 0..<4 {
-            daemonBundleURL.deleteLastPathComponent()
-        }
-        guard daemonBundleURL.pathExtension == "app",
+        guard let daemonBundleURL = enclosingApp(ofNested: editorBundleURL),
               let bundle = AppBundle(bundleURL: daemonBundleURL, fileManager: fileManager),
               bundle.identifier == axonDaemonIdentifier
         else {

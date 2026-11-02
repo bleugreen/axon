@@ -280,6 +280,12 @@ public struct DaemonReport: Codable, Equatable, Sendable {
     public var ready: Bool
     public var processId: Int
     public var endpoint: String
+    /// Which implementation owns the endpoint, from a daemon that says. The Rust daemons do; the
+    /// Swift daemon does not.
+    public var provenance: DaemonProvenance?
+    /// The daemon-to-menu-shell contract version (`ShellContract.version`), from a daemon that
+    /// serves the menu shell.
+    public var shellContract: Int?
     public var session: SessionHealth
     public var permissions: [PermissionState]
     public var capabilities: [CapabilityState]
@@ -290,6 +296,8 @@ public struct DaemonReport: Codable, Equatable, Sendable {
         ready: Bool,
         processId: Int,
         endpoint: String,
+        provenance: DaemonProvenance? = nil,
+        shellContract: Int? = nil,
         session: SessionHealth,
         permissions: [PermissionState],
         capabilities: [CapabilityState]
@@ -299,6 +307,8 @@ public struct DaemonReport: Codable, Equatable, Sendable {
         self.ready = ready
         self.processId = processId
         self.endpoint = endpoint
+        self.provenance = provenance
+        self.shellContract = shellContract
         self.session = session
         self.permissions = permissions
         self.capabilities = capabilities

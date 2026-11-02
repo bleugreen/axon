@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+# Bench only: stage the Rust axon-mac daemon and the Swift menu shell as two launchd jobs.
+#
+#   scripts/stage-macos-shell-bench               build, assemble, sign, write both plists, bootstrap
+#   scripts/stage-macos-shell-bench --stage-only  everything but launchd (no plists, no bootstrap)
+#   scripts/stage-macos-shell-bench --bootstrap-only
+#                                                 launchd only, over a bundle already staged in
+#                                                 AXON_BENCH_DIR (verified before it is used)
+#   scripts/stage-macos-shell-bench --teardown    boot both jobs out, remove their plists, quit what
+#                                                 the protocol launched
+#
+# The split exists because the two halves need different sessions: building and signing work from
+# a sandboxed agent placement, and bootstrapping into gui/<uid> does not.
+#
+# The staged bundle is laid out the way a split Axon.app will be: the Rust daemon is the outer
+# bundle's main executable, so it is the TCC subject, and the shell is nested at
+# Contents/Library/Applications with no entitlements and no usage strings, so it is a subject of
+# its own that holds nothing. The outer identity is dev.axon.mac-bench, whose grants on bgsrv-mac
+# carry a NULL code requirement, so they ride the identifier across rebuilds.
+#
+# It never touches dev.axon.daemon, dev.axon.updater, or /tmp/axon.sock. Bootstrapping into the
+# gui domain has to happen in a session launchd accepts it from (over ssh as the console user
+# works; a sandboxed agent placement does not), and TCC must be measured on the launchd-started
+# processes, never on anything started from the shell running this script.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MODE="${1:-}"
+case "$MODE" in
+  ""|--stage-only|--bootstrap-only|--teardown) ;;
+  *) printf 'usage: %s [--stage-only|--bootstrap-only|--teardown]\n' "$0" >&2; exit 2 ;;
+esac
+
+BENCH_DIR="${AXON_BENCH_DIR:-$HOME/AxonBench/axn249}"
+APP="$BENCH_DIR/AxonMacDev.app"
+MENU="$APP/Contents/Library/Applications/Axon Menu.app"
+SOCKET="/tmp/axon-bench249.sock"
+DAEMON_LABEL="dev.axon.bench249.daemon"
+MENU_LABEL="dev.axon.bench249.menu"
+AGENTS="$HOME/Library/LaunchAgents"
+LOGS="$BENCH_DIR/logs"
+DOMAIN="gui/$(id -u)"
+
+if [[ "$MODE" == "--teardown" ]]; then
+  for label in "$MENU_LABEL" "$DAEMON_LABEL"; do
+    /bin/launchctl bootout "$DOMAIN/$label" 2>/dev/null || true
+    rm -f "$AGENTS/$label.plist"
+  done
+  # The protocol opens Calculator to record and Safari to consent to; the clean-desktop rule is
+  # that whatever a bench run opened, it closes.
+  /usr/bin/pkill -x Calculator 2>/dev/null || true
+  /usr/bin/pkill -x Safari 2>/dev/null || true
+  printf 'torn down: %s %s\n' "$DAEMON_LABEL" "$MENU_LABEL"
+  exit 0
+fi
+
+stage() {
+if [[ -n "${SWIFT:-}" ]]; then
+  :
+elif [[ -x "$HOME/.swiftly/bin/swift" ]]; then
+  SWIFT="$HOME/.swiftly/bin/swift"
+else
+  SWIFT="$(command -v swift)"
+fi
+VERSION="$("$ROOT/scripts/check-version")"
+
+cd "$ROOT"
+(cd rust && cargo build --release -p axon-mac)
+# SwiftPM's own manifest sandbox cannot nest inside another sandbox; it is a build-time convenience,
+# not a property of the product.
+"$SWIFT" build --disable-sandbox -c release --product AxonMenuApp
+
+rm -rf "$APP"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" \
+  "$MENU/Contents/MacOS" "$MENU/Contents/Resources" "$LOGS"
+cp "$ROOT/rust/target/release/axon-mac" "$APP/Contents/MacOS/AxonMacDev"
+cp "$ROOT/.build/release/AxonMenuApp" "$MENU/Contents/MacOS/AxonMenu"
+cp "$ROOT/Assets/AxonMenuBarTemplate.png" "$MENU/Contents/Resources/AxonMenuBarTemplate.png"
+
+cat > "$APP/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key><string>AxonMacDev</string>
+  <key>CFBundleIdentifier</key><string>dev.axon.mac-bench</string>
+  <key>CFBundleName</key><string>AxonMacDev</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
+  <key>CFBundleVersion</key><string>$VERSION</string>
+  <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>LSUIElement</key><true/>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>Axon uses browser automation to navigate and enumerate browser windows and tabs.</string>
+</dict>
+</plist>
+PLIST
+
+# No document types, no URL types, no usage strings, no entitlements: the shell asks macOS for
+# nothing, so nothing should ever be recorded against it.
+cat > "$MENU/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key><string>AxonMenu</string>
+  <key>CFBundleIdentifier</key><string>dev.axon.mac-bench.menu</string>
+  <key>CFBundleName</key><string>Axon Menu</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
+  <key>CFBundleVersion</key><string>$VERSION</string>
+  <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>LSUIElement</key><true/>
+</dict>
+</plist>
+PLIST
+
+SIGN_IDENTITY="${AXON_CODESIGN_IDENTITY:-}"
+if [[ -z "$SIGN_IDENTITY" ]]; then
+  SIGN_IDENTITY="$(/usr/bin/security find-identity -v -p codesigning 2>/dev/null \
+    | awk '/"Developer ID Application:|"Apple Development:|"Mac Developer:/ { print $2; exit }')"
+fi
+SIGN_IDENTITY="${SIGN_IDENTITY:--}"
+SIGN_ARGS=(--force --options runtime --timestamp=none --sign "$SIGN_IDENTITY")
+DAEMON_SIGN_ARGS=("${SIGN_ARGS[@]}" --entitlements "$ROOT/Assets/Axon.entitlements")
+
+# Inside-out, as scripts/package-app signs: the shell is sealed before the bundle that contains it.
+/usr/bin/codesign "${SIGN_ARGS[@]}" "$MENU/Contents/MacOS/AxonMenu"
+/usr/bin/codesign "${SIGN_ARGS[@]}" "$MENU"
+/usr/bin/codesign "${DAEMON_SIGN_ARGS[@]}" "$APP/Contents/MacOS/AxonMacDev"
+/usr/bin/codesign "${DAEMON_SIGN_ARGS[@]}" "$APP"
+"$ROOT/scripts/check-app-entitlements" "$APP"
+MENU_ENTITLEMENTS="$(/usr/bin/codesign -d --entitlements - --xml "$MENU" 2>/dev/null || true)"
+if [[ -n "$MENU_ENTITLEMENTS" ]]; then
+  printf '%s carries entitlements, and the shell must carry none: %s\n' "$MENU" "$MENU_ENTITLEMENTS" >&2
+  exit 1
+fi
+
+{
+  for bundle in "$APP" "$MENU"; do
+    printf '## codesign -dvvv %s\n' "$bundle"
+    /usr/bin/codesign -dvvv "$bundle" 2>&1
+    printf '## codesign -d --entitlements - %s\n' "$bundle"
+    /usr/bin/codesign -d --entitlements - "$bundle" 2>&1 || true
+    printf '\n'
+  done
+} > "$BENCH_DIR/codesign.txt"
+printf 'staged %s (signed by %s); codesign record in %s\n' "$APP" "$SIGN_IDENTITY" "$BENCH_DIR/codesign.txt"
+}
+
+if [[ "$MODE" != "--bootstrap-only" ]]; then
+  stage
+fi
+[[ "$MODE" == "--stage-only" ]] && exit 0
+
+# A bundle copied in from elsewhere must still be the one that was signed.
+/usr/bin/codesign --verify --deep --strict "$APP"
+mkdir -p "$LOGS"
+
+write_job() {
+  local label="$1" program="$2" keep_alive="$3" extra_env="$4" log="$5"
+  cat > "$AGENTS/$label.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$label</string>
+  <key>ProgramArguments</key><array>$program</array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>AXON_SOCKET_PATH</key><string>$SOCKET</string>$extra_env
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key>$keep_alive
+  <key>LimitLoadToSessionType</key><string>Aqua</string>
+  <key>ProcessType</key><string>Interactive</string>
+  <key>StandardOutPath</key><string>$LOGS/$log.out.log</string>
+  <key>StandardErrorPath</key><string>$LOGS/$log.err.log</string>
+</dict>
+</plist>
+PLIST
+}
+
+mkdir -p "$AGENTS"
+write_job "$DAEMON_LABEL" \
+  "<string>$APP/Contents/MacOS/AxonMacDev</string><string>serve</string>" \
+  "<true/>" \
+  "
+    <key>AXON_DAEMON_MANAGED_BY_LAUNCHD</key><string>1</string>" \
+  daemon
+# Crash-only supervision, as dev.axon.menu will have: Quit exits 0 and stays quit.
+write_job "$MENU_LABEL" \
+  "<string>$MENU/Contents/MacOS/AxonMenu</string>" \
+  "<dict><key>SuccessfulExit</key><false/></dict>" \
+  "" \
+  menu
+/usr/bin/plutil -lint "$AGENTS/$DAEMON_LABEL.plist" "$AGENTS/$MENU_LABEL.plist"
+
+for label in "$DAEMON_LABEL" "$MENU_LABEL"; do
+  /bin/launchctl bootout "$DOMAIN/$label" 2>/dev/null || true
+  /bin/launchctl bootstrap "$DOMAIN" "$AGENTS/$label.plist"
+done
+printf 'bootstrapped %s and %s on %s\n' "$DAEMON_LABEL" "$MENU_LABEL" "$SOCKET"

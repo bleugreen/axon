@@ -302,10 +302,24 @@ public struct ReleaseInstaller: @unchecked Sendable {
         return bundleURL
     }
 
-    /// Accepts a bundle only when it is signed by the same team and identifier as the running copy,
+    /// The code requirement a downloaded `Axon.app` must satisfy: Apple-anchored, Axon's outer
+    /// bundle identifier, and the running copy's team.
+    ///
+    /// The identifier is the outer bundle's fixed one rather than the caller's own, because the
+    /// caller may be a nested bundle with an identifier of its own (the menu shell is
+    /// `com.bleugreen.axon.menu`) while the thing being replaced is always the outer `Axon.app`,
+    /// which `verifiedBundle` already requires to declare this identifier.
+    public static func updateRequirement(team: String) -> String {
+        """
+        anchor apple generic and identifier "\(AppBundle.axonDaemonIdentifier)" \
+        and certificate leaf[subject.OU] = "\(team)"
+        """
+    }
+
+    /// Accepts a bundle only when it is signed by the running copy's team as Axon's outer bundle,
     /// and only when Gatekeeper would launch it.
     ///
-    /// Anchoring to the running copy's own signature rather than to a constant is what makes this
+    /// Anchoring to the running copy's own team rather than to a constant is what makes this
     /// meaningful: the requirement an update must satisfy is "signed by whoever signed me". A
     /// development build is ad-hoc signed and has no team to anchor to, so it refuses to pull a
     /// release bundle over itself rather than pretending it verified something.
@@ -320,19 +334,16 @@ public struct ReleaseInstaller: @unchecked Sendable {
             SecCSFlags(rawValue: kSecCSSigningInformation),
             &information
         ) == errSecSuccess,
-            let info = information as? [String: Any],
-            let identifier = info[kSecCodeInfoIdentifier as String] as? String
+            let info = information as? [String: Any]
         else {
             throw ReleaseInstallError.signatureRejected("the running copy's signing information could not be read")
         }
         guard let team = info[kSecCodeInfoTeamIdentifier as String] as? String, !team.isEmpty else {
             throw ReleaseInstallError.unsignedRunningCopy
         }
+        let identifier = AppBundle.axonDaemonIdentifier
 
-        let requirementText = """
-        anchor apple generic and identifier "\(identifier)" \
-        and certificate leaf[subject.OU] = "\(team)"
-        """
+        let requirementText = updateRequirement(team: team)
         var requirement: SecRequirement?
         guard SecRequirementCreateWithString(requirementText as CFString, [], &requirement) == errSecSuccess,
               let requirement

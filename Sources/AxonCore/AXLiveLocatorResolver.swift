@@ -1,5 +1,6 @@
 import ApplicationServices
 import AppKit
+import AxonClient
 import Foundation
 
 public final class AXLiveLocatorResolver: @unchecked Sendable {

@@ -68,7 +68,7 @@ dist/Axon-0.2.2-macos-aarch64.zip
 dist/Axon-0.2.2-macos-aarch64.zip.sha256
 ```
 
-The version comes from the repository-root `VERSION` file. `Sources/AxonCore/AxonVersion.swift`,
+The version comes from the repository-root `VERSION` file. `Sources/AxonClient/AxonVersion.swift`,
 the Rust workspace package in `rust/Cargo.toml`, `sdk/ts/package.json`, and
 `sdk/python/pyproject.toml` are derived copies. After editing `VERSION`, run
 `./scripts/check-version --write` to synchronize them. Archives are named with the version and the

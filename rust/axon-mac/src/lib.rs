@@ -26,6 +26,8 @@ pub mod probe;
 
 #[cfg(target_os = "macos")]
 mod accessibility;
+#[cfg(target_os = "macos")]
+mod automation;
 mod background;
 #[cfg(target_os = "macos")]
 mod core_foundation;
@@ -44,7 +46,6 @@ pub use platform::MacBackend;
 /// names something the macOS daemon has no code path for, which stays a JSON-RPC error.
 const EXCLUDED: &[(&str, &str)] = &[
     ("drag", "PointerDrag"),
-    ("permit", "PermissionPrompt"),
     ("navigate", "BrowserScripting"),
     ("windows", "BrowserScripting"),
     ("tabs", "BrowserScripting"),
@@ -2561,7 +2562,11 @@ mod tests {
             panic!("a backend without a usable observer must refuse recording.start")
         };
         assert_eq!(failure.error.code, -32004);
-        let data = failure.error.data.expect("a typed refusal carries data");
+        let data = failure
+            .error
+            .data
+            .clone()
+            .expect("a typed refusal carries data");
         assert_eq!(data["kind"], "capability-unavailable");
         assert_eq!(data["capability"], "observeGlobalInput");
         assert_eq!(data["code"], "accessibility-denied");
@@ -2569,6 +2574,14 @@ mod tests {
         // Refused before dispatch: nothing was started, so nothing had to be abandoned.
         assert!(router.recorder.is_none());
         assert!(!router.daemon.recording.status().recording);
+
+        // The menu shell keys its "request Accessibility" alert on exactly this error, so its
+        // whole shape is shell-v1 contract (`schema/fixtures/shell`).
+        let pinned: Value = serde_json::from_str(include_str!(
+            "../../../schema/fixtures/shell/error-accessibility-denied.json"
+        ))
+        .unwrap();
+        assert_eq!(serde_json::to_value(&failure.error).unwrap(), pinned);
     }
 
     #[test]
@@ -2778,7 +2791,7 @@ mod tests {
 
     #[test]
     fn excluded_tools_are_capability_errors_before_dispatch() {
-        for tool in ["drag", "permit"] {
+        for tool in ["drag", "navigate"] {
             let (_, capability) = EXCLUDED.iter().find(|(name, _)| *name == tool).unwrap();
             assert!(!capability.is_empty());
         }

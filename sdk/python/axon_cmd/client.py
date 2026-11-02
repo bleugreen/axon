@@ -85,7 +85,7 @@ class HealthCapability(TypedDict, total=False):
 class Health(TypedDict, total=False):
     """
     What the daemon answers a socket ``health`` request with: ``DaemonReport``, defined in
-    ``Sources/AxonCore/HealthStatus.swift``, whose fields are flat.
+    ``Sources/AxonClient/HealthStatus.swift``, whose fields are flat.
 
     This is deliberately not the ``health-v1`` document described by
     ``schema/health-v1.schema.json``. That one nests a ``daemon`` object and adds ``schemaVersion``

@@ -11,7 +11,7 @@ that fixture is known to describe the socket rather than a facade. `schema/fixtu
 contracts the CLI and MCP surfaces present; several of them are shaped by the facade that
 synthesizes them, not by the daemon:
 
-- `health` over the socket returns the flat `DaemonReport` from `Sources/AxonCore/HealthStatus.swift`.
+- `health` over the socket returns the flat `DaemonReport` from `Sources/AxonClient/HealthStatus.swift`.
   The nested `health-v1` document is what `axon status --json` synthesizes, including for a daemon
   that never answered at all.
 - `look(since:)` returns `{changed, reason, snapshotId, currentSnapshotId, previous, current}`, not

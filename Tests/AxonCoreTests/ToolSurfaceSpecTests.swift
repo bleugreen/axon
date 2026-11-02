@@ -1,3 +1,4 @@
+@testable import AxonClient
 import Foundation
 import Testing
 @testable import AxonCore
@@ -69,7 +70,7 @@ import Testing
         ("find", "find", [.swift, .mac, .windows, .linux]),
         ("wait_for_value", "wait_for_value", [.swift, .mac, .windows, .linux]),
         ("wait_for_stability", "wait_for_stability", [.swift, .mac, .windows, .linux]),
-        ("permit", "permit", [.swift]),
+        ("permit", "permit", [.swift, .mac]),
         ("run", "run", [.swift, .mac, .windows, .linux]),
         ("save", "save", [.swift, .mac, .windows, .linux]),
         ("click", "click", [.swift, .mac, .windows, .linux]),

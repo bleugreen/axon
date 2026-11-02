@@ -54,7 +54,7 @@ export const availability = {
   },
   "permit": {
     "linux": false,
-    "mac": false,
+    "mac": true,
     "swift": true,
     "windows": false
   },

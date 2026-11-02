@@ -1,0 +1,63 @@
+version: 2
+args: []
+actions:
+- id: a001
+  tool: click
+  target:
+    app: com.apple.calculator
+    point:
+      x: 598.0
+      y: 651.0
+  warnings:
+  - could not derive a canonical semantic target; recorded point fallback
+- id: a002
+  tool: click
+  target:
+    app: com.apple.calculator
+    point:
+      x: 544.0
+      y: 813.0
+  warnings:
+  - could not derive a canonical semantic target; recorded point fallback
+- id: a003
+  tool: click
+  target:
+    app: com.apple.calculator
+    point:
+      x: 598.0
+      y: 813.0
+  warnings:
+  - could not derive a canonical semantic target; recorded point fallback
+- id: a004
+  tool: click
+  target:
+    app: com.apple.calculator
+    point:
+      x: 706.0
+      y: 813.0
+  warnings:
+  - could not derive a canonical semantic target; recorded point fallback
+- id: a005
+  tool: click
+  target:
+    app: com.apple.calculator
+    point:
+      x: 652.0
+      y: 813.0
+  warnings:
+  - could not derive a canonical semantic target; recorded point fallback
+- id: a006
+  tool: click
+  target:
+    app: com.apple.calculator
+    point:
+      x: 706.0
+      y: 867.0
+  warnings:
+  - could not derive a canonical semantic target; recorded point fallback
+- id: a007
+  tool: keyboard
+  app: Calculator
+  text: +4=
+  warnings:
+  - focused element did not expose a value; recorded keyboard fallback

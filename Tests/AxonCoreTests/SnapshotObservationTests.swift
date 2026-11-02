@@ -1,4 +1,5 @@
 import ApplicationServices
+@testable import AxonClient
 import Foundation
 import Testing
 @testable import AxonCore

@@ -1,0 +1,17 @@
+{
+  "browsers": [
+    {
+      "app": "Safari",
+      "bundleIdentifier": "com.apple.Safari",
+      "leg": "checked",
+      "running": true,
+      "status": "notDetermined"
+    },
+    {
+      "app": "Google Chrome",
+      "bundleIdentifier": "com.google.Chrome",
+      "running": false
+    }
+  ],
+  "need": "request"
+}

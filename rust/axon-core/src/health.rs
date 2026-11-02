@@ -67,6 +67,35 @@ pub mod reason {
     pub const UNKNOWN: &str = "unknown";
 }
 
+/// The version of the daemon-to-menu-shell contract this daemon speaks, published as
+/// `shellContract` in its `health` answer.
+///
+/// The macOS menu shell is a separate process that reaches the daemon only through the socket, so
+/// it needs one number that says whether the methods and shapes it calls are the ones this daemon
+/// answers. A shell that reads a missing or different value refuses to drive the daemon rather than
+/// guessing. The contract is documented in `docs/cross-platform-internals.md`.
+pub const SHELL_CONTRACT_VERSION: u32 = 1;
+
+/// Whether the Accessibility API is usable by the daemon, as `permit` reports it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AccessibilityTrust {
+    Trusted,
+    Denied,
+}
+
+/// The result of `permit`, which asks macOS to show the Accessibility prompt for the daemon.
+///
+/// `prompted` says the prompt was requested, not that it appeared: macOS shows it only while the
+/// grant is undecided. `accessibility` is the daemon's answer *after* the request, read the same way
+/// `health` reads it, so the two can never disagree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermitResult {
+    pub accessibility: AccessibilityTrust,
+    pub prompted: bool,
+}
+
 /// Additive daemon identity carried by the private health RPC so clients can prove which
 /// implementation owns the endpoint instead of inferring it from the socket path.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -382,6 +411,10 @@ pub struct DaemonReport {
     pub endpoint: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provenance: Option<DaemonProvenance>,
+    /// [`SHELL_CONTRACT_VERSION`], from a daemon that serves the macOS menu shell. Absent from
+    /// daemons that do not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell_contract: Option<u32>,
     pub session: SessionHealth,
     pub permissions: Vec<PermissionState>,
     pub capabilities: Vec<CapabilityState>,
@@ -581,6 +614,7 @@ mod tests {
                 process_id: 12,
                 endpoint: r"\\.\pipe\axon-v1".into(),
                 provenance: None,
+                shell_contract: None,
                 session: SessionHealth::usable(None),
                 permissions: vec![],
                 capabilities: CapabilityState::all_unusable(reason::DAEMON_NOT_READY),

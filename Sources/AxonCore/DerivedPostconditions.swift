@@ -1,3 +1,4 @@
+import AxonClient
 import Foundation
 
 /// The shared rule set for turning observed state transitions into `expects` facts.

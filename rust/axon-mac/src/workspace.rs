@@ -81,7 +81,7 @@ pub fn running_application_identity(pid: i32) -> (Option<String>, Option<String>
 /// its bundle identifier.
 ///
 /// Enumeration, capture, and the recorder all come through here, so a recorded artifact calls an
-/// application what `look` calls it. The localized name is what `AppResolver` in `Sources/AxonCore`
+/// application what `look` calls it. The localized name is what `AppResolver` in `Sources/AxonClient`
 /// both reports and resolves applications by; AXTitle names windows and elements there, never an
 /// application. `accessibility_name` is the `AXTitle` already read from the application element,
 /// used only as a fallback when `NSRunningApplication` has no localized name.

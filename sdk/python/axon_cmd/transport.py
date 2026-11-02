@@ -2,7 +2,7 @@
 JSON-RPC 2.0 over the Axon daemon's local socket.
 
 The daemon serves one request per connection: connect, write one JSON object and a newline, read
-one newline-terminated response, close. ``Sources/AxonCore/SocketClient.swift`` is the reference
+one newline-terminated response, close. ``Sources/AxonClient/SocketClient.swift`` is the reference
 for that framing, and nothing here keeps a connection alive between calls.
 
 Every call blocks. An asyncio program can wrap one in :func:`asyncio.to_thread`; shipping a second

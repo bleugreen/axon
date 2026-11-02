@@ -1,5 +1,6 @@
 //! Platform-neutral models and execution machinery shared by Axon backends.
 
+pub mod automation;
 pub mod axn;
 pub mod axn_healing;
 pub mod backend;
@@ -24,6 +25,7 @@ pub mod text;
 pub mod tool_surface;
 pub mod wait;
 
+pub use automation::*;
 pub use axn::*;
 pub use axn_healing::*;
 pub use backend::*;
