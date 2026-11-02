@@ -470,10 +470,9 @@ impl<
     /// hit test there finds another window or nothing. Clipping by every ancestor's frame is what
     /// the scroll area and the window do to it on screen.
     fn element_point(&self, handle: &SnapshotHandle) -> Result<(f64, f64), JsonRpcError> {
-        let snapshot = self
-            .snapshot
-            .as_ref()
-            .ok_or_else(|| rpc_error(-32003, "the resolved element is not in the current capture"))?;
+        let snapshot = self.snapshot.as_ref().ok_or_else(|| {
+            rpc_error(-32003, "the resolved element is not in the current capture")
+        })?;
         let index = snapshot
             .index_for_handle(handle)
             .map_err(|error| rpc_error(-32003, error.to_string()))?;
@@ -1948,7 +1947,10 @@ fn query_for_app(app: &str) -> AppQuery {
 fn visible_frame(snapshot: &Snapshot, index: usize) -> Option<axon_core::Rect> {
     fn clip(a: axon_core::Rect, b: axon_core::Rect) -> Option<axon_core::Rect> {
         let (left, top) = (a.x.max(b.x), a.y.max(b.y));
-        let (right, bottom) = ((a.x + a.width).min(b.x + b.width), (a.y + a.height).min(b.y + b.height));
+        let (right, bottom) = (
+            (a.x + a.width).min(b.x + b.width),
+            (a.y + a.height).min(b.y + b.height),
+        );
         (right > left && bottom > top).then(|| axon_core::Rect {
             x: left,
             y: top,
@@ -3482,7 +3484,10 @@ mod tests {
             .unwrap_err();
             assert_eq!(error.code, -32003);
             assert!(router.backend.dispatches.is_empty());
-            assert!(router.backend.activations.is_empty(), "refused before the transaction");
+            assert!(
+                router.backend.activations.is_empty(),
+                "refused before the transaction"
+            );
         }
 
         #[test]
