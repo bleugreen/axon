@@ -519,8 +519,25 @@ printf '%s' "$own" | jq -e '.result.actionCount == 1' >/dev/null \
   || fail "a session with the daemon's keystrokes and the user's recorded something other than exactly the user's one action"
 own_script="$(printf '%s' "$own" | jq -r '.result.script')"
 [ "$(tools_of "$own_script")" = "$burst_tool" ] || fail "the user's typing was not recorded as a $burst_tool step"
-printf '%s' "$own_script" | grep -Eq '^ +(text|value): user typed this$' || fail "the recorded step does not carry exactly the user's text"
-printf '%s' "$own_script" | grep -q 'daemon typed' && fail "the daemon's keystrokes leaked into the user's recorded text"
+case "$burst_tool" in
+  keyboard)
+    # A keystroke step carries the burst the observer saw, so the ledger's work is visible in it
+    # directly: the user's characters and none of the daemon's.
+    printf '%s' "$own_script" | grep -Eq '^ +text: user typed this$' || fail "the recorded step does not carry exactly the user's text"
+    printf '%s' "$own_script" | grep -q 'daemon typed' && fail "the daemon's keystrokes leaked into the user's recorded text"
+    ;;
+  type)
+    # A setValue step carries the field's complete value read when the burst ends -- the shared
+    # recorder's contract on every platform -- so it is the field's resulting state, and that
+    # state includes what the daemon typed into it earlier. The ledger's work shows instead in the
+    # count above: the daemon's burst did not become an action of its own. What is asserted here is
+    # the contract itself, against the field read back through the daemon.
+    held="$(entry_value)"
+    case "$held" in *'user typed this') ;; *) fail "the entry holds '$held', which does not end with the user's typing" ;; esac
+    printf '%s\n' "$own_script" | grep -Fxq "  value: $held" \
+      || fail "the recorded setValue does not carry the field's value '$held'"
+    ;;
+esac
 echo "the ledger kept the daemon's XTest input out and the user's in"
 
 note "PASSED"
