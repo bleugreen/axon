@@ -90,6 +90,26 @@ public struct DaemonProgram: Equatable, Sendable {
     }
 }
 
+/// When launchd restarts a job that exits.
+public enum KeepAlive: Equatable, Sendable {
+    /// Always: the daemon is supervised, and any exit is a failure to recover from.
+    case always
+    /// Never: a one-shot job, which would loop forever on a failure it cannot fix.
+    case never
+    /// Only after a non-zero exit: the menu shell, where Quit exits 0 and means it, and a crash
+    /// brings the menu back.
+    case onFailure
+
+    /// The `KeepAlive` value launchd reads.
+    public var propertyListValue: Any {
+        switch self {
+        case .always: return true
+        case .never: return false
+        case .onFailure: return ["SuccessfulExit": false]
+        }
+    }
+}
+
 public struct LaunchAgentConfiguration: Equatable, Sendable {
     /// The launchd label of the daemon job.
     ///
@@ -101,6 +121,12 @@ public struct LaunchAgentConfiguration: Equatable, Sendable {
     /// The launchd label of the one-shot job that finishes an update.
     public static let updateFinisherLabel = "dev.axon.updater"
 
+    /// The launchd label of the menu shell's job.
+    ///
+    /// A job of its own rather than a child of the daemon, so each process is its own responsible
+    /// process and neither inherits the other's privacy attribution.
+    public static let menuLabel = "dev.axon.menu"
+
     public let label: String
     public let program: DaemonProgram
     public let socketPath: String
@@ -109,9 +135,8 @@ public struct LaunchAgentConfiguration: Equatable, Sendable {
     public let standardErrorPath: String
     /// Everything after the program path in `ProgramArguments`.
     public let arguments: [String]
-    /// Whether launchd restarts the job when it exits. The daemon is supervised; a one-shot job
-    /// that finishes an update must never be, or a failure would loop forever.
-    public let keepAlive: Bool
+    /// Whether launchd restarts the job when it exits.
+    public let keepAlive: KeepAlive
 
     public init(
         label: String = LaunchAgentConfiguration.daemonLabel,
@@ -123,7 +148,7 @@ public struct LaunchAgentConfiguration: Equatable, Sendable {
         self.program = program
         self.socketPath = socketPath
         self.arguments = program.arguments
-        self.keepAlive = true
+        self.keepAlive = .always
 
         var daemonEnvironment: [String: String] = [
             "AXON_SOCKET_PATH": socketPath,
@@ -149,7 +174,7 @@ public struct LaunchAgentConfiguration: Equatable, Sendable {
         label: String,
         program: DaemonProgram,
         arguments: [String],
-        keepAlive: Bool,
+        keepAlive: KeepAlive,
         socketPath: String,
         environmentVariables: [String: String],
         standardOutPath: String,
@@ -181,12 +206,39 @@ public struct LaunchAgentConfiguration: Equatable, Sendable {
         return LaunchAgentConfiguration(
             label: updateFinisherLabel,
             program: DaemonProgram(executablePath: cliPath, identity: .executablePath),
-            arguments: ["daemon", "install"],
-            keepAlive: false,
+            arguments: ShellContract.finisherArguments,
+            keepAlive: .never,
             socketPath: socketPath,
             environmentVariables: ["AXON_SOCKET_PATH": socketPath],
             standardOutPath: "\(logDirectory)/updater.out.log",
             standardErrorPath: "\(logDirectory)/updater.err.log"
+        )
+    }
+
+    /// The menu shell's job: `Axon Menu.app` nested in the bundle at `bundlePath`.
+    ///
+    /// Restarted only after a crash. Quit exits 0 and launchd leaves it stopped, which is the
+    /// difference from the daemon: quitting a menu is a person's decision, while the daemon
+    /// exiting is always a failure. Defined here; registering it beside the daemon is the
+    /// packaging work that replaces the Swift daemon app.
+    public static func menu(
+        bundlePath: String,
+        socketPath: String = AxonEnvironment.defaultSocketPath
+    ) -> LaunchAgentConfiguration {
+        let logDirectory = "\(NSHomeDirectory())/Library/Logs/Axon"
+        let executable = URL(fileURLWithPath: bundlePath)
+            .appendingPathComponent(AppBundle.nestedMenuRelativePath)
+            .appendingPathComponent("Contents/MacOS/AxonMenu")
+            .path
+        return LaunchAgentConfiguration(
+            label: menuLabel,
+            program: DaemonProgram(executablePath: executable, identity: .executablePath),
+            arguments: [],
+            keepAlive: .onFailure,
+            socketPath: socketPath,
+            environmentVariables: ["AXON_SOCKET_PATH": socketPath],
+            standardOutPath: "\(logDirectory)/menu.out.log",
+            standardErrorPath: "\(logDirectory)/menu.err.log"
         )
     }
 
@@ -196,7 +248,7 @@ public struct LaunchAgentConfiguration: Equatable, Sendable {
             "ProgramArguments": [program.executablePath] + arguments,
             "EnvironmentVariables": environmentVariables,
             "RunAtLoad": true,
-            "KeepAlive": keepAlive,
+            "KeepAlive": keepAlive.propertyListValue,
             "LimitLoadToSessionType": "Aqua",
             "ProcessType": "Interactive",
             "StandardOutPath": standardOutPath,
