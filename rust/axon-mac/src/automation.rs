@@ -9,17 +9,20 @@
 //! for a sender/target pair, and a later `tccutil reset` cannot reach into a running process. The
 //! ledger here records every answer this process received, from either determination, so the menu
 //! can decide whether its item has anything left to offer without putting the question to macOS on
-//! every open, and so a denial can say when it may be stale. This ports `AppleEventAnswerLedger`
-//! and `BrowserAutomationConsentRequester` in `Sources/AxonCore/BrowserAutomation.swift`; the
-//! executed leg's sticky-denial rule arrives with the browser verbs that would produce it.
+//! every open, and so a denial can say when it may be stale. The browser verbs consult the same
+//! ledger silently before they send, and record the one answer only a sent event can produce: a
+//! refusal of the event itself. This ports `AppleEventAnswerLedger`,
+//! `AppleEventAuthorizationService`, and `BrowserAutomationConsentRequester` in
+//! `Sources/AxonCore/BrowserAutomation.swift`.
 
+use crate::browser::Dictionary;
 use axon_core::{
     AutomationAuthorization, AutomationLeg, AutomationRequestReport, AutomationStatusReport,
-    BrowserConsentState, ConsentNeed, ConsentOutcome, JsonRpcError, consent_in_progress,
+    BrowserCapability, BrowserConsentState, BrowserError, BrowserRefusalData,
+    BrowserRefusalReason, ConsentNeed, ConsentOutcome, JsonRpcError, consent_in_progress,
 };
 use std::{
     collections::HashMap,
-    ffi::c_void,
     sync::{
         Mutex,
         atomic::{AtomicBool, Ordering},
@@ -27,26 +30,51 @@ use std::{
 };
 
 pub(crate) const NO_ERR: i32 = 0;
-pub(crate) const EVENT_NOT_PERMITTED: i32 = -1743;
-pub(crate) const WOULD_REQUIRE_CONSENT: i32 = -1744;
+pub(crate) use crate::apple_events::{EVENT_NOT_PERMITTED, WOULD_REQUIRE_CONSENT};
 
-/// A browser Axon can script, and the one list every consent path resolves against.
+/// A browser Axon can script, and the one list every consent path and every verb resolves
+/// against.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SupportedBrowser {
     pub bundle_identifier: &'static str,
     pub name: &'static str,
+    pub dictionary: Dictionary,
 }
 
-pub(crate) const SUPPORTED_BROWSERS: &[SupportedBrowser] = &[
-    SupportedBrowser {
-        bundle_identifier: "com.apple.Safari",
-        name: "Safari",
-    },
-    SupportedBrowser {
-        bundle_identifier: "com.google.Chrome",
-        name: "Google Chrome",
-    },
-];
+pub(crate) const SAFARI: SupportedBrowser = SupportedBrowser {
+    bundle_identifier: "com.apple.Safari",
+    name: "Safari",
+    dictionary: Dictionary::SAFARI,
+};
+
+pub(crate) const CHROME: SupportedBrowser = SupportedBrowser {
+    bundle_identifier: "com.google.Chrome",
+    name: "Google Chrome",
+    dictionary: Dictionary::CHROME,
+};
+
+pub(crate) const SUPPORTED_BROWSERS: &[SupportedBrowser] = &[SAFARI, CHROME];
+
+impl SupportedBrowser {
+    /// The browser a caller named: by display name, Chrome's short name, or exact bundle
+    /// identifier, ignoring case.
+    pub(crate) fn named(query: &str) -> Option<Self> {
+        match query.to_lowercase().as_str() {
+            "safari" | "com.apple.safari" => Some(SAFARI),
+            "google chrome" | "chrome" | "com.google.chrome" => Some(CHROME),
+            _ => None,
+        }
+    }
+}
+
+/// Which surface asked for the authorization that was refused. Remediation depends on it: a
+/// verb's refusal can send the user to the menu's consent gesture, and the gesture's own refusal
+/// cannot send them back to itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Origin {
+    BrowserVerb,
+    ConsentGesture,
+}
 
 /// The two system facts consent depends on, separated so the decision logic can be exercised
 /// without touching TCC.
