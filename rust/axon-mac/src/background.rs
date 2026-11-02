@@ -19,6 +19,9 @@
 use axon_core::KeyboardIntent;
 
 /// The measured rows the pointer refusal rests on: every target refused a pid-targeted click.
+/// Spelled out in [`PID_POINTER_REFUSED`] for the caller, and listed here so the tests can hold
+/// each against the committed results.
+#[cfg_attr(not(test), allow(dead_code))]
 pub const POINTER_EVIDENCE: &[&str] = &[
     "safari-click-2026-08-16",
     "chrome-click-2026-08-16",

@@ -618,6 +618,10 @@ impl<
                 "frontmostAppUnchanged": dispatch.frontmost_unchanged,
                 "pointerUnchanged": dispatch.pointer_unchanged,
                 "pointerAsserted": PointerContract::Observed.is_asserted(),
+                // What licenses this rung: the measured rows and the exact event construction
+                // they measured, one hop from the dispatch they authorize.
+                "variant": background::KEYBOARD_VARIANT,
+                "evidence": background::KEYBOARD_EVIDENCE,
             },
         });
         let object = result
