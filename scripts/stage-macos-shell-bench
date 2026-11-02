@@ -31,12 +31,16 @@ case "$MODE" in
   *) printf 'usage: %s [--stage-only|--bootstrap-only|--teardown]\n' "$0" >&2; exit 2 ;;
 esac
 
+# A protocol other than axn/249's stages its own bench beside it: its directory, socket, and launchd
+# labels, so two benches never share a socket or a job. The bundle identity is the same
+# dev.axon.mac-bench, whose grants are what a protocol measures.
 BENCH_DIR="${AXON_BENCH_DIR:-$HOME/AxonBench/axn249}"
 APP="$BENCH_DIR/AxonMacDev.app"
 MENU="$APP/Contents/Library/Applications/Axon Menu.app"
-SOCKET="/tmp/axon-bench249.sock"
-DAEMON_LABEL="dev.axon.bench249.daemon"
-MENU_LABEL="dev.axon.bench249.menu"
+SOCKET="${AXON_BENCH_SOCKET:-/tmp/axon-bench249.sock}"
+LABEL_PREFIX="${AXON_BENCH_LABEL_PREFIX:-dev.axon.bench249}"
+DAEMON_LABEL="$LABEL_PREFIX.daemon"
+MENU_LABEL="$LABEL_PREFIX.menu"
 AGENTS="$HOME/Library/LaunchAgents"
 LOGS="$BENCH_DIR/logs"
 DOMAIN="gui/$(id -u)"

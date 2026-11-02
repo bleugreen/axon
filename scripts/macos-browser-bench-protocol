@@ -1,0 +1,490 @@
+#!/usr/bin/env python3
+"""The axn/250 bench protocol: the Rust daemon's browser verbs, from consent gesture to verb, measured.
+
+Run on bgsrv-mac over ssh as the console user, from the directory the bench was staged into
+(default ~/AxonBench/axn250), with the thread at the Mac through the desktop-automation bridge:
+
+    ~/AxonBench/axn250/macos-browser-bench-protocol
+
+It stages nothing itself: `stage-macos-shell-bench --stage-only` (run with AXON_BENCH_DIR,
+AXON_BENCH_SOCKET, and AXON_BENCH_LABEL_PREFIX pointing at this bench) built and signed the bundle,
+and this driver calls it with `--bootstrap-only`. It does every step a program can do itself:
+launchctl, socket calls on the bench socket, a local page server, launching the browsers, the TCC
+dumps and diff. It stops and asks only for what needs a person: answering the consent dialogs, and
+unticking a grant in System Settings. Every step lands in transcript.jsonl, and the run ends by
+tearing the bench down whatever happened.
+
+The driver never sends an Apple event itself (no osascript, no `tell application`): every event
+belongs to the daemon under test, so every Automation row it leaves is the daemon's. It never
+touches dev.axon.daemon, dev.axon.updater, or /tmp/axon.sock.
+"""
+
+import ctypes
+import ctypes.util
+import http.server
+import json
+import os
+import pathlib
+import socket
+import socketserver
+import subprocess
+import sys
+import threading
+import time
+import urllib.parse
+
+BENCH = pathlib.Path(os.environ.get("AXON_BENCH_DIR", pathlib.Path.home() / "AxonBench/axn250"))
+APP = BENCH / "AxonMacDev.app"
+BINARY = APP / "Contents/MacOS/AxonMacDev"
+SOCKET = "/tmp/axon-bench250.sock"
+LABEL_PREFIX = "dev.axon.bench250"
+DAEMON = f"{LABEL_PREFIX}.daemon"
+MENU = f"{LABEL_PREFIX}.menu"
+DOMAIN = f"gui/{os.getuid()}"
+TRANSCRIPT = BENCH / "transcript.jsonl"
+STAGE = BENCH / "stage-macos-shell-bench"
+DAEMON_LOG = BENCH / "logs/daemon.err.log"
+BENCH_ID = "dev.axon.mac-bench"
+SAFARI = {"app": "Safari", "name": "Safari", "bundle": "com.apple.Safari", "process": "Safari"}
+CHROME = {"app": "Google Chrome", "name": "Google Chrome", "bundle": "com.google.Chrome", "process": "Google Chrome"}
+SLOW_MS = 1500
+TCC_QUERY = (
+    "select service, client, client_type, auth_value, coalesce(indirect_object_identifier,''), "
+    "last_modified from access order by service, client, indirect_object_identifier;"
+)
+USER_TCC = pathlib.Path.home() / "Library/Application Support/com.apple.TCC/TCC.db"
+SYSTEM_TCC = "/Library/Application Support/com.apple.TCC/TCC.db"
+
+verdicts = []
+gaps = []
+
+
+def log(step, **fields):
+    entry = {"at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "step": step, **fields}
+    with TRANSCRIPT.open("a") as out:
+        out.write(json.dumps(entry) + "\n")
+    print(f"[{step}] " + json.dumps(fields)[:600])
+
+
+def verdict(step, ok, **fields):
+    verdicts.append((step, ok))
+    log(step, verdict="pass" if ok else "FAIL", **fields)
+
+
+def informational(step, **fields):
+    log(step, verdict="informational", **fields)
+
+
+def run(*argv, check=False, env=None, input=None):
+    result = subprocess.run(argv, capture_output=True, text=True, env=env, input=input)
+    if check and result.returncode != 0:
+        raise RuntimeError(f"{argv} failed: {result.stderr.strip()}")
+    return result
+
+
+def rpc(method, params=None, timeout=10):
+    try:
+        with socket.socket(socket.AF_UNIX) as conn:
+            conn.settimeout(timeout)
+            conn.connect(SOCKET)
+            request = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}}
+            conn.sendall((json.dumps(request) + "\n").encode())
+            buffer = b""
+            while not buffer.endswith(b"\n"):
+                chunk = conn.recv(1 << 16)
+                if not chunk:
+                    break
+                buffer += chunk
+        return json.loads(buffer)
+    # A daemon going down can accept a connection and close it with no body; an empty or partial
+    # reply is the same transport failure as a refused connect.
+    except (OSError, ValueError) as error:
+        return {"transport": str(error)}
+
+
+def verb(method, params):
+    """A browser verb, with navigate's 30-second client bound. Returns (result, error)."""
+    response = rpc(method, params, timeout=30)
+    return response.get("result"), response.get("error") or ({"transport": response["transport"]} if "transport" in response else None)
+
+
+def job(label):
+    out = run("/bin/launchctl", "print", f"{DOMAIN}/{label}").stdout
+    fields = {}
+    for line in out.splitlines():
+        line = line.strip()
+        for key in ("state", "pid", "last exit code", "runs"):
+            if line.startswith(f"{key} = "):
+                fields.setdefault(key, line.split(" = ", 1)[1])
+    return fields
+
+
+def wait_for(predicate, seconds, interval=0.5):
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        value = predicate()
+        if value:
+            return value
+        time.sleep(interval)
+    return None
+
+
+def ask(prompt):
+    answer = input(f"\n>>> {prompt}\n    answer y/n (or type what you see): ").strip()
+    log("operator", prompt=prompt, answer=answer)
+    return answer.lower().startswith("y")
+
+
+def pause(prompt):
+    input(f"\n>>> {prompt}\n    press Return when done: ")
+    log("operator", prompt=prompt, answer="done")
+
+
+def tcc_dump(name):
+    rows = []
+    user = run("/usr/bin/sqlite3", "-separator", "\t", str(USER_TCC), TCC_QUERY)
+    rows += ["user\t" + line for line in user.stdout.splitlines()]
+    system = run("/usr/bin/sqlite3", "-separator", "\t", SYSTEM_TCC, TCC_QUERY)
+    route = "direct"
+    if system.returncode != 0:
+        system = run("/usr/bin/sudo", "-n", "/usr/bin/sqlite3", "-separator", "\t", SYSTEM_TCC, TCC_QUERY)
+        route = "sudo" if system.returncode == 0 else "unreadable"
+    rows += ["system\t" + line for line in system.stdout.splitlines()]
+    (BENCH / name).write_text("\n".join(rows) + "\n")
+    log("tcc-dump", file=name, rows=len(rows), systemRoute=route,
+        userError=user.stderr.strip(), systemError=system.stderr.strip())
+    return rows
+
+
+def keyed(rows):
+    """TCC rows by identity (database, service, client, client type, target) -> auth value."""
+    table = {}
+    for row in rows:
+        fields = row.split("\t")
+        if len(fields) >= 6:
+            table[(fields[0], fields[1], fields[2], fields[3], fields[5])] = fields[4]
+    return table
+
+
+def healthy():
+    return rpc("health", timeout=3).get("result")
+
+
+def running(process):
+    return run("/usr/bin/pgrep", "-x", process).returncode == 0
+
+
+def locate(bundle):
+    """Where LaunchServices has this bundle identifier registered, the way `open -b` resolves it.
+
+    Spotlight does not index ~/Applications on every machine, so mdfind is only a fallback.
+    """
+    try:
+        cf = ctypes.CDLL(ctypes.util.find_library("CoreFoundation"))
+        cs = ctypes.CDLL(ctypes.util.find_library("CoreServices"))
+        cf.CFStringCreateWithCString.restype = ctypes.c_void_p
+        cf.CFStringCreateWithCString.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint32]
+        cs.LSCopyApplicationURLsForBundleIdentifier.restype = ctypes.c_void_p
+        cs.LSCopyApplicationURLsForBundleIdentifier.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        cf.CFArrayGetCount.restype = ctypes.c_long
+        cf.CFArrayGetCount.argtypes = [ctypes.c_void_p]
+        cf.CFArrayGetValueAtIndex.restype = ctypes.c_void_p
+        cf.CFArrayGetValueAtIndex.argtypes = [ctypes.c_void_p, ctypes.c_long]
+        cf.CFURLGetFileSystemRepresentation.restype = ctypes.c_bool
+        cf.CFURLGetFileSystemRepresentation.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_char_p, ctypes.c_long]
+        identifier = cf.CFStringCreateWithCString(None, bundle.encode(), 0x08000100)
+        urls = cs.LSCopyApplicationURLsForBundleIdentifier(identifier, None)
+        if urls and cf.CFArrayGetCount(urls) > 0:
+            buffer = ctypes.create_string_buffer(4096)
+            if cf.CFURLGetFileSystemRepresentation(cf.CFArrayGetValueAtIndex(urls, 0), True, buffer, 4096):
+                return buffer.value.decode()
+    except OSError:
+        pass
+    found = run("/usr/bin/mdfind", f"kMDItemCFBundleIdentifier == '{bundle}'").stdout.split("\n")[0].strip()
+    return found or None
+
+
+class Pages(http.server.BaseHTTPRequestHandler):
+    """Deterministic pages whose titles carry the nonce they were asked for."""
+
+    served = []
+
+    def do_GET(self):  # noqa: N802 - BaseHTTPRequestHandler naming
+        parsed = urllib.parse.urlparse(self.path)
+        nonce = (urllib.parse.parse_qs(parsed.query).get("n") or [""])[0]
+        type(self).served.append({"path": parsed.path, "nonce": nonce, "at": time.time()})
+        if parsed.path == "/redirect":
+            self.send_response(302)
+            self.send_header("Location", f"/navigated?n={nonce}")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        titles = {"/": "Root", "/start": "Start", "/page": "Page", "/navigated": "Navigated", "/slow": "Slow"}
+        if parsed.path not in titles:
+            self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if parsed.path == "/slow":
+            time.sleep(SLOW_MS / 1000)
+        title = f"{titles[parsed.path]} {nonce}".strip()
+        body = f"<!doctype html><meta charset=utf-8><title>{title}</title><body><h1>{title}</h1></body>".encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *_):
+        pass
+
+
+class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    daemon_threads = True
+
+
+def nonce():
+    return f"{int(time.time() * 1000) % 10_000_000:07d}"
+
+
+def refusal(error):
+    data = (error or {}).get("data") or {}
+    return {key: data.get(key) for key in ("reason", "authorization", "leg", "nativeStatus", "app")} | {"code": (error or {}).get("code")}
+
+
+def has_window(browser):
+    """Whether Accessibility sees a window, asked through the bench daemon so no Apple event is sent."""
+    response = rpc("look", {"app": browser["app"], "screenshot": False, "tree": False, "childDepth": 0}, timeout=10)
+    body = json.dumps(response.get("result") or {})
+    return "result" in response and "no-windows" not in body
+
+
+def protocol(state):
+    production_before = job("dev.axon.daemon")
+    chrome_path = locate(CHROME["bundle"])
+    state["launched"] = []
+    log("1-start", bench=str(BENCH), productionDaemon=production_before, chromePath=chrome_path,
+        safariWasRunning=running(SAFARI["process"]), chromeWasRunning=running(CHROME["process"]))
+    before = tcc_dump("tcc-before.tsv")
+
+    # 2. Bootstrap, then forget every Automation answer this identity holds, so both browsers start
+    # undetermined. The reset reaches TCC, not a running daemon's process-held answers, so the
+    # daemon is restarted after it.
+    env = os.environ | {"AXON_BENCH_DIR": str(BENCH), "AXON_BENCH_SOCKET": SOCKET, "AXON_BENCH_LABEL_PREFIX": LABEL_PREFIX}
+    staged = run(str(STAGE), "--bootstrap-only", env=env)
+    log("2-bootstrap", exit=staged.returncode, stdout=staged.stdout[-800:], stderr=staged.stderr[-800:])
+    if staged.returncode != 0:
+        raise RuntimeError("bootstrap failed")
+    reset = run("/usr/bin/tccutil", "reset", "AppleEvents", BENCH_ID)
+    run("/bin/launchctl", "kickstart", "-k", f"{DOMAIN}/{DAEMON}")
+    report = wait_for(healthy, 30)
+    verdict("2-healthy", bool(report) and (report.get("provenance") or {}).get("backend") == "rust-axon-mac",
+            reset=(reset.stdout + reset.stderr).strip(), provenance=(report or {}).get("provenance"),
+            daemonJob=job(DAEMON))
+
+    # 3. A local page server, and both browsers open on it.
+    server = Server(("127.0.0.1", 0), Pages)
+    state["server"] = server
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    browsers = [SAFARI] + ([CHROME] if chrome_path else [])
+    if not chrome_path:
+        gaps.append("chrome-not-installed")
+        log("3-chrome", verdict="skipped", reason="chrome-not-installed")
+    for browser in browsers:
+        if not running(browser["process"]):
+            state["launched"].append(browser["process"])
+        argv = ["/usr/bin/open", "-b", browser["bundle"], f"{base}/start?n={nonce()}"]
+        if browser is CHROME:
+            argv += ["--args", "--no-first-run", "--no-default-browser-check"]
+        run(*argv)
+    for browser in browsers:
+        verdict(f"3-{browser['process']}-has-a-window", bool(wait_for(lambda: has_window(browser), 45, 1)),
+                launchedByThisRun=browser["process"] in state["launched"])
+
+    # 4. The verbs are advertised by the MCP facade.
+    listed = run(str(BINARY), "mcp", env=os.environ | {"AXON_SOCKET_PATH": SOCKET},
+                 input=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}) + "\n")
+    try:
+        names = [tool["name"] for tool in json.loads(listed.stdout.splitlines()[0])["result"]["tools"]]
+    except (IndexError, KeyError, ValueError):
+        names = []
+    verdict("4-tools-listed", {"navigate", "windows", "tabs"} <= set(names), tools=names, stderr=listed.stderr[-400:])
+
+    # 5. Before any consent: every verb is a typed refusal at the checked leg, and nothing prompts.
+    for browser in browsers:
+        answers = {}
+        for method, params in (("navigate", {"url": f"{base}/page?n={nonce()}"}), ("windows", {}), ("tabs", {})):
+            result, error = verb(method, {"app": browser["app"], **params})
+            answers[method] = refusal(error) if error else {"unexpectedResult": result}
+        expected = {"code": -32603, "reason": "automation-not-granted", "authorization": "notDetermined",
+                    "leg": "checked", "nativeStatus": -1744, "app": browser["name"]}
+        verdict(f"5-{browser['process']}-undetermined-refusal", all(answer == expected for answer in answers.values()),
+                answers=answers)
+    no_dialog = not ask("Look at the desktop through the bridge. Is any consent dialog asking to let an app control Safari or Google Chrome on screen?")
+    status = rpc("automation.status").get("result") or {}
+    verdict("5-no-prompt-and-status-requests", no_dialog and status.get("need") == "request", status=status)
+
+    # 6. The gesture: the menu's Browser Automation item, answered with Allow.
+    pause("Open the Axon menu bar item (the bench's AxonMacDev menu) with a hand click, choose Browser Automation..., "
+          "and click Allow on each consent dialog that appears (one per running browser). Note the app each dialog names.")
+    named = input("    Which app did the dialogs name (blank if none appeared)? ").strip()
+    log("operator", prompt="dialogs named", answer=named)
+    status = rpc("automation.status").get("result") or {}
+    granted = {entry["bundleIdentifier"]: (entry.get("status"), entry.get("leg")) for entry in status.get("browsers", [])}
+    verdict("6-gesture-grants", status.get("need") == "none"
+            and all(granted.get(browser["bundle"]) == ("granted", "prompted") for browser in browsers)
+            and bool(named) and "menu" not in named.lower(),
+            dialogNamed=named, status=status)
+
+    # 7-8. Each browser, granted.
+    for browser in browsers:
+        label = browser["process"]
+        page = nonce()
+        result, error = verb("navigate", {"app": browser["app"], "url": f"{base}/page?n={page}"})
+        navigation = (result or {}).get("navigation") or {}
+        evidence = "loading_flag" if browser is CHROME else "stable_readback"
+        verdict(f"7-{label}-navigate-page", not error and navigation.get("success") is True
+                and navigation.get("verification") == "dictionary_readback" and navigation.get("settled") is True
+                and navigation.get("settleEvidence") == evidence and navigation.get("title") == f"Page {page}"
+                and navigation.get("app") == browser["bundle"]
+                and (browser is CHROME or navigation.get("elapsedMs", 0) >= 480),
+                navigation=navigation, error=error)
+
+        result, error = verb("navigate", {"app": browser["app"], "url": base})
+        navigation = (result or {}).get("navigation") or {}
+        verdict(f"7-{label}-navigate-root-without-slash", not error and navigation.get("success") is True
+                and navigation.get("url", "").endswith("/") and navigation.get("requestedURL") == base,
+                navigation=navigation, error=error)
+
+        if browser is CHROME:
+            slow = nonce()
+            result, error = verb("navigate", {"app": browser["app"], "url": f"{base}/slow?n={slow}"})
+            navigation = (result or {}).get("navigation") or {}
+            verdict(f"8-{label}-navigate-slow-waits-for-the-loading-flag", not error
+                    and navigation.get("settleEvidence") == "loading_flag" and navigation.get("title") == f"Slow {slow}"
+                    and navigation.get("elapsedMs", 0) >= SLOW_MS - 200,
+                    navigation=navigation, error=error, slowMs=SLOW_MS)
+
+        hop = nonce()
+        result, error = verb("navigate", {"app": browser["app"], "url": f"{base}/redirect?n={hop}"})
+        navigation = (result or {}).get("navigation") or {}
+        landed = f"{base}/navigated?n={hop}"
+        verdict(f"7-{label}-navigate-redirect-is-a-mismatch", not error and navigation.get("success") is False
+                and navigation.get("verification") == "dictionary_mismatch" and navigation.get("url") == landed
+                and navigation.get("settled") is True,
+                navigation=navigation, error=error)
+
+        result, error = verb("windows", {"app": browser["app"]})
+        windows = (result or {}).get("windows") or []
+        cross = (result or {}).get("crossCheck") or {}
+        verdict(f"7-{label}-windows", not error and bool(windows) and windows[0].get("id") == "window:1"
+                and windows[0].get("active") is True and (result or {}).get("authority") == "application_scripting"
+                and cross.get("status") in ("matched", "partial"),
+                result=result, error=error)
+        if cross.get("status") == "partial":
+            informational(f"7-{label}-windows-cross-check-partial", crossCheck=cross)
+
+        result, error = verb("tabs", {"app": browser["app"]})
+        tabs = (result or {}).get("tabs") or []
+        active = [tab for tab in tabs if tab.get("windowIndex") == 1 and tab.get("active")]
+        verdict(f"7-{label}-tabs", not error and len(active) == 1 and active[0].get("url") == landed
+                and (result or {}).get("crossCheck", {}).get("status") == "unavailable",
+                result=result, error=error)
+
+        for window in (0, 99):
+            result, error = verb("tabs", {"app": browser["app"], "window": window})
+            verdict(f"7-{label}-tabs-window-{window}-is-invalid", (error or {}).get("code") == -32602,
+                    error=error, result=result)
+
+    # 9. Input refusals never reach a browser.
+    _, error = verb("navigate", {"app": "Safari", "url": "file:///etc/hosts"})
+    verdict("9-file-url-is-invalid", (error or {}).get("code") == -32602, error=error)
+    _, error = verb("windows", {"app": "Firefox"})
+    verdict("9-unsupported-app-is-invalid", (error or {}).get("code") == -32602, error=error)
+
+    # 10. The executed leg, measured rather than presumed: a grant removed in System Settings after
+    # this daemon was answered.
+    pause("In System Settings > Privacy & Security > Automation, untick Safari beneath AxonMacDev, using hand clicks "
+          "only (no keyboard text through the bridge). Then close System Settings.")
+    _, first = verb("navigate", {"app": "Safari", "url": f"{base}/page?n={nonce()}"})
+    first_refusal = refusal(first)
+    if first_refusal.get("leg") == "executed":
+        _, second = verb("navigate", {"app": "Safari", "url": f"{base}/page?n={nonce()}"})
+        status = rpc("automation.status").get("result") or {}
+        safari = next((entry for entry in status.get("browsers", []) if entry["bundleIdentifier"] == SAFARI["bundle"]), {})
+        request = rpc("automation.request", timeout=60).get("result") or {}
+        outcome = next((entry for entry in request.get("outcomes", []) if entry["bundleIdentifier"] == SAFARI["bundle"]), {})
+        no_dialog = not ask("automation.request was just sent. Did any consent dialog appear?")
+        verdict("10-executed-leg", first_refusal == {"code": -32603, "reason": "automation-not-granted", "authorization": "denied",
+                                                     "leg": "executed", "nativeStatus": -1743, "app": "Safari"}
+                and refusal(second).get("leg") == "executed"
+                and (safari.get("status"), safari.get("leg")) == ("denied", "executed") and status.get("need") == "explain"
+                and outcome.get("granted") is False and no_dialog,
+                first=first, second=second, status=status, request=request)
+    elif first_refusal.get("leg") == "checked":
+        informational("10-executed-leg", reason="macOS answered the silent check after the untick, so no event was sent; "
+                      "the executed leg stands on the hermetic tests", first=first)
+    else:
+        verdict("10-executed-leg", False, reason="navigate was not refused after the grant was removed", first=first)
+    lines = DAEMON_LOG.read_text(errors="replace").splitlines() if DAEMON_LOG.exists() else []
+    legs = [line for line in lines if "automation authorization" in line]
+    events = [line for line in lines if "apple event" in line]
+    (BENCH / "daemon.err.excerpt.log").write_text("\n".join(legs + events[-200:]) + "\n")
+    log("10-daemon-log", decisions=legs[-20:], eventLines=len(events), refusedEvents=[line for line in events if "status=-1743" in line][-5:])
+
+    # 11. A browser that is not running, if this run launched one it may quit.
+    quittable = next((browser for browser in reversed(browsers) if browser["process"] in state["launched"]), None)
+    if quittable:
+        run("/usr/bin/pkill", "-x", quittable["process"])
+        wait_for(lambda: not running(quittable["process"]), 15)
+        _, error = verb("navigate", {"app": quittable["app"], "url": f"{base}/page?n={nonce()}"})
+        verdict("11-not-running", (error or {}).get("code") == -32603
+                and (error or {}).get("message") == f"Browser is not running: {quittable['name']}", error=error)
+    else:
+        informational("11-not-running", reason="every browser was already running before this run, so none was quit")
+
+    # 12. TCC after: the daemon's Automation rows are its browsers alone, and the shell holds none.
+    after = tcc_dump("tcc-after.tsv")
+    before_rows, after_rows = keyed(before), keyed(after)
+    added = sorted("\t".join(key) + f"\tauth={after_rows[key]}" for key in after_rows.keys() - before_rows.keys())
+    removed = sorted("\t".join(key) for key in before_rows.keys() - after_rows.keys())
+    changed = sorted("\t".join(key) + f"\tauth {before_rows[key]}->{after_rows[key]}"
+                     for key in after_rows.keys() & before_rows.keys() if before_rows[key] != after_rows[key])
+    automation = sorted(key[4] for key in after_rows if key[1] == "kTCCServiceAppleEvents" and key[2] == BENCH_ID)
+    shell_rows = [row for row in after if f"{BENCH_ID}.menu" in row or "Axon Menu.app" in row]
+    foreign = [row for row in added if f"\t{BENCH_ID}\t" not in row]
+    verdict("12-tcc", automation == sorted(browser["bundle"] for browser in browsers) and not shell_rows and not foreign,
+            daemonAutomationTargets=automation, added=added, removed=removed, changed=changed,
+            shellRows=shell_rows, foreignAdded=foreign)
+    production_after = job("dev.axon.daemon")
+    verdict("production-untouched", production_after.get("pid") == production_before.get("pid"),
+            before=production_before, after=production_after)
+    log("pages-served", served=Pages.served[-60:])
+
+
+def main():
+    BENCH.mkdir(parents=True, exist_ok=True)
+    state = {"launched": ["Safari", "Google Chrome"]}
+    try:
+        protocol(state)
+    except Exception as error:  # the teardown below must run whatever happened
+        log("aborted", error=repr(error))
+        verdicts.append(("aborted", False))
+    finally:
+        for label in (MENU, DAEMON):
+            run("/bin/launchctl", "bootout", f"{DOMAIN}/{label}")
+            (pathlib.Path.home() / f"Library/LaunchAgents/{label}.plist").unlink(missing_ok=True)
+        if state.get("server"):
+            state["server"].shutdown()
+        for process in state.get("launched", []):
+            run("/usr/bin/pkill", "-x", process)
+        log("13-teardown", menu=job(MENU), daemon=job(DAEMON), quit=state.get("launched", []))
+    failed = [step for step, ok in verdicts if not ok]
+    log("summary", passed=[step for step, ok in verdicts if ok], failed=failed, gaps=gaps)
+    sys.exit(1 if failed else (3 if gaps else 0))
+
+
+if __name__ == "__main__":
+    main()
