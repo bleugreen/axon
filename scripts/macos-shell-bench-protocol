@@ -255,12 +255,31 @@ def protocol():
             killed=first, relaunched=second, daemonPid=daemon_pid)
 
     # 10. TCC after: nothing for the shell, and only the daemon's Safari row new.
+    #
+    # Rows are compared by identity (database, service, client, client type, target), not whole:
+    # last_modified moves on rows nothing here touched, and that is not a new grant.
     after = tcc_dump("tcc-after.tsv")
-    added = sorted(set(after) - set(before))
-    removed = sorted(set(before) - set(after))
+
+    def keyed(rows):
+        table = {}
+        for row in rows:
+            fields = row.split("\t")
+            if len(fields) >= 6:
+                table[(fields[0], fields[1], fields[2], fields[3], fields[5])] = fields[4]
+        return table
+
+    before_rows, after_rows = keyed(before), keyed(after)
+    added = sorted("\t".join(key) + f"\tauth={after_rows[key]}" for key in after_rows.keys() - before_rows.keys())
+    removed = sorted("\t".join(key) for key in before_rows.keys() - after_rows.keys())
+    changed = sorted(
+        "\t".join(key) + f"\tauth {before_rows[key]}->{after_rows[key]}"
+        for key in after_rows.keys() & before_rows.keys()
+        if before_rows[key] != after_rows[key]
+    )
     shell_rows = [row for row in after if "dev.axon.mac-bench.menu" in row or "Axon Menu.app" in row]
     foreign = [row for row in added if "\tdev.axon.mac-bench\t" not in row]
-    verdict("10-tcc", not shell_rows and not foreign, added=added, removed=removed, shellRows=shell_rows, foreignAdded=foreign)
+    verdict("10-tcc", not shell_rows and not foreign, added=added, removed=removed, changed=changed,
+            shellRows=shell_rows, foreignAdded=foreign)
 
     production_after = job("dev.axon.daemon")
     verdict("production-untouched", production_after.get("pid") == production_before.get("pid"),
