@@ -991,7 +991,14 @@ jobs:
               sleep 0.25
             done
             kill -9 "$daemon_pid" >/dev/null 2>&1 || true
+            # Waited for, not just signalled: the next step refuses to start while a Calculator is
+            # running, and one still exiting from here would read as somebody else's.
             pkill -u "$(id -u)" -f '[/]usr/bin/gnome-calculator' >/dev/null 2>&1 || true
+            for _ in {1..40}; do
+              if ! pgrep -u "$(id -u)" -f '[/]usr/bin/gnome-calculator' >/dev/null; then break; fi
+              sleep 0.25
+            done
+            pkill -9 -u "$(id -u)" -f '[/]usr/bin/gnome-calculator' >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
           ../scripts/assert-daemon-under-test "$daemon" "$daemon_pid" /tmp/axon-linux-x11-daemon.log
@@ -1099,6 +1106,11 @@ jobs:
             kill -9 "$daemon_pid" >/dev/null 2>&1 || true
             pkill -u "$(id -u)" -f '[/]usr/bin/gnome-calculator' >/dev/null 2>&1 || true
             if [ -n "$holder_pid" ]; then kill "$holder_pid" >/dev/null 2>&1 || true; fi
+            for _ in {1..40}; do
+              if ! pgrep -u "$(id -u)" -f '[/]usr/bin/gnome-calculator' >/dev/null; then break; fi
+              sleep 0.25
+            done
+            pkill -9 -u "$(id -u)" -f '[/]usr/bin/gnome-calculator' >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
           ../scripts/assert-daemon-under-test "$daemon" "$daemon_pid" /tmp/axon-linux-x11-input.log
@@ -1142,7 +1154,8 @@ jobs:
           retained_app="$(printf '%s' "$calculator" | jq -r '.result.structuredContent.app.name')"
           display_name="$(printf '%s' "$calculator" | jq -r '[.result.structuredContent.app.windows[].root | .. | objects | select(.role == "text box" and .value? == "0")][0].name')"
 
-          xdotool search --name 'Axon Probe Window' windowactivate --sync >/dev/null 2>&1 || true
+          # Bounded: `--sync` waits for the window manager to comply and never gives up on its own.
+          timeout 10 xdotool search --name 'Axon Probe Window' windowactivate --sync >/dev/null 2>&1 || true
           foreground="$(xdotool getactivewindow getwindowname 2>/dev/null || echo '<none>')"
           echo "foreground before the first aimed action: '$foreground'"
           if [ "$foreground" != 'Axon Probe Window' ]; then

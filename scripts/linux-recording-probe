@@ -226,7 +226,9 @@ entry_at="$(centre "$entry_roles" 'Recording note')"
 # backend that misattributes clicks. So the probe window is raised and then confirmed frontmost
 # before every recording, rather than assumed to be.
 probe_window_frontmost() {
-  xdotool search --name "$window_title" windowactivate --sync >/dev/null 2>&1 || true
+  # Bounded: `--sync` waits for the window manager to comply and never gives up on its own. The
+  # check below is what decides, either way.
+  timeout 10 xdotool search --name "$window_title" windowactivate --sync >/dev/null 2>&1 || true
   local active
   active="$(xdotool getactivewindow getwindowname 2>/dev/null || echo '<none>')"
   case "$active" in
