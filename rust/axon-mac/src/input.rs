@@ -181,8 +181,12 @@ pub const WHEEL_STEP_INTERVAL_MS: u64 = 4;
 /// what gets rounded, so the steps sum to exactly the rounded request instead of drifting by a unit
 /// per step. A step that rounds to nothing on both axes is dropped rather than posted.
 pub fn wheel_steps(delta_x: f64, delta_y: f64) -> Vec<(i32, i32)> {
+    // `f64::max` ignores NaN, so finiteness is checked on each axis rather than on the magnitude.
+    if !(delta_x.is_finite() && delta_y.is_finite()) {
+        return Vec::new();
+    }
     let magnitude = delta_x.abs().max(delta_y.abs());
-    if !(magnitude.is_finite() && magnitude > 0.0) {
+    if magnitude == 0.0 {
         return Vec::new();
     }
     let count = ((magnitude / MAX_STEP).ceil() as usize).clamp(1, MAX_STEPS);

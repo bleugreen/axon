@@ -101,6 +101,49 @@ pub fn identity_of(pid: i32, bundle_identifier: Option<String>) -> String {
     bundle_identifier.unwrap_or_else(|| format!("pid:{pid}"))
 }
 
+/// The processes running the application with this bundle identifier.
+pub fn processes_with_bundle(bundle_identifier: &str) -> Vec<i32> {
+    let Ok(bundle) = std::ffi::CString::new(bundle_identifier) else {
+        return Vec::new();
+    };
+    unsafe {
+        let class = objc_getClass(c"NSRunningApplication".as_ptr());
+        let string_class = objc_getClass(c"NSString".as_ptr());
+        if class.is_null() || string_class.is_null() {
+            return Vec::new();
+        }
+        let with_utf8: unsafe extern "C" fn(*mut c_void, *mut c_void, *const c_char) -> *mut c_void =
+            std::mem::transmute(objc_msgSend as *const ());
+        let identifier = with_utf8(
+            string_class,
+            sel_registerName(c"stringWithUTF8String:".as_ptr()),
+            bundle.as_ptr(),
+        );
+        if identifier.is_null() {
+            return Vec::new();
+        }
+        let lookup: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> *mut c_void =
+            std::mem::transmute(objc_msgSend as *const ());
+        let apps = lookup(
+            class,
+            sel_registerName(c"runningApplicationsWithBundleIdentifier:".as_ptr()),
+            identifier,
+        );
+        if apps.is_null() {
+            return Vec::new();
+        }
+        let count: unsafe extern "C" fn(*mut c_void, *mut c_void) -> usize =
+            std::mem::transmute(objc_msgSend as *const ());
+        let at: unsafe extern "C" fn(*mut c_void, *mut c_void, usize) -> *mut c_void =
+            std::mem::transmute(objc_msgSend as *const ());
+        (0..count(apps, sel_registerName(c"count".as_ptr())))
+            .map(|index| at(apps, sel_registerName(c"objectAtIndex:".as_ptr()), index))
+            .filter(|app| !app.is_null() && !send_bool(*app, c"isTerminated"))
+            .map(|app| send_i32(app, c"processIdentifier"))
+            .collect()
+    }
+}
+
 /// Whether `pid` is a running application that has not terminated.
 pub fn is_running(pid: i32) -> bool {
     let app = running_application(pid);
