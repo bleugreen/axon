@@ -2645,4 +2645,693 @@ mod tests {
         assert_eq!(value.pointer("/app/name"), Some(&json!("Calculator")));
         assert!(value.get("application").is_none());
     }
+
+    /// The macOS delivery table, end to end through the router against a backend that records
+    /// every activation and every post. Nothing here touches Core Graphics, so each assertion about
+    /// what was posted is an assertion about what the router asked for.
+    mod native_delivery {
+        use super::*;
+
+        const TEXTEDIT: i32 = 4242;
+        const PRIOR: i32 = 1000;
+        const OTHER: i32 = 5150;
+
+        /// The window, a text area that advertises no press, and a button that does, in the
+        /// flattened order handles index them.
+        const WINDOW: usize = 0;
+        const TEXT_AREA: usize = 1;
+        const BUTTON: usize = 2;
+
+        fn node(role: &str, title: Option<&str>, actions: &[&str], frame: axon_core::Rect) -> axon_core::Node {
+            axon_core::Node {
+                role: role.into(),
+                subrole: None,
+                name: None,
+                title: title.map(str::to_owned),
+                label: None,
+                value: None,
+                description: None,
+                identifier: None,
+                actions: actions.iter().map(|action| action.to_string()).collect(),
+                frame: Some(frame),
+                editable: role == "AXTextArea",
+                focused: None,
+                enabled: Some(true),
+                children: Vec::new(),
+                child_count: None,
+                truncation_reason: None,
+            }
+        }
+
+        fn rect(x: f64, y: f64, width: f64, height: f64) -> axon_core::Rect {
+            axon_core::Rect { x, y, width, height }
+        }
+
+        struct NativeFake {
+            snapshot: Snapshot,
+            apps: Vec<(i32, &'static str, &'static str)>,
+            frontmost: Option<String>,
+            pointer: (f64, f64),
+            activations: Vec<String>,
+            /// Every post, in order: the only record of what reached the session.
+            dispatches: Vec<String>,
+            invokes: Vec<String>,
+            point_owner: Option<i32>,
+            window_origin: (f64, f64),
+            target_alive: bool,
+            denylist: &'static [DenylistEntry],
+        }
+
+        impl NativeFake {
+            fn new() -> Self {
+                let mut window = node("AXWindow", Some("Untitled"), &[], rect(0.0, 0.0, 800.0, 600.0));
+                window.children = vec![
+                    node("AXTextArea", Some("Body"), &[], rect(100.0, 100.0, 200.0, 100.0)),
+                    node("AXButton", Some("Save"), &["AXPress"], rect(10.0, 10.0, 40.0, 20.0)),
+                ];
+                Self {
+                    snapshot: Snapshot::new(axon_core::Application {
+                        name: "TextEdit".into(),
+                        process_id: Some(TEXTEDIT as u32),
+                        identifier: Some("com.apple.TextEdit".into()),
+                        windows: vec![axon_core::Window {
+                            title: Some("Untitled".into()),
+                            root: window,
+                        }],
+                    }),
+                    apps: vec![
+                        (TEXTEDIT, "TextEdit", "com.apple.TextEdit"),
+                        (PRIOR, "Prior", "com.example.Prior"),
+                        (OTHER, "Other", "com.example.Other"),
+                    ],
+                    frontmost: Some("com.example.Prior".into()),
+                    pointer: (5.0, 5.0),
+                    activations: Vec::new(),
+                    dispatches: Vec::new(),
+                    invokes: Vec::new(),
+                    point_owner: Some(TEXTEDIT),
+                    window_origin: (0.0, 0.0),
+                    target_alive: true,
+                    denylist: background::DENYLIST,
+                }
+            }
+
+            fn find(&self, app: &AppQuery) -> Option<(i32, &'static str)> {
+                let mut matches = self.apps.iter().filter(|(pid, name, bundle)| {
+                    app.process_id.is_none_or(|wanted| wanted == *pid as u32)
+                        && app.identifier.as_deref().is_none_or(|wanted| wanted == *bundle)
+                        && app.name.as_deref().is_none_or(|wanted| {
+                            wanted.eq_ignore_ascii_case(name) || wanted == *bundle
+                        })
+                });
+                match (matches.next(), matches.next()) {
+                    (Some((pid, _, bundle)), None) => Some((*pid, *bundle)),
+                    _ => None,
+                }
+            }
+        }
+
+        impl PlatformBackend for NativeFake {
+            fn capabilities(&self) -> Result<Vec<axon_core::CapabilityInfo>, axon_core::BackendError> {
+                Ok(Capability::ALL
+                    .into_iter()
+                    .map(|capability| axon_core::CapabilityInfo {
+                        capability,
+                        usable: true,
+                        restriction: None,
+                    })
+                    .collect())
+            }
+            fn enumerate_applications(
+                &self,
+            ) -> Result<Vec<axon_core::Application>, axon_core::BackendError> {
+                Ok(self
+                    .apps
+                    .iter()
+                    .map(|(pid, name, bundle)| axon_core::Application {
+                        name: (*name).into(),
+                        process_id: Some(*pid as u32),
+                        identifier: Some((*bundle).into()),
+                        windows: Vec::new(),
+                    })
+                    .collect())
+            }
+            fn capture(&mut self, _: &AppQuery) -> Result<Snapshot, axon_core::BackendError> {
+                Ok(self.snapshot.clone())
+            }
+            fn invoke(&mut self, _: &SnapshotHandle, action: &str) -> Result<(), axon_core::BackendError> {
+                self.invokes.push(action.into());
+                Ok(())
+            }
+            fn read_value(&self, _: &SnapshotHandle) -> Result<Option<String>, axon_core::BackendError> {
+                Ok(None)
+            }
+            fn set_value(&mut self, _: &SnapshotHandle, _: &str) -> Result<(), axon_core::BackendError> {
+                unreachable!()
+            }
+            fn focus(&mut self, _: &SnapshotHandle) -> Result<(), axon_core::BackendError> {
+                unreachable!()
+            }
+            fn scroll(&mut self, _: &SnapshotHandle, _: (f64, f64)) -> Result<(), axon_core::BackendError> {
+                self.invokes.push("AXScrollToVisible".into());
+                Ok(())
+            }
+            fn observe(
+                &mut self,
+                _: &AppQuery,
+                _: Duration,
+            ) -> Result<axon_core::Observation, axon_core::BackendError> {
+                unreachable!()
+            }
+            fn wait_for_value(
+                &mut self,
+                _: &SnapshotHandle,
+                _: &Value,
+                _: Duration,
+            ) -> Result<axon_core::Observation, axon_core::BackendError> {
+                unreachable!()
+            }
+            fn pointer_click(&mut self, point: (f64, f64)) -> Result<(), axon_core::BackendError> {
+                self.dispatches.push(format!("click {},{}", point.0, point.1));
+                self.pointer = point;
+                Ok(())
+            }
+            fn pointer_drag(
+                &mut self,
+                _: (f64, f64),
+                _: (f64, f64),
+                _: Duration,
+            ) -> Result<(), axon_core::BackendError> {
+                unreachable!()
+            }
+            fn keyboard(
+                &mut self,
+                _: &AppQuery,
+                intent: KeyboardIntent<'_>,
+            ) -> Result<(), axon_core::BackendError> {
+                self.dispatches.push(format!("hid {}", intent.as_str()));
+                Ok(())
+            }
+            fn screenshot(
+                &mut self,
+                _: &AppQuery,
+            ) -> Result<axon_core::Screenshot, axon_core::BackendError> {
+                unreachable!()
+            }
+            fn hit_test(
+                &mut self,
+                _: (f64, f64),
+            ) -> Result<Option<axon_core::Node>, axon_core::BackendError> {
+                Ok(None)
+            }
+            fn supports_foreground_transaction(&self) -> bool {
+                true
+            }
+            fn frontmost_application(&mut self) -> Result<Option<String>, axon_core::BackendError> {
+                Ok(self.frontmost.clone())
+            }
+            fn activate_application(&mut self, identity: &str) -> Result<bool, axon_core::BackendError> {
+                self.activations.push(identity.into());
+                self.frontmost = Some(identity.into());
+                Ok(true)
+            }
+            fn application_process_identifier(&mut self, identity: &str) -> Option<i64> {
+                self.apps
+                    .iter()
+                    .find(|(_, _, bundle)| *bundle == identity)
+                    .map(|(pid, _, _)| *pid as i64)
+            }
+            fn pointer_location(&mut self) -> Result<Option<(f64, f64)>, axon_core::BackendError> {
+                Ok(Some(self.pointer))
+            }
+            fn move_pointer(&mut self, to: (f64, f64)) -> Result<bool, axon_core::BackendError> {
+                self.pointer = to;
+                Ok(true)
+            }
+        }
+
+        impl PointerTargetVerifier for NativeFake {
+            fn verify_pointer_target(
+                &mut self,
+                _: &SnapshotHandle,
+                _: (f64, f64),
+            ) -> Result<bool, axon_core::BackendError> {
+                Ok(self.point_owner == Some(TEXTEDIT))
+            }
+        }
+        impl TextRecognitionProvider for NativeFake {
+            fn recognize_text(
+                &mut self,
+                _: &AppQuery,
+            ) -> Result<Vec<axon_core::RecognizedText>, axon_core::BackendError> {
+                Ok(Vec::new())
+            }
+        }
+        impl VisualObservationProvider for NativeFake {
+            fn observe_visuals(
+                &mut self,
+                _: &AppQuery,
+                _: bool,
+                _: bool,
+            ) -> Result<VisualObservation, axon_core::BackendError> {
+                unreachable!()
+            }
+        }
+        impl ReadableStateProvider for NativeFake {
+            fn readable_state(
+                &self,
+                _: &SnapshotHandle,
+            ) -> Result<Map<String, Value>, axon_core::BackendError> {
+                unreachable!()
+            }
+        }
+        impl NativeInput for NativeFake {
+            fn point_owner(&mut self, _: (f64, f64)) -> Result<Option<i32>, axon_core::BackendError> {
+                Ok(self.point_owner)
+            }
+            fn focused_window_frame(
+                &mut self,
+                app: &AppQuery,
+            ) -> Result<Option<axon_core::Rect>, axon_core::BackendError> {
+                Ok(self
+                    .find(app)
+                    .map(|_| rect(self.window_origin.0, self.window_origin.1, 800.0, 600.0)))
+            }
+            fn scroll_wheel(
+                &mut self,
+                point: (f64, f64),
+                delta: (f64, f64),
+            ) -> Result<Vec<(i32, i32)>, axon_core::BackendError> {
+                self.dispatches
+                    .push(format!("wheel {},{} by {},{}", point.0, point.1, delta.0, delta.1));
+                self.pointer = point;
+                Ok(input::wheel_steps(delta.0, delta.1))
+            }
+        }
+        impl BackgroundApplicationKeyboard for NativeFake {
+            fn application_process(
+                &mut self,
+                app: &AppQuery,
+            ) -> Result<Option<ApplicationProcess>, axon_core::BackendError> {
+                Ok(self.find(app).map(|(pid, bundle)| ApplicationProcess {
+                    process_identifier: pid,
+                    identity: bundle.into(),
+                }))
+            }
+            fn application_keyboard_denylist(&self) -> &'static [DenylistEntry] {
+                self.denylist
+            }
+            fn dispatch_application_keyboard(
+                &mut self,
+                process: &ApplicationProcess,
+                intent: KeyboardIntent<'_>,
+            ) -> Result<ApplicationDispatch, BackgroundDispatchError> {
+                if !self.target_alive {
+                    return Err(BackgroundDispatchError::Stale(format!(
+                        "{} is no longer running as process {}, so nothing was posted",
+                        process.identity, process.process_identifier
+                    )));
+                }
+                self.dispatches
+                    .push(format!("pid {} {}", process.process_identifier, intent.as_str()));
+                Ok(ApplicationDispatch {
+                    frontmost_unchanged: true,
+                    pointer_unchanged: true,
+                })
+            }
+        }
+        impl axon_core::RecordingEvidenceProvider for NativeFake {
+            fn read_focused(
+                &mut self,
+            ) -> Result<Option<axon_core::RecordedFocusedEvidence>, axon_core::BackendError> {
+                Ok(None)
+            }
+            fn capture_snapshot(
+                &mut self,
+                _: &axon_core::RecordedAppIdentity,
+            ) -> Result<Option<Snapshot>, axon_core::BackendError> {
+                Ok(None)
+            }
+            fn settle(
+                &mut self,
+                _: usize,
+                _: &str,
+            ) -> Result<axon_core::RecordedSettleEvidence, axon_core::BackendError> {
+                Ok(Default::default())
+            }
+        }
+
+        fn router(backend: NativeFake) -> Router<NativeFake> {
+            Router::new(backend)
+        }
+
+        fn call(router: &mut Router<NativeFake>, tool: &str, arguments: Value) -> Result<Value, JsonRpcError> {
+            match router
+                .request(JsonRpcRequest::new(Some(JsonRpcId::Integer(1)), tool, Some(arguments)))
+                .unwrap()
+            {
+                JsonRpcResponse::Success(success) => Ok(success.result),
+                JsonRpcResponse::Failure(failure) => Err(failure.error),
+            }
+        }
+
+        fn ok(router: &mut Router<NativeFake>, tool: &str, arguments: Value) -> Value {
+            call(router, tool, arguments.clone())
+                .unwrap_or_else(|error| panic!("{tool} {arguments} failed: {error:?}"))
+        }
+
+        /// The semantic target for one element of the fake's snapshot, registered the way a
+        /// `look` registers it.
+        fn element(router: &mut Router<NativeFake>, index: usize) -> Value {
+            let snapshot = router.backend.snapshot.clone();
+            let names = router.register_snapshot(&snapshot);
+            let name = names
+                .iter()
+                .find(|name| name.source_index == index)
+                .unwrap_or_else(|| panic!("element {index} has a semantic name"))
+                .name
+                .clone();
+            json!({"app": "TextEdit", "name": name})
+        }
+
+        fn also_refused(result: &Value) -> String {
+            result["refusal"]["alsoRefused"].to_string()
+        }
+
+        const DEAF: DenylistEntry = DenylistEntry {
+            bundle_id: "com.apple.TextEdit",
+            reason: "its view reads only window-server routed key events",
+            evidence: &["textedit-keyboard-2099-01-01"],
+        };
+
+        #[test]
+        fn text_into_an_application_nobody_measured_is_delivered_at_the_application_rung() {
+            let mut router = router(NativeFake::new());
+            let result = ok(&mut router, "keyboard", json!({"app": "TextEdit", "text": "hi"}));
+
+            assert_eq!(result["deliveryPolicy"], "backgroundOnly");
+            assert_eq!(result["delivery"], "application");
+            assert_eq!(result["dispatchSuccess"], true);
+            // Dispatch is not delivery: keyboard declares no postcondition.
+            assert_eq!(result["success"], false);
+            assert_eq!(result["dispatch"]["mechanism"], "CGEventPostToPid");
+            assert_eq!(
+                result["backgroundDelivery"]["targetApplication"],
+                "com.apple.TextEdit"
+            );
+            assert_eq!(result["backgroundDelivery"]["pointerAsserted"], false);
+            assert_eq!(
+                result["backgroundDelivery"]["variant"],
+                background::KEYBOARD_VARIANT
+            );
+            assert!(router.backend.activations.is_empty(), "nothing was activated");
+            assert_eq!(router.backend.dispatches, vec![format!("pid {TEXTEDIT} hi")]);
+        }
+
+        #[test]
+        fn a_named_key_without_modifiers_also_travels_the_application_rung() {
+            let mut router = router(NativeFake::new());
+            let result = ok(&mut router, "keyboard", json!({"app": "TextEdit", "key": "Return"}));
+            assert_eq!(result["delivery"], "application");
+            assert_eq!(router.backend.dispatches, vec![format!("pid {TEXTEDIT} Return")]);
+        }
+
+        #[test]
+        fn a_denylisted_application_refuses_with_its_row_and_posts_nothing() {
+            let mut backend = NativeFake::new();
+            backend.denylist = &[DEAF];
+            let mut router = router(backend);
+            let result = ok(&mut router, "keyboard", json!({"app": "TextEdit", "text": "hi"}));
+
+            assert_eq!(result["delivery"], Value::Null);
+            assert_eq!(result["refusal"]["reason"], "foregroundNotPermitted");
+            let obstacles = also_refused(&result);
+            assert!(obstacles.contains("textedit-keyboard-2099-01-01"), "{obstacles}");
+            assert!(obstacles.contains("\"application\""), "{obstacles}");
+            assert!(router.backend.dispatches.is_empty());
+        }
+
+        #[test]
+        fn a_chord_skips_the_application_rung_and_needs_the_foreground() {
+            let mut router = router(NativeFake::new());
+            let refused = ok(&mut router, "keyboard", json!({"app": "TextEdit", "key": "cmd+s"}));
+            assert_eq!(refused["refusal"]["reason"], "foregroundNotPermitted");
+            assert!(
+                also_refused(&refused).contains("modified keystrokes were not measured"),
+                "{}",
+                also_refused(&refused)
+            );
+            assert!(router.backend.dispatches.is_empty());
+            assert!(router.backend.activations.is_empty());
+
+            let permitted = ok(
+                &mut router,
+                "keyboard",
+                json!({"app": "TextEdit", "key": "cmd+s", "deliveryPolicy": "foregroundPermitted"}),
+            );
+            assert_eq!(permitted["delivery"], "foreground");
+            assert_eq!(permitted["dispatch"]["mechanism"], "CGEventPost(kCGHIDEventTap)");
+            assert_eq!(permitted["foreground"]["activationProved"], true);
+            assert_eq!(permitted["foreground"]["restored"], true);
+            assert_eq!(permitted["foreground"]["priorApp"], "com.example.Prior");
+            assert_eq!(permitted["foreground"]["priorAppProcessIdentifier"], PRIOR);
+            // Keystrokes never move the pointer, so there was nothing to put back.
+            assert_eq!(permitted["foreground"]["pointerRestored"], Value::Null);
+            assert_eq!(
+                router.backend.activations,
+                vec!["com.apple.TextEdit".to_string(), "com.example.Prior".to_string()]
+            );
+            assert_eq!(router.backend.dispatches, vec!["hid cmd+s".to_string()]);
+        }
+
+        #[test]
+        fn a_process_that_exits_between_plan_and_dispatch_is_stale_and_posts_nothing() {
+            let mut backend = NativeFake::new();
+            backend.target_alive = false;
+            let mut router = router(backend);
+            let error = call(&mut router, "keyboard", json!({"app": "TextEdit", "text": "hi"}))
+                .unwrap_err();
+            assert_eq!(error.code, -32003);
+            assert!(router.backend.dispatches.is_empty());
+        }
+
+        #[test]
+        fn an_unaimed_keyboard_request_has_only_the_frontmost_and_only_when_permitted() {
+            let mut router = router(NativeFake::new());
+            let refused = ok(&mut router, "keyboard", json!({"text": "hi"}));
+            assert_eq!(refused["refusal"]["reason"], "foregroundNotPermitted");
+            assert!(
+                also_refused(&refused).contains("no process to post it to"),
+                "{}",
+                also_refused(&refused)
+            );
+            assert!(router.backend.dispatches.is_empty());
+
+            let permitted = ok(
+                &mut router,
+                "keyboard",
+                json!({"text": "hi", "deliveryPolicy": "foregroundPermitted"}),
+            );
+            assert_eq!(permitted["delivery"], "foreground");
+            assert_eq!(permitted["foreground"]["alreadyFrontmost"], true);
+            assert!(router.backend.activations.is_empty());
+            assert_eq!(router.backend.dispatches, vec!["hid hi".to_string()]);
+        }
+
+        #[test]
+        fn a_key_this_backend_cannot_press_is_malformed_rather_than_refused() {
+            let mut router = router(NativeFake::new());
+            for key in ["Insert", "cmd+é", "hyper+a"] {
+                let error = call(&mut router, "keyboard", json!({"app": "TextEdit", "key": key}))
+                    .unwrap_err();
+                assert_eq!(error.code, -32602, "{key}");
+            }
+            assert!(router.backend.dispatches.is_empty());
+        }
+
+        #[test]
+        fn every_pointer_form_refuses_by_mechanism_under_background_only() {
+            let mut router = router(NativeFake::new());
+            let text_area = element(&mut router, TEXT_AREA);
+            for arguments in [
+                json!({"target": {"app": "com.apple.TextEdit", "point": {"x": 150, "y": 150}}}),
+                json!({"target": text_area}),
+                json!({"target": {"location": {"app": "TextEdit", "text": "Save"}}}),
+            ] {
+                let result = ok(&mut router, "click", arguments.clone());
+                assert_eq!(result["delivery"], Value::Null, "{arguments}");
+                assert_eq!(result["refusal"]["reason"], "foregroundNotPermitted", "{arguments}");
+                let obstacles = also_refused(&result);
+                assert!(obstacles.contains("window number 0"), "{obstacles}");
+                assert!(obstacles.contains("without the window server's hit testing"), "{obstacles}");
+            }
+            assert!(router.backend.dispatches.is_empty());
+            assert!(router.backend.activations.is_empty());
+            assert!(router.backend.invokes.is_empty());
+        }
+
+        #[test]
+        fn a_recorded_point_fallback_resolves_its_bundle_identifier_and_restores_the_pointer() {
+            let mut router = router(NativeFake::new());
+            let result = ok(
+                &mut router,
+                "click",
+                json!({
+                    "target": {"app": "com.apple.TextEdit", "point": {"x": 150, "y": 150}},
+                    "deliveryPolicy": "foregroundPermitted"
+                }),
+            );
+            assert_eq!(result["delivery"], "foreground");
+            assert_eq!(result["dispatchSuccess"], true);
+            assert_eq!(result["success"], false);
+            assert_eq!(result["foreground"]["activationProved"], true);
+            assert_eq!(result["foreground"]["pointerRestored"], true);
+            assert_eq!(router.backend.pointer, (5.0, 5.0));
+            assert_eq!(
+                router.backend.activations,
+                vec!["com.apple.TextEdit".to_string(), "com.example.Prior".to_string()]
+            );
+            assert_eq!(router.backend.dispatches, vec!["click 150,150".to_string()]);
+        }
+
+        #[test]
+        fn a_window_point_is_offset_by_the_focused_window_and_a_screenshot_point_is_refused() {
+            let mut backend = NativeFake::new();
+            backend.window_origin = (100.0, 50.0);
+            let mut router = router(backend);
+            ok(
+                &mut router,
+                "click",
+                json!({
+                    "target": {"app": "TextEdit", "coordinateSpace": "window", "point": {"x": 10, "y": 20}},
+                    "deliveryPolicy": "foregroundPermitted"
+                }),
+            );
+            assert_eq!(router.backend.dispatches, vec!["click 110,70".to_string()]);
+
+            let error = call(
+                &mut router,
+                "click",
+                json!({"target": {"app": "TextEdit", "coordinateSpace": "screenshot", "x": 1, "y": 2}}),
+            )
+            .unwrap_err();
+            assert_eq!(error.code, -32004);
+            assert_eq!(error.data.unwrap()["capability"], "screenshot-coordinate-space");
+        }
+
+        #[test]
+        fn a_point_over_another_application_is_stale_and_posts_nothing() {
+            let mut backend = NativeFake::new();
+            backend.point_owner = Some(OTHER);
+            let mut router = router(backend);
+            let error = call(
+                &mut router,
+                "click",
+                json!({
+                    "target": {"app": "TextEdit", "point": {"x": 150, "y": 150}},
+                    "deliveryPolicy": "foregroundPermitted"
+                }),
+            )
+            .unwrap_err();
+            assert_eq!(error.code, -32003);
+            // The session was still handed back, and the error says so.
+            assert_eq!(error.data.unwrap()["foreground"]["restored"], true);
+            assert!(router.backend.dispatches.is_empty());
+        }
+
+        #[test]
+        fn an_element_that_advertises_no_press_is_clicked_at_its_centre() {
+            let mut router = router(NativeFake::new());
+            let text_area = element(&mut router, TEXT_AREA);
+            let result = ok(
+                &mut router,
+                "click",
+                json!({"target": text_area, "deliveryPolicy": "foregroundPermitted"}),
+            );
+            assert_eq!(result["delivery"], "foreground");
+            assert!(result["resolution"].is_object());
+            assert!(router.backend.invokes.is_empty(), "no AXPress was attempted");
+            assert_eq!(router.backend.dispatches, vec!["click 200,150".to_string()]);
+        }
+
+        #[test]
+        fn an_element_that_advertises_press_stays_semantic() {
+            let mut router = router(NativeFake::new());
+            let button = element(&mut router, BUTTON);
+            let result = ok(&mut router, "click", json!({"target": button}));
+            assert_eq!(result["delivery"], "semantic");
+            assert_eq!(result["dispatch"]["mechanism"], "AXPress");
+            assert_eq!(router.backend.invokes, vec!["AXPress".to_string()]);
+            assert!(router.backend.dispatches.is_empty());
+        }
+
+        #[test]
+        fn the_default_scroll_refuses_by_mechanism_under_background_only() {
+            let mut router = router(NativeFake::new());
+            let text_area = element(&mut router, TEXT_AREA);
+            let params = validated_params("scroll", json!({"target": text_area}));
+            assert_eq!(params["deltaY"], -120);
+            let result = ok(&mut router, "scroll", Value::Object(params));
+
+            assert_eq!(result["refusal"]["reason"], "foregroundNotPermitted");
+            let obstacles = also_refused(&result);
+            assert!(obstacles.contains("cannot carry a scroll delta"), "{obstacles}");
+            assert!(obstacles.contains("window number 0"), "{obstacles}");
+            assert!(!obstacles.contains("directional-scroll"), "{obstacles}");
+            assert!(router.backend.dispatches.is_empty());
+        }
+
+        #[test]
+        fn a_permitted_wheel_scroll_reports_its_pixel_steps() {
+            let mut router = router(NativeFake::new());
+            let result = ok(
+                &mut router,
+                "scroll",
+                json!({"app": "TextEdit", "deltaY": -400, "deliveryPolicy": "foregroundPermitted"}),
+            );
+            assert_eq!(result["delivery"], "foreground");
+            assert_eq!(result["foreground"]["pointerRestored"], true);
+            assert_eq!(result["eventPath"]["units"], "pixel");
+            let steps = result["eventPath"]["steps"].as_array().unwrap();
+            assert_eq!(steps.len(), 4);
+            let total: i64 = steps.iter().map(|step| step["deltaY"].as_i64().unwrap()).sum();
+            assert_eq!(total, -400);
+            assert_eq!(router.backend.dispatches, vec!["wheel 400,300 by 0,-400".to_string()]);
+        }
+
+        #[test]
+        fn a_zero_delta_with_a_semantic_target_stays_scroll_to_visible() {
+            let mut router = router(NativeFake::new());
+            let text_area = element(&mut router, TEXT_AREA);
+            let result = ok(
+                &mut router,
+                "scroll",
+                json!({"target": text_area, "deltaX": 0, "deltaY": 0}),
+            );
+            assert_eq!(result["delivery"], "semantic");
+            assert_eq!(router.backend.invokes, vec!["AXScrollToVisible".to_string()]);
+            assert!(router.backend.dispatches.is_empty());
+        }
+
+        #[test]
+        fn a_scroll_with_nowhere_to_aim_is_malformed() {
+            let mut router = router(NativeFake::new());
+            for arguments in [
+                json!({"deltaY": -120}),
+                json!({"target": {"point": {"x": 1, "y": 2}}, "deltaX": 0, "deltaY": 0}),
+                json!({"app": "TextEdit", "deltaX": 0, "deltaY": 0}),
+            ] {
+                let error = call(&mut router, "scroll", arguments.clone()).unwrap_err();
+                assert_eq!(error.code, -32602, "{arguments}");
+            }
+            assert!(router.backend.dispatches.is_empty());
+        }
+
+        #[test]
+        fn the_window_handle_is_registered_too() {
+            // A guard on the fixture itself: the indices above name the elements they claim to.
+            let mut router = router(NativeFake::new());
+            assert_eq!(element(&mut router, WINDOW)["app"], "TextEdit");
+        }
+    }
 }
