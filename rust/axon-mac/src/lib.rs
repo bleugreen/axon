@@ -2960,6 +2960,23 @@ mod tests {
                 })
             }
         }
+        impl axon_core::GlobalInputObserver for NativeFake {
+            fn start(&mut self, _: &axon_core::RecordingScope) -> Result<(), axon_core::BackendError> {
+                unreachable!()
+            }
+            fn poll(
+                &mut self,
+                _: Duration,
+            ) -> Result<Vec<axon_core::RecordedInputEvent>, axon_core::BackendError> {
+                unreachable!()
+            }
+            fn stop(&mut self) -> Result<(), axon_core::BackendError> {
+                Ok(())
+            }
+            fn is_recording(&self) -> bool {
+                false
+            }
+        }
         impl axon_core::RecordingEvidenceProvider for NativeFake {
             fn read_focused(
                 &mut self,
