@@ -77,14 +77,24 @@ pub enum DeliveryRung {
     /// Target-bound input derived from verified window geometry, delivered without activating the
     /// application and without moving the real pointer.
     Pixel,
+    /// Input bound to one application process, delivered without activating it and without
+    /// touching the pointer; carries no coordinate.
+    ///
+    /// Distinct from `Pixel` because the binding is to a process rather than to a verified window:
+    /// the application routes the input itself. On macOS this is `CGEventPostToPid` keyboard
+    /// input, which the five `*-keyboard-2026-08-16` rows in
+    /// `scripts/macos-toolkit-acceptance/results.json` measured reaching the key window of
+    /// WebKit, Chromium, Electron, AppKit, and WKWebView targets alike.
+    Application,
     /// Global input devices: CGEvent on the HID tap, SendInput, XTest, or a virtual pointer.
     Foreground,
 }
 
 impl DeliveryRung {
-    pub const ALL: [DeliveryRung; 3] = [
+    pub const ALL: [DeliveryRung; 4] = [
         DeliveryRung::Semantic,
         DeliveryRung::Pixel,
+        DeliveryRung::Application,
         DeliveryRung::Foreground,
     ];
 
@@ -92,6 +102,7 @@ impl DeliveryRung {
         match self {
             DeliveryRung::Semantic => "semantic",
             DeliveryRung::Pixel => "pixel",
+            DeliveryRung::Application => "application",
             DeliveryRung::Foreground => "foreground",
         }
     }
@@ -101,7 +112,8 @@ impl DeliveryRung {
         match self {
             DeliveryRung::Semantic => 0,
             DeliveryRung::Pixel => 1,
-            DeliveryRung::Foreground => 2,
+            DeliveryRung::Application => 2,
+            DeliveryRung::Foreground => 3,
         }
     }
 
@@ -384,7 +396,7 @@ fn supersede(
 
 /// Chooses the rung an action will use before anything native happens.
 ///
-/// The ladder is fixed per action and ordered semantic, then pixel, then foreground. The planner's
+/// The ladder is fixed per action and ordered semantic, pixel, application, then foreground. The planner's
 /// only job is to answer which of those the caller's policy and the current runtime allow, and to
 /// explain the answer when it is none of them.
 pub fn select_delivery(
@@ -466,6 +478,7 @@ pub fn select_delivery(
             DeliveryRefusalReason::NoDeliveryCandidate,
             match after {
                 Some(DeliveryRung::Semantic) => DeliveryRung::Pixel,
+                Some(DeliveryRung::Pixel) => DeliveryRung::Application,
                 Some(_) => DeliveryRung::Foreground,
                 None => DeliveryRung::Semantic,
             },
