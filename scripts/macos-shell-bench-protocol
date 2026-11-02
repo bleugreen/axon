@@ -7,7 +7,8 @@ staged (default ~/AxonBench/axn249), with someone at the Mac's screen:
     ~/AxonBench/axn249/macos-shell-bench-protocol
 
 It does every step that a program can do itself: launchctl, socket calls on the bench socket, the
-TCC dumps (sudo asks for a password once per dump), kill/kickstart, and the TCC diff. It stops and
+TCC dumps (the system database directly, or through `sudo -n`, recording which), kill/kickstart,
+and the TCC diff. It stops and
 asks only for what needs a person: reading the menu, recording in Calculator, and answering the
 Automation dialog. Every step lands in transcript.jsonl beside the bundle, and the run ends by
 tearing the bench down whatever happened.
@@ -116,10 +117,18 @@ def tcc_dump(name):
     rows = []
     user = run("/usr/bin/sqlite3", "-separator", "\t", str(USER_TCC), TCC_QUERY)
     rows += ["user\t" + line for line in user.stdout.splitlines()]
-    system = run("/usr/bin/sudo", "/usr/bin/sqlite3", "-separator", "\t", SYSTEM_TCC, TCC_QUERY)
+    # The system database holds Accessibility and Screen Recording. An ssh session can usually
+    # read it directly through sshd's Full Disk Access; sudo is the fallback, non-interactive so a
+    # user who is not an administrator is not asked for a password that cannot work.
+    system = run("/usr/bin/sqlite3", "-separator", "\t", SYSTEM_TCC, TCC_QUERY)
+    route = "direct"
+    if system.returncode != 0:
+        system = run("/usr/bin/sudo", "-n", "/usr/bin/sqlite3", "-separator", "\t", SYSTEM_TCC, TCC_QUERY)
+        route = "sudo" if system.returncode == 0 else "unreadable"
     rows += ["system\t" + line for line in system.stdout.splitlines()]
     (BENCH / name).write_text("\n".join(rows) + "\n")
-    log("tcc-dump", file=name, rows=len(rows), userError=user.stderr.strip(), systemError=system.stderr.strip())
+    log("tcc-dump", file=name, rows=len(rows), systemRoute=route,
+        userError=user.stderr.strip(), systemError=system.stderr.strip())
     return rows
 
 
