@@ -4,7 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 ARTIFACT="schema/tool-surface-v1.json"
-TMP="$(mktemp "${TMPDIR:-/tmp}/tool-surface-v1.XXXXXX.json")"
+# BSD mktemp substitutes only trailing X's, so a suffix after them would make one fixed name.
+TMP="$(mktemp "${TMPDIR:-/tmp}/tool-surface-v1.XXXXXX")"
 trap 'rm -f "$TMP"' EXIT
 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
   swift run --disable-sandbox --quiet tool-surface-exporter "$TMP"
@@ -14,7 +15,9 @@ if [[ "${1:-}" == "--write" ]]; then
   # The generated clients are derived from this artifact, so rewriting it without them leaves the
   # tree internally inconsistent.
   scripts/check-sdk-ts --write
-  exec scripts/check-sdk-python --write
+  # Not exec: that would replace this shell before its EXIT trap removes the temporary artifact.
+  scripts/check-sdk-python --write
+  exit 0
 fi
 if [[ $# -gt 0 ]]; then
   printf 'unknown argument: %s\n' "$1" >&2
