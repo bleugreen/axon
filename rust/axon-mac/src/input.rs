@@ -161,8 +161,8 @@ pub fn stroke(spec: &str) -> Result<Stroke, String> {
     })
 }
 
-/// Whether a `key` intent holds any modifier. Text never does: it is posted with no flags at all,
-/// which is the variant the campaign measured.
+/// Whether a `key` intent holds any modifier. Text never does: it is posted without setting any
+/// flags, which is the variant the campaign measured.
 pub fn has_modifiers(spec: &str) -> Result<bool, String> {
     Ok(!axon_core::parse_chord(spec)?.modifiers.is_empty())
 }
@@ -296,7 +296,14 @@ pub mod native {
 
     /// Builds a down and an up event before posting either, so a creation failure posts nothing
     /// rather than leaving a key held.
-    fn key_pair(code: u16, flags: u64, payload: Option<&[u16]>) -> Result<[CGEventRef; 2], BackendError> {
+    ///
+    /// `flags` is `None` for text, which leaves Core Graphics' own flags in place exactly as the
+    /// measured variant did; a `key` intent sets its chord's flags, as the Swift daemon does.
+    fn key_pair(
+        code: u16,
+        flags: Option<u64>,
+        payload: Option<&[u16]>,
+    ) -> Result<[CGEventRef; 2], BackendError> {
         let down = created(
             unsafe { CGEventCreateKeyboardEvent(std::ptr::null(), code, true) },
             "key-down",
@@ -315,7 +322,9 @@ pub mod native {
         };
         for event in [down, up] {
             unsafe {
-                CGEventSetFlags(event, flags);
+                if let Some(flags) = flags {
+                    CGEventSetFlags(event, flags);
+                }
                 if let Some(payload) = payload {
                     CGEventKeyboardSetUnicodeString(event, payload.len(), payload.as_ptr());
                 }
@@ -332,7 +341,7 @@ pub mod native {
             }
             let payload: Vec<u16> = character.encode_utf16(&mut [0; 2]).to_vec();
             let code = ansi_key_code(character).unwrap_or(0);
-            for event in key_pair(code, 0, Some(&payload))? {
+            for event in key_pair(code, None, Some(&payload))? {
                 post(destination, event);
             }
         }
@@ -341,7 +350,7 @@ pub mod native {
 
     /// Presses one key with its modifier flags set on both the down and the up event.
     pub fn post_stroke(destination: Destination, stroke: Stroke) -> Result<(), BackendError> {
-        for event in key_pair(stroke.code, stroke.flags, None)? {
+        for event in key_pair(stroke.code, Some(stroke.flags), None)? {
             post(destination, event);
         }
         Ok(())
