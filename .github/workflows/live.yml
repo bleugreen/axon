@@ -974,7 +974,11 @@ jobs:
         working-directory: rust
         run: |
           set -euo pipefail
-          if pgrep -u "$(id -u)" -f '[/]usr/bin/gnome-calculator' >/dev/null; then
+          # Matched on the command line in either form it takes: `gnome-calculator` started from
+          # PATH, as here, or by its full path, as the desktop launches it. Calculator is a
+          # single-instance application, so a launch beside a running one hands its arguments to
+          # that one and exits -- `--equation 0` would never reset the display this step reads.
+          if pgrep -u "$(id -u)" -f '(^|/)gnome-calculator( |$)' >/dev/null; then
             echo '::error::GNOME Calculator is already running; refusing to alter an existing desktop session.'
             exit 1
           fi
@@ -982,6 +986,7 @@ jobs:
           daemon=target/debug/axon-linux
           "$daemon" serve >/tmp/axon-linux-x11-daemon.log 2>&1 &
           daemon_pid=$!
+          calculator_pid=""
           # Bounded: `wait` on a daemon that shutdown could not reach never returns, and the job
           # dies on the timeout instead of the real failure.
           cleanup() {
@@ -991,14 +996,17 @@ jobs:
               sleep 0.25
             done
             kill -9 "$daemon_pid" >/dev/null 2>&1 || true
-            # Waited for, not just signalled: the next step refuses to start while a Calculator is
-            # running, and one still exiting from here would read as somebody else's.
-            pkill -u "$(id -u)" -f '[/]usr/bin/gnome-calculator' >/dev/null 2>&1 || true
-            for _ in {1..40}; do
-              if ! pgrep -u "$(id -u)" -f '[/]usr/bin/gnome-calculator' >/dev/null; then break; fi
-              sleep 0.25
-            done
-            pkill -9 -u "$(id -u)" -f '[/]usr/bin/gnome-calculator' >/dev/null 2>&1 || true
+            # By the pid this step launched, and waited for rather than just signalled: the next
+            # step refuses to start while a Calculator is running, and one still exiting from here
+            # would read as somebody else's.
+            if [ -n "$calculator_pid" ]; then
+              kill "$calculator_pid" >/dev/null 2>&1 || true
+              for _ in {1..40}; do
+                if ! kill -0 "$calculator_pid" 2>/dev/null; then break; fi
+                sleep 0.25
+              done
+              kill -9 "$calculator_pid" >/dev/null 2>&1 || true
+            fi
           }
           trap cleanup EXIT
           ../scripts/assert-daemon-under-test "$daemon" "$daemon_pid" /tmp/axon-linux-x11-daemon.log
@@ -1088,7 +1096,7 @@ jobs:
         working-directory: rust
         run: |
           set -euo pipefail
-          if pgrep -u "$(id -u)" -f '[/]usr/bin/gnome-calculator' >/dev/null; then
+          if pgrep -u "$(id -u)" -f '(^|/)gnome-calculator( |$)' >/dev/null; then
             echo '::error::GNOME Calculator is already running; refusing to alter an existing desktop session.'
             exit 1
           fi
@@ -1096,6 +1104,7 @@ jobs:
           daemon=target/debug/axon-linux
           "$daemon" serve >/tmp/axon-linux-x11-input.log 2>&1 &
           daemon_pid=$!
+          calculator_pid=""
           holder_pid=""
           cleanup() {
             "$daemon" shutdown >/dev/null 2>&1 || true
@@ -1104,13 +1113,15 @@ jobs:
               sleep 0.25
             done
             kill -9 "$daemon_pid" >/dev/null 2>&1 || true
-            pkill -u "$(id -u)" -f '[/]usr/bin/gnome-calculator' >/dev/null 2>&1 || true
-            if [ -n "$holder_pid" ]; then kill "$holder_pid" >/dev/null 2>&1 || true; fi
-            for _ in {1..40}; do
-              if ! pgrep -u "$(id -u)" -f '[/]usr/bin/gnome-calculator' >/dev/null; then break; fi
-              sleep 0.25
+            for pid in "$calculator_pid" "$holder_pid"; do
+              if [ -z "$pid" ]; then continue; fi
+              kill "$pid" >/dev/null 2>&1 || true
+              for _ in {1..40}; do
+                if ! kill -0 "$pid" 2>/dev/null; then break; fi
+                sleep 0.25
+              done
+              kill -9 "$pid" >/dev/null 2>&1 || true
             done
-            pkill -9 -u "$(id -u)" -f '[/]usr/bin/gnome-calculator' >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
           ../scripts/assert-daemon-under-test "$daemon" "$daemon_pid" /tmp/axon-linux-x11-input.log
@@ -1125,6 +1136,7 @@ jobs:
           done
 
           gnome-calculator --equation 0 >/dev/null 2>&1 &
+          calculator_pid=$!
           # The foreground holder. Activation has to be proved from somewhere for the claim to mean
           # anything, and it has to be somewhere on the accessibility bus: the daemon refuses to take
           # the foreground from a window it could not name and so could not give back.
