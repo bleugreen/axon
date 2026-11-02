@@ -195,13 +195,29 @@ pub fn stroke_events(stroke: Stroke) -> Vec<KeyEvent> {
     let mut flags = 0;
     for &(flag, code) in &held {
         flags |= flag;
-        events.push(KeyEvent { code, down: true, flags });
+        events.push(KeyEvent {
+            code,
+            down: true,
+            flags,
+        });
     }
-    events.push(KeyEvent { code: stroke.code, down: true, flags });
-    events.push(KeyEvent { code: stroke.code, down: false, flags });
+    events.push(KeyEvent {
+        code: stroke.code,
+        down: true,
+        flags,
+    });
+    events.push(KeyEvent {
+        code: stroke.code,
+        down: false,
+        flags,
+    });
     for &(flag, code) in held.iter().rev() {
         flags &= !flag;
-        events.push(KeyEvent { code, down: false, flags });
+        events.push(KeyEvent {
+            code,
+            down: false,
+            flags,
+        });
     }
     events
 }
@@ -353,7 +369,10 @@ pub mod native {
     /// Every event's flags are set explicitly. A null-source event otherwise inherits the session's
     /// current modifier state, so a modifier the user happens to be holding would turn background
     /// text into shortcuts in an application they are not looking at.
-    fn build(events: &[KeyEvent], payload: Option<&[u16]>) -> Result<Vec<CGEventRef>, BackendError> {
+    fn build(
+        events: &[KeyEvent],
+        payload: Option<&[u16]>,
+    ) -> Result<Vec<CGEventRef>, BackendError> {
         let mut built = Vec::with_capacity(events.len());
         for event in events {
             match created(
@@ -365,7 +384,11 @@ pub mod native {
                     unsafe {
                         CGEventSetFlags(created, event.flags);
                         if let Some(payload) = payload {
-                            CGEventKeyboardSetUnicodeString(created, payload.len(), payload.as_ptr());
+                            CGEventKeyboardSetUnicodeString(
+                                created,
+                                payload.len(),
+                                payload.as_ptr(),
+                            );
                         }
                     }
                     built.push(created);
@@ -575,8 +598,16 @@ mod tests {
         assert_eq!(events[4], event(48, true, all));
         assert_eq!(events.last().unwrap().flags, 0);
         // Every modifier that went down comes back up, in reverse.
-        let downs: Vec<u16> = events.iter().filter(|e| e.down && e.code != 48).map(|e| e.code).collect();
-        let mut ups: Vec<u16> = events.iter().filter(|e| !e.down && e.code != 48).map(|e| e.code).collect();
+        let downs: Vec<u16> = events
+            .iter()
+            .filter(|e| e.down && e.code != 48)
+            .map(|e| e.code)
+            .collect();
+        let mut ups: Vec<u16> = events
+            .iter()
+            .filter(|e| !e.down && e.code != 48)
+            .map(|e| e.code)
+            .collect();
         ups.reverse();
         assert_eq!(downs, ups);
         // An unmodified key, and every text character, is exactly one down and one up with no flags.
