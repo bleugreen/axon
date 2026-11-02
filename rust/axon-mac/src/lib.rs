@@ -26,12 +26,17 @@ pub mod probe;
 
 #[cfg(target_os = "macos")]
 mod accessibility;
+mod background;
 #[cfg(target_os = "macos")]
 mod core_foundation;
 #[cfg(target_os = "macos")]
 mod global_input;
+mod input;
 #[cfg(target_os = "macos")]
 mod platform;
+#[cfg(target_os = "macos")]
+mod workspace;
+pub use background::{ApplicationPlan, ApplicationProcess, DenylistEntry};
 #[cfg(target_os = "macos")]
 pub use platform::MacBackend;
 
@@ -54,21 +59,33 @@ const EXCLUDED: &[(&str, &str)] = &[
     ("debug.stop", "DebugSession"),
 ];
 
-/// Pixel delivery is withheld in v1; this mechanism label makes that absence explicit.
-const PIXEL_MECHANISM: &str = "unimplemented macOS target-bound input";
+/// The pixel rung's mechanism, which macOS has for no action. Named so a refusal says what is
+/// missing rather than only which rung.
+const PIXEL_MECHANISM: &str = "window-bound background input";
+
+/// The application rung's mechanism: input posted to one process.
+const APPLICATION_MECHANISM: &str = "CGEventPostToPid";
+
+/// The foreground rung's mechanism: global input routed by the window server like a real device.
+const FOREGROUND_MECHANISM: &str = "CGEventPost(kCGHIDEventTap)";
 
 /// Why `keyboard` has no pixel rung, and never will in this shape.
 ///
 /// The pixel rung is target-bound input derived from verified window geometry. `keyboard` names an
 /// application and an input string; there is no element, so there is no window to bind to and no
-/// transform to report. Key delivery gets an honest home as a `type` fallback, below ValuePattern,
-/// once the pointer path is proven on real targets.
+/// transform to report. Its background home is the application rung, which binds to a process
+/// rather than a window.
 const NO_KEYBOARD_GEOMETRY: &str = "keyboard input names an application rather than an element, so \
      there is no verified window geometry to bind it to";
 
-/// Why a text location that resolved from screen text alone cannot travel the pixel rung.
-const NO_RECOGNIZED_TEXT_GEOMETRY: &str = "this text location resolved from recognized screen text \
-     rather than an accessibility element, so there is no ancestry to bind a window to";
+/// Why a pointer action has no pixel rung on macOS: no mechanism delivers a mouse or wheel event to
+/// one window without the window server's hit testing.
+const NO_WINDOW_BOUND_POINTER: &str = "macOS has no mechanism that delivers pointer input to one \
+     window without the window server's hit testing, so there is no verified window to bind it to";
+
+/// Why a scroll that carries a delta has no semantic rung.
+const NO_SEMANTIC_SCROLL_DELTA: &str =
+    "AXScrollToVisible scrolls an element into view and cannot carry a scroll delta";
 
 /// Why the foreground rung is withheld rather than merely gated behind the opt-in.
 ///
@@ -201,148 +218,128 @@ pub trait PointerTargetVerifier: PlatformBackend {
     }
 }
 
-/// A target-bound pointer mechanism: input delivered to one verified window, without activating
-/// the application and without moving the real pointer.
+/// The native pointer input the router drives beyond the shared backend trait.
 ///
-/// This is the pixel rung's whole contract expressed as a seam. The router that decides *when* to
-/// use it is platform-neutral and testable anywhere; the mechanism behind it is Win32 and is not.
-pub trait BackgroundPixelPointer: PlatformBackend {
-    /// Resolves a delivery plan for one click. Pure inspection with no native side effect, because
-    /// the planner may discard the result and refuse before anything is allowed to happen.
-    fn plan_pixel_click(
+/// A seam so the router that decides *when* each is used stays testable anywhere; the mechanisms
+/// behind it are Core Graphics and Accessibility and are not.
+pub trait NativeInput: PlatformBackend {
+    /// The process owning whatever is on screen at `point`, by Accessibility hit test.
+    fn point_owner(&mut self, point: (f64, f64)) -> Result<Option<i32>, axon_core::BackendError>;
+
+    /// The frame of an application's focused window, in screen points.
+    fn focused_window_frame(
         &mut self,
-        handle: &SnapshotHandle,
+        app: &AppQuery,
+    ) -> Result<Option<axon_core::Rect>, axon_core::BackendError>;
+
+    /// Posts a pixel-unit wheel burst at `point` through the HID tap, returning the `(x, y)` steps
+    /// that were posted. Distinct from `PlatformBackend::scroll`, which stays the semantic
+    /// AXScrollToVisible.
+    fn scroll_wheel(
+        &mut self,
         point: (f64, f64),
-    ) -> Result<PixelPlan, axon_core::BackendError>;
+        delta: (f64, f64),
+    ) -> Result<Vec<(i32, i32)>, axon_core::BackendError>;
 
-    /// Revalidates the plan and dispatches it. A revalidation failure returns `Stale` and must
-    /// post nothing: a window that moved or an ancestry that broke between planning and dispatch
-    /// means the recorded coordinates now name somewhere else.
-    fn dispatch_pixel_click(
+    /// What the activation calls since the last take did: each primitive's name and the value it
+    /// returned. Taken once per foreground transaction so it can ride on that transaction's
+    /// cleanup evidence; an acknowledgement is not proof, and the readback still decides.
+    fn take_activation_evidence(&mut self) -> Option<String> {
+        None
+    }
+}
+
+/// The application rung for keyboard input: keystrokes posted to one process, without activating
+/// it and without touching the pointer.
+///
+/// Availability is decided by [`background::application_keyboard_availability`], which is a
+/// property of the mechanism rather than of the application; the seam only supplies the process
+/// and posts to it.
+pub trait BackgroundApplicationKeyboard: PlatformBackend {
+    /// The one live application process a query names, with the identity foreground delivery
+    /// would compare. `Ok(None)` when no application, or more than one, matched.
+    fn application_process(
         &mut self,
-        target: &PixelTarget,
-    ) -> Result<PixelDispatch, PixelDispatchError>;
-}
+        app: &AppQuery,
+    ) -> Result<Option<ApplicationProcess>, axon_core::BackendError>;
 
-/// Whether a target-bound mechanism exists for one specific click.
-#[derive(Clone, Debug, PartialEq)]
-pub enum PixelPlan {
-    Bound(PixelTarget),
-    /// No target-bound mechanism here. `reason` names the specific obstacle, because a caller who
-    /// is told only "unsupported" cannot tell an elevated window from an unknown control class.
-    Unavailable {
-        reason: String,
-        /// Whether the obstacle stops *any* synthetic input at this target rather than only the
-        /// target-bound rung.
-        ///
-        /// An integrity boundary is the case that matters: UIPI discards posted messages and
-        /// `SendInput` alike from a lower-integrity process, and `SetForegroundWindow` fails the
-        /// same way. Leaving the foreground candidate available there would answer an elevated
-        /// target with "opt in to foreground delivery", and the opt-in would buy a dispatch
-        /// macOS silently drops — dressed up as a successful one. The obstacle has to be named
-        /// at both rungs or it is not really being refused.
-        blocks_global_input: bool,
-    },
-}
-
-impl PixelPlan {
-    /// No target-bound mechanism, but the obstacle is specific to this rung: a louder one may
-    /// still carry the action.
-    pub fn unavailable(reason: impl Into<String>) -> Self {
-        PixelPlan::Unavailable {
-            reason: reason.into(),
-            blocks_global_input: false,
-        }
+    /// The applications measured not to act on application-rung keystrokes.
+    fn application_keyboard_denylist(&self) -> &'static [DenylistEntry] {
+        background::DENYLIST
     }
 
-    /// No mechanism at all, at any rung, for the reason given.
-    pub fn blocked(reason: impl Into<String>) -> Self {
-        PixelPlan::Unavailable {
-            reason: reason.into(),
-            blocks_global_input: true,
-        }
+    /// Decides the rung for one request. Pure inspection, because the planner may discard the
+    /// answer and refuse before anything native happens.
+    fn plan_application_keyboard(
+        &self,
+        process: Option<ApplicationProcess>,
+        intent: KeyboardIntent<'_>,
+    ) -> ApplicationPlan {
+        background::application_keyboard_availability(
+            process,
+            intent,
+            self.application_keyboard_denylist(),
+        )
     }
+
+    /// Revalidates the process and posts to it. A process that exited, or whose bundle changed,
+    /// between planning and dispatch returns `Stale` and must post nothing: the pid now names
+    /// something else, or nothing.
+    fn dispatch_application_keyboard(
+        &mut self,
+        process: &ApplicationProcess,
+        intent: KeyboardIntent<'_>,
+    ) -> Result<ApplicationDispatch, BackgroundDispatchError>;
 }
 
-/// One window, bound to one element, with the coordinate transform that reaches it.
+/// What an application-rung dispatch observed around itself.
 #[derive(Clone, Debug, PartialEq)]
-pub struct PixelTarget {
-    /// The element this plan is bound to. Dispatch re-checks it, because a window that is still
-    /// exactly where it was can still be showing something else by then.
-    pub handle: SnapshotHandle,
-    /// The leaf window that receives the messages.
-    pub window: u64,
-    pub window_class: String,
-    /// How the target declares its DPI awareness. Reported so a probe run can distinguish a
-    /// reconciliation that ran from one that was a no-op, which is what tells an allowlist entry
-    /// earned at 100% scaling from one earned where the transform actually had work to do.
-    pub dpi_awareness: &'static str,
-    /// The top-level window the UIA ancestry bound this to. Revalidated before dispatch, so a leaf
-    /// that has been reparented out of the captured window cannot be clicked.
-    pub root_window: u64,
-    pub process_identifier: i64,
-    pub screen_point: (f64, f64),
-    /// The window's client origin in screen coordinates: the transform itself, kept so it can be
-    /// both revalidated and reported.
-    pub client_origin: (f64, f64),
-    pub client_point: (f64, f64),
-}
-
-impl PixelTarget {
-    /// The transform reported as evidence rather than implied.
-    ///
-    /// A dispatch that landed in the wrong window is only diagnosable after the fact if the window
-    /// it went to and the arithmetic that chose the point are both on the wire.
-    pub fn evidence(&self) -> Value {
-        json!({
-            "nativeWindowHandle": format!("0x{:08X}", self.window),
-            "windowClass": self.window_class,
-            "rootNativeWindowHandle": format!("0x{:08X}", self.root_window),
-            "dpiAwareness": self.dpi_awareness,
-            "clientOrigin": {"x": self.client_origin.0, "y": self.client_origin.1},
-            "windowPoint": {"x": self.client_point.0, "y": self.client_point.1},
-            "sourceCoordinateSpace": "screen",
-        })
-    }
-}
-
-/// What a delivered sequence did, and the evidence that it stayed in the background.
-#[derive(Clone, Debug, PartialEq)]
-pub struct PixelDispatch {
-    /// Whether the target processed the whole sequence.
-    ///
-    /// Processed, not effective. A window procedure that examines a click and does nothing returns
-    /// from it exactly like one that acts on it, so this is dispatch evidence and goal success
-    /// still needs a readback or a declared postcondition.
-    pub complete: bool,
-    /// Set when part of the sequence landed and the rest did not, naming the state the target was
-    /// left in. A partial dispatch never escalates: the target may already consider the button
-    /// held, and a second attempt at another rung would compound it.
-    pub partial: Option<String>,
-    /// Observed across the delivery, which is only meaningful because the delivery has an explicit
-    /// end: the backend does not report these until the target's window procedure has processed
-    /// every message. A handler that activates its application or moves the cursor is inside the
-    /// window these two comparisons straddle.
+pub struct ApplicationDispatch {
+    /// Read before and after the post. A target that activated itself in response is still
+    /// reported, because a delivery that changed the foreground was not background delivery.
     pub frontmost_unchanged: bool,
+    /// Reported, never asserted: keystrokes touch no pointing device, so motion around them is
+    /// the person at the machine.
     pub pointer_unchanged: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum PixelDispatchError {
+pub enum BackgroundDispatchError {
     /// Revalidation failed between planning and dispatch. Nothing was posted.
     Stale(String),
     Backend(axon_core::BackendError),
 }
 
-/// What a click resolved to, and therefore what can be bound and verified before it is delivered.
-///
-/// The distinction is load-bearing rather than cosmetic: only an element carries the accessibility
-/// ancestry a pixel plan is built from, so a point recovered from screen text has no window to
-/// bind to however precise the point itself is.
+/// What a pointer action resolved to, and therefore how it is verified before it is posted.
 enum ClickTarget {
     Element(SnapshotHandle),
     /// A point inside a frame of recognized screen text, with no element behind it.
     Recognized(AppQuery, axon_core::Rect),
+    /// A caller-supplied point, and the application it named, if any.
+    Point(Option<String>),
+}
+
+/// The pointer actions this router posts, each through the same ladder and transaction.
+#[derive(Clone, Copy)]
+enum PointerAction {
+    Click,
+    /// A wheel burst carrying this `(x, y)` pixel delta.
+    Wheel((f64, f64)),
+}
+
+impl PointerAction {
+    fn tool(self) -> &'static str {
+        match self {
+            PointerAction::Click => "click",
+            PointerAction::Wheel(_) => "scroll",
+        }
+    }
+}
+
+/// Which application a pointer escalation activates, and which process the point must belong to.
+struct PointerAim {
+    identity: String,
+    process_identifier: i32,
 }
 
 impl<
@@ -350,7 +347,8 @@ impl<
         + TextRecognitionProvider
         + VisualObservationProvider
         + ReadableStateProvider
-        + BackgroundPixelPointer
+        + NativeInput
+        + BackgroundApplicationKeyboard
         + axon_core::RecordingEvidenceProvider,
 > Router<B>
 {
@@ -1540,7 +1538,8 @@ impl<
         + TextRecognitionProvider
         + VisualObservationProvider
         + ReadableStateProvider
-        + BackgroundPixelPointer
+        + NativeInput
+        + BackgroundApplicationKeyboard
         + axon_core::RecordingEvidenceProvider,
 > ToolDispatcher for Router<B>
 {
