@@ -69,6 +69,12 @@ const EXCLUDED: &[(&str, &str)] = &[
 /// under the delivery variant the acceptance table names for that window's toolkit.
 const PIXEL_MECHANISM: &str = "X11 window-targeted XSendEvent";
 
+/// Why `keyboard` has no application rung here: the rung exists in the shared vocabulary because
+/// macOS measured one, and nobody has measured a process-targeted keyboard mechanism on X11. The
+/// planner sorts candidates by rung, so this sits between the pixel and foreground rungs.
+const NO_APPLICATION_KEYBOARD: &str =
+    "no application-scoped keyboard mechanism has been measured on X11";
+
 /// Why `drag` has no pixel rung, and will not get one in this shape.
 ///
 /// A drag holds a button down across a whole gesture. Nothing in the acceptance table covers that:
@@ -655,8 +661,15 @@ impl<
                     Some(identity) => Self::planned(self.backend.plan_pixel_keyboard(identity)),
                     None => PixelPlan::unavailable(NO_KEYBOARD_TARGET),
                 };
-                let ladder =
+                let mut ladder =
                     self.global_input_ladder(Capability::KeyboardInput, "XTest keyboard", &plan);
+                ladder.push(DeliveryCandidate::unavailable(
+                    DeliveryRung::Application,
+                    DeliveryCapability::BackgroundPixelInput,
+                    "process-targeted keyboard input",
+                    DeliveryRefusalReason::BackgroundPixelUnsupported,
+                    NO_APPLICATION_KEYBOARD,
+                ));
                 let Some(candidate) = self.selected(&ladder, policy) else {
                     return Ok(self.refusal(&ladder, policy));
                 };

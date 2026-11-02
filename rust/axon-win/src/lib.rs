@@ -46,6 +46,11 @@ const EXCLUDED: &[(&str, &str)] = &[
 /// posted to one leaf window resolved through verified UIA ancestry.
 const PIXEL_MECHANISM: &str = "HWND client-coordinate message";
 
+/// Why `keyboard` has no application rung here: the rung exists in the shared vocabulary because
+/// macOS measured one, and nobody has measured a process-targeted keyboard mechanism on Windows.
+const NO_APPLICATION_KEYBOARD: &str =
+    "no application-scoped keyboard mechanism has been measured on Windows";
+
 /// Why `keyboard` has no pixel rung, and never will in this shape.
 ///
 /// The pixel rung is target-bound input derived from verified window geometry. `keyboard` names an
@@ -919,6 +924,13 @@ impl<
                 PIXEL_MECHANISM,
                 DeliveryRefusalReason::BackgroundPixelUnsupported,
                 NO_KEYBOARD_GEOMETRY,
+            ),
+            DeliveryCandidate::unavailable(
+                DeliveryRung::Application,
+                DeliveryCapability::BackgroundPixelInput,
+                "process-targeted keyboard input",
+                DeliveryRefusalReason::BackgroundPixelUnsupported,
+                NO_APPLICATION_KEYBOARD,
             ),
             self.foreground_candidate(Capability::KeyboardInput, "SendInput"),
         ]
