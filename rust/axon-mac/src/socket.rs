@@ -2,6 +2,7 @@
 use crate::{
     MacBackend, Router, accessibility,
     automation::ConsentService,
+    browser::BrowserService,
     parse_request,
     platform::{MacPermissions, capability_report},
 };
@@ -143,13 +144,22 @@ pub fn serve() -> io::Result<()> {
     }
     let (router_tx, router_rx) = mpsc::channel::<RouterRequest>();
     let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+    // One ledger for the whole daemon: the browser verbs on the worker record the answers macOS
+    // gives their events, and the menu's `automation.*` methods on the connection threads read
+    // them, so a refusal a verb met is the refusal the menu explains.
+    let consent = Arc::new(ConsentService::system());
+    let verb_consent = Arc::clone(&consent);
     thread::spawn(move || {
         let backend = MacBackend::new().map_err(|error| error.to_string());
         let _ = ready_tx.send(backend.as_ref().map(|_| ()).map_err(Clone::clone));
         let Ok(backend) = backend else {
             return;
         };
-        let mut router = Router::new(backend);
+        // The verbs run here, on the serialized worker, because `windows` cross-checks against an
+        // Accessibility capture and every answer belongs in the action history. They never
+        // prompt, so nothing here waits on a person.
+        let mut router =
+            Router::new(backend).with_browser(Box::new(BrowserService::system(verb_consent)));
         for request in router_rx {
             let response = router.request(request.request);
             let _ = request.response.send(response);
@@ -160,7 +170,6 @@ pub fn serve() -> io::Result<()> {
         .map_err(io::Error::other)?
         .map_err(io::Error::other)?;
     let stopping = Arc::new(AtomicBool::new(false));
-    let consent = Arc::new(ConsentService::system());
     let listener = UnixListener::bind(&path)?;
     listener.set_nonblocking(true)?;
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
@@ -685,7 +694,10 @@ mod tests {
                 "type",
                 "keyboard",
                 "scroll",
-                "invoke"
+                "invoke",
+                "navigate",
+                "windows",
+                "tabs"
             ]
         );
         assert_eq!(tools[0]["inputSchema"]["additionalProperties"], false);
