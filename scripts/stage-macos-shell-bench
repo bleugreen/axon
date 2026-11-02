@@ -3,8 +3,14 @@
 #
 #   scripts/stage-macos-shell-bench               build, assemble, sign, write both plists, bootstrap
 #   scripts/stage-macos-shell-bench --stage-only  everything but launchd (no plists, no bootstrap)
+#   scripts/stage-macos-shell-bench --bootstrap-only
+#                                                 launchd only, over a bundle already staged in
+#                                                 AXON_BENCH_DIR (verified before it is used)
 #   scripts/stage-macos-shell-bench --teardown    boot both jobs out, remove their plists, quit what
 #                                                 the protocol launched
+#
+# The split exists because the two halves need different sessions: building and signing work from
+# a sandboxed agent placement, and bootstrapping into gui/<uid> does not.
 #
 # The staged bundle is laid out the way a split Axon.app will be: the Rust daemon is the outer
 # bundle's main executable, so it is the TCC subject, and the shell is nested at
@@ -21,8 +27,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:-}"
 case "$MODE" in
-  ""|--stage-only|--teardown) ;;
-  *) printf 'usage: %s [--stage-only|--teardown]\n' "$0" >&2; exit 2 ;;
+  ""|--stage-only|--bootstrap-only|--teardown) ;;
+  *) printf 'usage: %s [--stage-only|--bootstrap-only|--teardown]\n' "$0" >&2; exit 2 ;;
 esac
 
 BENCH_DIR="${AXON_BENCH_DIR:-$HOME/AxonBench/axn249}"
@@ -48,6 +54,7 @@ if [[ "$MODE" == "--teardown" ]]; then
   exit 0
 fi
 
+stage() {
 if [[ -n "${SWIFT:-}" ]]; then
   :
 elif [[ -x "$HOME/.swiftly/bin/swift" ]]; then
@@ -139,8 +146,16 @@ fi
   done
 } > "$BENCH_DIR/codesign.txt"
 printf 'staged %s (signed by %s); codesign record in %s\n' "$APP" "$SIGN_IDENTITY" "$BENCH_DIR/codesign.txt"
+}
 
+if [[ "$MODE" != "--bootstrap-only" ]]; then
+  stage
+fi
 [[ "$MODE" == "--stage-only" ]] && exit 0
+
+# A bundle copied in from elsewhere must still be the one that was signed.
+/usr/bin/codesign --verify --deep --strict "$APP"
+mkdir -p "$LOGS"
 
 write_job() {
   local label="$1" program="$2" keep_alive="$3" extra_env="$4" log="$5"
