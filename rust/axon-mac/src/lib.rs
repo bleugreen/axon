@@ -272,7 +272,10 @@ impl ModifierState {
         input::FLAG_SHIFT | input::FLAG_CONTROL | input::FLAG_OPTION | input::FLAG_COMMAND;
 
     fn held(self) -> (u64, u64) {
-        (self.combined_session & Self::HELD, self.hid_system & Self::HELD)
+        (
+            self.combined_session & Self::HELD,
+            self.hid_system & Self::HELD,
+        )
     }
 }
 
@@ -1069,7 +1072,10 @@ impl<
                         posted.map(|_| Value::Null).map_err(backend_error)
                     },
                 )?;
-                if result.get("delivery").is_some_and(|delivery| !delivery.is_null()) {
+                if result
+                    .get("delivery")
+                    .is_some_and(|delivery| !delivery.is_null())
+                {
                     stamp_modifier_readback(&mut result, "foreground", readback);
                 }
                 Ok(result)
@@ -3382,7 +3388,11 @@ mod tests {
         #[test]
         fn every_keyboard_dispatch_reports_that_it_restored_the_modifiers() {
             let mut router = router(NativeFake::new());
-            let background = ok(&mut router, "keyboard", json!({"app": "TextEdit", "text": "hi"}));
+            let background = ok(
+                &mut router,
+                "keyboard",
+                json!({"app": "TextEdit", "text": "hi"}),
+            );
             assert_eq!(background["backgroundDelivery"]["modifiersRestored"], true);
             let chord = ok(
                 &mut router,
@@ -3410,7 +3420,10 @@ mod tests {
             assert_eq!(result["dispatch"]["success"], false);
             assert_eq!(result["foreground"]["modifiersRestored"], false);
             let message = result["message"].as_str().unwrap();
-            assert!(message.contains("0x20000000 before and 0x20100000 after"), "{message}");
+            assert!(
+                message.contains("0x20000000 before and 0x20100000 after"),
+                "{message}"
+            );
         }
 
         #[test]
