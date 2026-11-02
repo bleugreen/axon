@@ -55,6 +55,17 @@ unsafe extern "C" {
     ) -> i32;
     fn AXUIElementSetMessagingTimeout(element: AXUIElementRef, timeout: f32) -> i32;
 }
+#[link(name = "ApplicationServices", kind = "framework")]
+unsafe extern "C" {
+    static kAXTrustedCheckOptionPrompt: CFStringRef;
+}
+
+/// `CFDictionaryKeyCallBacks` and `CFDictionaryValueCallBacks`, only ever passed by address.
+#[repr(C)]
+struct DictionaryCallBacks {
+    _opaque: [u8; 0],
+}
+
 #[link(name = "CoreFoundation", kind = "framework")]
 unsafe extern "C" {
     fn CFStringCreateWithCString(
@@ -63,6 +74,17 @@ unsafe extern "C" {
         encoding: u32,
     ) -> CFStringRef;
     fn CFRelease(value: CFTypeRef);
+    fn CFDictionaryCreate(
+        alloc: *const c_void,
+        keys: *const CFTypeRef,
+        values: *const CFTypeRef,
+        count: isize,
+        key_callbacks: *const DictionaryCallBacks,
+        value_callbacks: *const DictionaryCallBacks,
+    ) -> CFDictionaryRef;
+    static kCFBooleanTrue: CFTypeRef;
+    static kCFTypeDictionaryKeyCallBacks: DictionaryCallBacks;
+    static kCFTypeDictionaryValueCallBacks: DictionaryCallBacks;
 }
 
 struct Owned(CFTypeRef);
@@ -184,6 +206,47 @@ pub(crate) fn trust_with_options() -> bool {
     unsafe { AXIsProcessTrustedWithOptions(null()) }
 }
 
+/// `AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: true})`: asks macOS to show the
+/// Accessibility prompt for this process. macOS shows it only while the grant is undecided.
+fn request_trust_prompt() -> bool {
+    unsafe {
+        let keys = [kAXTrustedCheckOptionPrompt];
+        let values = [kCFBooleanTrue];
+        let options = Owned(CFDictionaryCreate(
+            null(),
+            keys.as_ptr(),
+            values.as_ptr(),
+            1,
+            &raw const kCFTypeDictionaryKeyCallBacks,
+            &raw const kCFTypeDictionaryValueCallBacks,
+        ));
+        AXIsProcessTrustedWithOptions(options.0)
+    }
+}
+
+/// `permit`: request the Accessibility prompt, then report trust the way `health` does.
+pub(crate) fn permit() -> axon_core::PermitResult {
+    permit_with(request_trust_prompt, granted)
+}
+
+/// The prompt call returns the per-process verdict, which is resolved once at launch and frozen
+/// (see the module notes), so it is discarded. The answer comes from the same behavioural check
+/// `health` publishes, asked after the prompt, so `permit` and `health` cannot disagree.
+fn permit_with(
+    prompt: impl FnOnce() -> bool,
+    granted: impl FnOnce() -> bool,
+) -> axon_core::PermitResult {
+    let _frozen_verdict = prompt();
+    axon_core::PermitResult {
+        accessibility: if granted() {
+            axon_core::AccessibilityTrust::Trusted
+        } else {
+            axon_core::AccessibilityTrust::Denied
+        },
+        prompted: true,
+    }
+}
+
 /// One sample of every trust signal side by side, so a revoke/re-grant toggle separates "the
 /// verdict is cached" from "the API is disabled" without any inference.
 #[derive(Debug, serde::Serialize)]
@@ -248,6 +311,34 @@ mod tests {
         assert_eq!(AxAccess::Denied.fold(AxAccess::Granted), AxAccess::Denied);
         assert_eq!(AxAccess::Unknown.fold(AxAccess::Granted), AxAccess::Granted);
         assert_eq!(AxAccess::Unknown.fold(AxAccess::Unknown), AxAccess::Unknown);
+    }
+
+    /// `permit` answers from the behavioural check, never from the prompt call's frozen verdict,
+    /// and asks it only after the prompt.
+    #[test]
+    fn permit_reports_the_health_answer_after_prompting() {
+        use axon_core::AccessibilityTrust::{Denied, Trusted};
+        for (frozen, behaviour, expected) in [
+            (false, true, Trusted),
+            (true, false, Denied),
+            (true, true, Trusted),
+            (false, false, Denied),
+        ] {
+            let order = std::cell::RefCell::new(Vec::new());
+            let result = permit_with(
+                || {
+                    order.borrow_mut().push("prompt");
+                    frozen
+                },
+                || {
+                    order.borrow_mut().push("granted");
+                    behaviour
+                },
+            );
+            assert_eq!(result.accessibility, expected);
+            assert!(result.prompted);
+            assert_eq!(*order.borrow(), ["prompt", "granted"]);
+        }
     }
 
     /// Manual: run from a terminal whose responsible process lacks the Accessibility grant.
