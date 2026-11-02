@@ -301,7 +301,7 @@ fn stamp_modifier_readback(
         evidence.insert("modifiersRestored".into(), json!(restored));
     }
     if restored == Some(false) {
-        let (Some((Some(before), Some(after)))) = readback else {
+        let Some((Some(before), Some(after))) = readback else {
             unreachable!("a comparison needs both readings")
         };
         let problem = format!(
