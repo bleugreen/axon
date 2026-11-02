@@ -115,8 +115,8 @@ class TestAvailability:
     def test_admits_either_macos_facade(self) -> None:
         daemon, axon = connect_to(socket_health())
         try:
-            # navigate is swift-only and click is on every facade; macOS advertises both.
-            assert axon.supports("navigate")
+            # drag is swift-only and click is on every facade; macOS advertises both.
+            assert axon.supports("drag")
             assert axon.supports("click")
             assert not axon.supports("capture_screen")
         finally:
