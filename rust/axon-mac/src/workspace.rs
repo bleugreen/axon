@@ -112,8 +112,11 @@ pub fn processes_with_bundle(bundle_identifier: &str) -> Vec<i32> {
         if class.is_null() || string_class.is_null() {
             return Vec::new();
         }
-        let with_utf8: unsafe extern "C" fn(*mut c_void, *mut c_void, *const c_char) -> *mut c_void =
-            std::mem::transmute(objc_msgSend as *const ());
+        let with_utf8: unsafe extern "C" fn(
+            *mut c_void,
+            *mut c_void,
+            *const c_char,
+        ) -> *mut c_void = std::mem::transmute(objc_msgSend as *const ());
         let identifier = with_utf8(
             string_class,
             sel_registerName(c"stringWithUTF8String:".as_ptr()),
@@ -181,17 +184,18 @@ pub fn activate(pid: i32) -> Option<(&'static str, bool)> {
         return None;
     }
     unsafe {
-        if send_bool_arg(app, c"respondsToSelector:", sel_registerName(c"activate".as_ptr())) {
+        if send_bool_arg(
+            app,
+            c"respondsToSelector:",
+            sel_registerName(c"activate".as_ptr()),
+        ) {
             return Some(("NSRunningApplication.activate", send_bool(app, c"activate")));
         }
         let activate_with: unsafe extern "C" fn(*mut c_void, *mut c_void, u64) -> i8 =
             std::mem::transmute(objc_msgSend as *const ());
         // NSApplicationActivateIgnoringOtherApps
-        let accepted = activate_with(
-            app,
-            sel_registerName(c"activateWithOptions:".as_ptr()),
-            2,
-        ) != 0;
+        let accepted =
+            activate_with(app, sel_registerName(c"activateWithOptions:".as_ptr()), 2) != 0;
         Some(("NSRunningApplication.activateWithOptions:", accepted))
     }
 }

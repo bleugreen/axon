@@ -234,11 +234,8 @@ pub mod native {
     unsafe extern "C" {
         fn CGEventCreate(source: CGEventSourceRef) -> CGEventRef;
         fn CGEventGetLocation(event: CGEventRef) -> CGPoint;
-        fn CGEventCreateKeyboardEvent(
-            source: CGEventSourceRef,
-            key: u16,
-            down: bool,
-        ) -> CGEventRef;
+        fn CGEventCreateKeyboardEvent(source: CGEventSourceRef, key: u16, down: bool)
+        -> CGEventRef;
         fn CGEventKeyboardSetUnicodeString(event: CGEventRef, length: usize, string: *const u16);
         fn CGEventSetFlags(event: CGEventRef, flags: u64);
         fn CGEventCreateMouseEvent(
@@ -276,7 +273,11 @@ pub mod native {
         Process(i32),
     }
 
-    fn created(event: CGEventRef, what: &str, capability: Capability) -> Result<CGEventRef, BackendError> {
+    fn created(
+        event: CGEventRef,
+        what: &str,
+        capability: Capability,
+    ) -> Result<CGEventRef, BackendError> {
         if event.is_null() {
             return Err(BackendError::Capability {
                 capability,
@@ -381,11 +382,16 @@ pub mod native {
     /// human interval, because a view that tracks hover or debounces presses acts on neither a
     /// teleported press nor one shorter than any hand could make.
     pub fn click(point: (f64, f64)) -> Result<(), BackendError> {
-        let position = CGPoint { x: point.0, y: point.1 };
+        let position = CGPoint {
+            x: point.0,
+            y: point.1,
+        };
         let mut events = Vec::with_capacity(2);
         for kind in [LEFT_MOUSE_DOWN, LEFT_MOUSE_UP] {
             match created(
-                unsafe { CGEventCreateMouseEvent(std::ptr::null(), kind, position, MOUSE_BUTTON_LEFT) },
+                unsafe {
+                    CGEventCreateMouseEvent(std::ptr::null(), kind, position, MOUSE_BUTTON_LEFT)
+                },
                 "mouse",
                 Capability::PointerInput,
             ) {
@@ -414,12 +420,20 @@ pub mod native {
     /// Posts a pixel-unit wheel burst at `point` through the HID tap, returning the steps that were
     /// posted. A wheel event has no window of its own: the window server routes it by the event's
     /// location, so setting that location is what aims it.
-    pub fn scroll(point: (f64, f64), steps: &[(i32, i32)]) -> Result<Vec<(i32, i32)>, BackendError> {
-        let position = CGPoint { x: point.0, y: point.1 };
+    pub fn scroll(
+        point: (f64, f64),
+        steps: &[(i32, i32)],
+    ) -> Result<Vec<(i32, i32)>, BackendError> {
+        let position = CGPoint {
+            x: point.0,
+            y: point.1,
+        };
         let mut posted = Vec::with_capacity(steps.len());
         for (index, &(x, y)) in steps.iter().enumerate() {
             let event = created(
-                unsafe { CGEventCreateScrollWheelEvent2(std::ptr::null(), SCROLL_UNIT_PIXEL, 2, y, x, 0) },
+                unsafe {
+                    CGEventCreateScrollWheelEvent2(std::ptr::null(), SCROLL_UNIT_PIXEL, 2, y, x, 0)
+                },
                 "scroll-wheel",
                 Capability::PointerInput,
             )?;
@@ -454,7 +468,11 @@ mod tests {
             let (sum_x, sum_y) = steps
                 .iter()
                 .fold((0, 0), |(sx, sy), (dx, dy)| (sx + dx, sy + dy));
-            assert_eq!((sum_x, sum_y), (x.round() as i32, y.round() as i32), "({x}, {y})");
+            assert_eq!(
+                (sum_x, sum_y),
+                (x.round() as i32, y.round() as i32),
+                "({x}, {y})"
+            );
             assert!(steps.len() <= 16, "({x}, {y}) took {} steps", steps.len());
             assert!(steps.iter().all(|&(dx, dy)| dx != 0 || dy != 0));
         }
@@ -487,7 +505,11 @@ mod tests {
         assert_eq!(named_key_code(NamedKey::Delete), Ok(117));
         assert_eq!(named_key_code(NamedKey::Backspace), Ok(51));
         assert_eq!(named_key_code(NamedKey::F1), Ok(122));
-        assert!(named_key_code(NamedKey::Insert).unwrap_err().contains("Insert"));
+        assert!(
+            named_key_code(NamedKey::Insert)
+                .unwrap_err()
+                .contains("Insert")
+        );
     }
 
     #[test]

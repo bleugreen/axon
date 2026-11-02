@@ -77,7 +77,11 @@ impl PointTarget {
         };
         let app = non_empty(point, "app")
             .or_else(|| wrapper.and_then(|wrapper| non_empty(wrapper, "app")))
-            .or_else(|| top_level_app.filter(|app| !app.is_empty()).map(str::to_owned));
+            .or_else(|| {
+                top_level_app
+                    .filter(|app| !app.is_empty())
+                    .map(str::to_owned)
+            });
         if space != PointSpace::Screen && app.is_none() {
             return Err(format!(
                 "point coordinateSpace {} requires app",
@@ -150,8 +154,11 @@ mod tests {
         assert_eq!(point.app.as_deref(), Some("Point"));
         assert_eq!(point.space, PointSpace::Window);
 
-        let wrapper = parse(json!({"app":"Wrapper","point":{"x":1,"y":2}}), Some("TopLevel"))
-            .unwrap();
+        let wrapper = parse(
+            json!({"app":"Wrapper","point":{"x":1,"y":2}}),
+            Some("TopLevel"),
+        )
+        .unwrap();
         assert_eq!(wrapper.app.as_deref(), Some("Wrapper"));
 
         let top = parse(json!({"point":{"x":1,"y":2}}), Some("TopLevel")).unwrap();
@@ -161,7 +168,11 @@ mod tests {
 
     #[test]
     fn the_legacy_space_key_is_read_and_an_empty_app_is_absent() {
-        let point = parse(json!({"x":1,"y":2,"space":"screenshot","app":"Safari"}), None).unwrap();
+        let point = parse(
+            json!({"x":1,"y":2,"space":"screenshot","app":"Safari"}),
+            None,
+        )
+        .unwrap();
         assert_eq!(point.space, PointSpace::Screenshot);
         let bare = parse(json!({"x":1,"y":2,"app":""}), Some("")).unwrap();
         assert_eq!(bare.app, None);

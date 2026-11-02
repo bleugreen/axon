@@ -1081,7 +1081,8 @@ impl BackgroundApplicationKeyboard for MacBackend {
         }
         let frontmost_before = frontmost_process();
         let pointer_before = input::native::pointer_location();
-        post_keyboard(Destination::Process(pid), intent).map_err(BackgroundDispatchError::Backend)?;
+        post_keyboard(Destination::Process(pid), intent)
+            .map_err(BackgroundDispatchError::Backend)?;
         // A key handler that activates its application does so in response to the event; a short
         // settle lets that happen inside the window the two readings straddle.
         std::thread::sleep(Duration::from_millis(50));
@@ -1196,7 +1197,10 @@ mod tests {
                 Capability::KeyboardInput,
                 Capability::HitTest,
             ] {
-                let info = report.iter().find(|info| info.capability == capability).unwrap();
+                let info = report
+                    .iter()
+                    .find(|info| info.capability == capability)
+                    .unwrap();
                 assert_eq!(info.usable, accessibility, "{capability:?}");
                 if !accessibility {
                     assert_eq!(
@@ -1211,7 +1215,10 @@ mod tests {
                 .unwrap();
             assert!(!observe.usable);
             if accessibility {
-                assert_eq!(observe.restriction.as_deref(), Some("not implemented by axon-mac"));
+                assert_eq!(
+                    observe.restriction.as_deref(),
+                    Some("not implemented by axon-mac")
+                );
             }
         }
     }

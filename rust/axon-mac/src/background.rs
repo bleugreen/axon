@@ -159,7 +159,10 @@ mod tests {
 
     #[test]
     fn the_shipped_denylist_is_empty() {
-        assert!(DENYLIST.is_empty(), "an entry needs a refused row at {KEYBOARD_VARIANT}");
+        assert!(
+            DENYLIST.is_empty(),
+            "an entry needs a refused row at {KEYBOARD_VARIANT}"
+        );
     }
 
     /// The table is constants and prose, and the measurement is JSON in another directory; this is
@@ -171,7 +174,10 @@ mod tests {
             assert_eq!(row["action"], "click", "{id}");
             assert_eq!(row["mechanism"], "CGEventPostToPid", "{id}");
             assert_eq!(row["verdict"], "refused", "{id}");
-            assert!(PID_POINTER_REFUSED.contains(id), "{id} is not named in the refusal");
+            assert!(
+                PID_POINTER_REFUSED.contains(id),
+                "{id} is not named in the refusal"
+            );
         }
         for id in KEYBOARD_EVIDENCE {
             let row = row(id);
@@ -181,7 +187,11 @@ mod tests {
             assert_eq!(row["verdict"], "accepted", "{id}");
         }
         for entry in DENYLIST {
-            assert!(!entry.evidence.is_empty(), "{} cites nothing", entry.bundle_id);
+            assert!(
+                !entry.evidence.is_empty(),
+                "{} cites nothing",
+                entry.bundle_id
+            );
             for id in entry.evidence {
                 let row = row(id);
                 assert_eq!(row["action"], "keyboard", "{id}");
@@ -206,7 +216,11 @@ mod tests {
             ApplicationPlan::Bound(process("com.apple.TextEdit").unwrap())
         );
         assert!(matches!(
-            application_keyboard_availability(process("pid:77"), KeyboardIntent::Key("Return"), DENYLIST),
+            application_keyboard_availability(
+                process("pid:77"),
+                KeyboardIntent::Key("Return"),
+                DENYLIST
+            ),
             ApplicationPlan::Bound(_)
         ));
     }
