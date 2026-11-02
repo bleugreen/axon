@@ -381,21 +381,17 @@ impl<
         })
     }
 
-    fn click_text_location(
+    /// Resolves a text location to the point a pointer action aims at, and what stands behind it.
+    fn resolve_text_location(
         &mut self,
         value: &Value,
-        policy: DeliveryPolicy,
-    ) -> Result<Value, JsonRpcError> {
+    ) -> Result<(ClickTarget, (f64, f64), Value), JsonRpcError> {
         let target: TextLocationTarget = serde_json::from_value(value.clone())
             .map_err(|error| rpc_error(-32602, error.to_string()))?;
         if target.app.is_empty() {
             return Err(rpc_error(-32602, "location app must not be empty"));
         }
-        let app = AppQuery {
-            process_id: None,
-            name: Some(target.app.clone()),
-            identifier: None,
-        };
+        let app = query_for_app(&target.app);
         let snapshot = self.backend.capture(&app).map_err(backend_error)?;
         let initial = TextLocationResolver::resolve(&target, &snapshot, &[]);
         let resolution = if target.source == TextLocationSource::Screenshot
@@ -418,187 +414,256 @@ impl<
             Some(handle) => ClickTarget::Element(handle.clone()),
             None => ClickTarget::Recognized(app.clone(), candidate.frame),
         };
+        let resolution = json!(resolution);
         // The snapshot becomes the router's before the ladder runs, so foreground delivery recovers
         // the same canonical identity a handle click does. Handing the caller's raw app string to
         // the transaction instead would compare a display name against whatever identity the
         // backend reports for the foreground window, and the two can never match.
         self.snapshot = Some(snapshot);
-        // A resolved text location is a click like any other. It travels the same ladder and the
-        // same transaction; a separate path here is how a caller ends up with global pointer input
-        // under a policy that forbids it.
-        self.deliver_click(policy, click_target, point, json!(resolution))
+        Ok((click_target, point, resolution))
     }
 
-    /// One click, whatever resolved it, travelling the whole ladder exactly once.
-    fn deliver_click(
+    /// A point target converted to screen coordinates, with the application it named.
+    fn point_target(
+        &mut self,
+        tool: &str,
+        target: &Value,
+        params: &Map<String, Value>,
+    ) -> Result<(ClickTarget, (f64, f64)), JsonRpcError> {
+        let point = PointTarget::parse(target, params.get("app").and_then(Value::as_str))
+            .map_err(|error| rpc_error(-32602, error))?;
+        let screen = match point.space {
+            PointSpace::Screen => (point.x, point.y),
+            PointSpace::Window => {
+                let app = point.app.as_deref().expect("a window point names its app");
+                let frame = self
+                    .backend
+                    .focused_window_frame(&query_for_app(app))
+                    .map_err(backend_error)?
+                    .ok_or_else(|| {
+                        rpc_error(
+                            -32002,
+                            format!("{app} has no focused window to measure a window point from"),
+                        )
+                    })?;
+                (frame.x + point.x, frame.y + point.y)
+            }
+            // Screenshot pixels convert by the encoded image's size against the window it
+            // photographed, which needs the capture the point was measured on. Recorded artifacts
+            // only ever carry screen points.
+            PointSpace::Screenshot => {
+                return Err(capability_unavailable(
+                    tool,
+                    "screenshot-coordinate-space",
+                    "not-implemented",
+                ));
+            }
+        };
+        Ok((ClickTarget::Point(point.app), screen))
+    }
+
+    /// The centre of a resolved element's frame, which is where a pointer action aims at it.
+    fn element_point(&self, handle: &SnapshotHandle) -> Result<(f64, f64), JsonRpcError> {
+        let frame = self
+            .snapshot_node(handle)
+            .and_then(|node| node.frame)
+            .ok_or_else(|| {
+                rpc_error(
+                    -32003,
+                    "the resolved element exposes no frame to aim a pointer at",
+                )
+            })?;
+        Ok((frame.x + frame.width / 2.0, frame.y + frame.height / 2.0))
+    }
+
+    fn snapshot_node(&self, handle: &SnapshotHandle) -> Option<&axon_core::Node> {
+        let snapshot = self.snapshot.as_ref()?;
+        snapshot.node(snapshot.index_for_handle(handle).ok()?)
+    }
+
+    /// One pointer action, whatever resolved it, travelling the whole ladder exactly once.
+    ///
+    /// macOS has no background rung for a pointer action, so the ladder refuses or escalates to
+    /// the foreground. The target is verified inside the transaction, after activation and
+    /// immediately before the post: before activation, a window that the escalation is about to
+    /// raise is still covered, and a check made then says nothing about where the event will land.
+    fn deliver_pointer(
         &mut self,
         policy: DeliveryPolicy,
+        action: PointerAction,
         target: ClickTarget,
         point: (f64, f64),
         resolution: Value,
     ) -> Result<Value, JsonRpcError> {
-        let mut result = self.select_and_deliver_click(policy, target, point)?;
+        let ladder = self.pointer_ladder(action);
+        let Some(candidate) = self.selected(&ladder, policy) else {
+            return Ok(self.refusal(&ladder, policy));
+        };
+        let aim = match &target {
+            ClickTarget::Element(_) | ClickTarget::Recognized(..) => Some(self.snapshot_aim()?),
+            ClickTarget::Point(Some(app)) => Some(
+                self.backend
+                    .application_process(&query_for_app(app))
+                    .map_err(backend_error)?
+                    .map(|process| PointerAim {
+                        identity: process.identity,
+                        process_identifier: process.process_identifier,
+                    }),
+            ),
+            // A point naming no application is addressed at whatever holds the foreground.
+            ClickTarget::Point(None) => None,
+        };
+        let (foreground, owner) = match &aim {
+            Some(Some(aim)) => (
+                ForegroundTarget::Application(aim.identity.as_str()),
+                Some(aim.process_identifier),
+            ),
+            // Falling through to the frontmost here would post global input into whatever the
+            // user is working in, having been asked for something else.
+            Some(None) => {
+                return Ok(DeliveryOutcome::refusal_result(
+                    policy,
+                    DeliveryRefusal::new(
+                        DeliveryRefusalReason::TargetIdentityUnavailable,
+                        DeliveryRung::Foreground,
+                        Some(DeliveryCapability::GlobalInput),
+                        "the resolved target's owning application could not be identified, so \
+                         foreground delivery cannot activate and prove it",
+                    ),
+                ));
+            }
+            None => (ForegroundTarget::Frontmost, None),
+        };
+        let tool = action.tool();
+        let verification =
+            json!({"verified": false, "reason": format!("{tool} has no declared postcondition")});
+        let mut result = self.foreground_dispatch(
+            policy,
+            &candidate,
+            foreground,
+            // The HID tap drives the real cursor, so the transaction puts it back.
+            true,
+            verification,
+            move |backend| {
+                let (fresh, stale) = match &target {
+                    ClickTarget::Element(handle) => (
+                        backend.verify_pointer_target(handle, point),
+                        "target moved, is covered, or no longer matches the resolved element",
+                    ),
+                    ClickTarget::Recognized(app, frame) => (
+                        backend.verify_ocr_target(app, point, *frame),
+                        "target moved, is covered, or no longer matches the resolved text",
+                    ),
+                    ClickTarget::Point(_) => (
+                        point_belongs(backend, point, owner),
+                        "the point is not over a window of the application it was aimed at",
+                    ),
+                };
+                if !fresh.map_err(backend_error)? {
+                    return Err(rpc_error(-32003, format!("{tool} {stale}")));
+                }
+                match action {
+                    PointerAction::Click => backend
+                        .pointer_click(point)
+                        .map(|_| Value::Null)
+                        .map_err(backend_error),
+                    PointerAction::Wheel(delta) => backend
+                        .scroll_wheel(point, delta)
+                        .map(|steps| {
+                            json!({"eventPath": {
+                                "units": "pixel",
+                                "at": {"x": point.0, "y": point.1, "coordinateSpace": "screen"},
+                                "steps": steps
+                                    .iter()
+                                    .map(|(x, y)| json!({"deltaX": x, "deltaY": y}))
+                                    .collect::<Vec<_>>(),
+                            }})
+                        })
+                        .map_err(backend_error),
+                }
+            },
+        )?;
         if let (Some(object), false) = (result.as_object_mut(), resolution.is_null()) {
             object.insert("resolution".into(), resolution);
         }
         Ok(result)
     }
 
-    fn select_and_deliver_click(
-        &mut self,
-        policy: DeliveryPolicy,
-        target: ClickTarget,
-        point: (f64, f64),
-    ) -> Result<Value, JsonRpcError> {
-        // Planning is pure inspection, so it is safe before the ladder decides. The planner may
-        // discard this plan and refuse, and by then nothing native may have happened.
-        let plan = match &target {
-            ClickTarget::Element(handle) => self
-                .backend
-                .plan_pixel_click(handle, point)
-                .map_err(backend_error)?,
-            ClickTarget::Recognized(..) => PixelPlan::unavailable(NO_RECOGNIZED_TEXT_GEOMETRY),
-        };
-        let ladder = self.pointer_ladder(&plan);
-        let Some(candidate) = self.selected(&ladder, policy) else {
-            return Ok(self.refusal(&ladder, policy));
-        };
-        // Freshness is checked after selection, so the planner still decides before anything
-        // happens, and a target that moved under the request stays a stale-target error rather
-        // than becoming a delivery refusal.
-        let (fresh, stale) = match &target {
-            ClickTarget::Element(handle) => (
-                self.backend.verify_pointer_target(handle, point),
-                "click target moved, is covered, or no longer matches the resolved element",
-            ),
-            ClickTarget::Recognized(app, frame) => (
-                self.backend.verify_ocr_target(app, point, *frame),
-                "click target moved, is covered, or no longer matches the resolved text",
-            ),
-        };
-        if !fresh.map_err(backend_error)? {
-            return Err(rpc_error(-32003, stale));
-        }
-        let verification =
-            json!({"verified": false, "reason": "click has no declared postcondition"});
-        if candidate.rung == DeliveryRung::Pixel {
-            let PixelPlan::Bound(bound) = plan else {
-                unreachable!("the pixel rung is only offered for a bound plan")
-            };
-            return self.dispatch_pixel(
-                policy,
-                &candidate,
-                &bound,
-                PointerContract::Asserted,
-                verification,
-            );
-        }
-        // Owning-application identity is a foreground concern. Refusing on it while a bound pixel
-        // plan was available would decline an action that had a perfectly good target-bound path.
-        let Some(application) = self.resolved_application() else {
-            return Ok(DeliveryOutcome::refusal_result(
-                policy,
-                DeliveryRefusal::new(
-                    DeliveryRefusalReason::TargetIdentityUnavailable,
-                    DeliveryRung::Foreground,
-                    Some(DeliveryCapability::GlobalInput),
-                    "the resolved target's owning application could not be identified, so \
-                     foreground delivery cannot activate and prove it",
-                ),
-            ));
-        };
-        self.foreground_dispatch(
-            policy,
-            &candidate,
-            ForegroundTarget::Application(&application),
-            // `SendInput` drives the real cursor, so the transaction puts it back.
-            true,
-            verification,
-            |backend| backend.pointer_click(point),
-        )
-    }
-
-    /// Posts one bound sequence to one verified window, and reports what that proved.
-    /// `pointer` is `Asserted` for every caller here because `click` is the only action with a
-    /// pixel rung in this router: `keyboard` binds to an application rather than a window, so it
-    /// takes the semantic or foreground path and never reaches this one.
-    fn dispatch_pixel(
+    /// Posts one keyboard request to one application process, and reports what that proved.
+    fn dispatch_application(
         &mut self,
         policy: DeliveryPolicy,
         candidate: &DeliveryCandidate,
-        target: &PixelTarget,
-        pointer: PointerContract,
+        process: &ApplicationProcess,
+        intent: KeyboardIntent<'_>,
         verification: Value,
     ) -> Result<Value, JsonRpcError> {
-        let dispatch = match self.backend.dispatch_pixel_click(target) {
+        let dispatch = match self.backend.dispatch_application_keyboard(process, intent) {
             Ok(dispatch) => dispatch,
-            // Revalidation failed, so nothing was posted and the plan now names somewhere else.
-            // That is the same stale target a moved element produces, and it reads the same way.
-            Err(PixelDispatchError::Stale(reason)) => return Err(rpc_error(-32003, reason)),
-            Err(PixelDispatchError::Backend(error)) => return Err(backend_error(error)),
+            // Revalidation failed, so nothing was posted and the pid now names something else.
+            Err(BackgroundDispatchError::Stale(reason)) => return Err(rpc_error(-32003, reason)),
+            Err(BackgroundDispatchError::Backend(error)) => return Err(backend_error(error)),
         };
-        // This rung is defined by what it does not do. A dispatch that changed the foreground or
-        // moved the real pointer was not background delivery, whatever it managed to deliver.
-        let mut problems = Vec::new();
-        if let Some(partial) = &dispatch.partial {
-            problems.push(partial.clone());
-        }
-        if !dispatch.frontmost_unchanged {
-            problems.push("the foreground window changed across the dispatch".to_string());
-        }
-        if pointer.is_asserted() && !dispatch.pointer_unchanged {
-            problems.push("the real pointer moved across the dispatch".to_string());
-        }
-        // Mechanism acceptance and goal success are kept apart because at this rung the gap between
-        // them is the whole problem. A completed post proves each message was accepted and returned
-        // from; a window procedure that examined one and did nothing returns exactly like one that
-        // acted on it, which is the stated reason `PIXEL_MESSAGE_CLASSES` exists at all. Collapsing
-        // the two would hollow out that table's own defence: a class that regressed, or one that
-        // behaved differently in a context nobody probed, would produce an accepted post, intact
-        // invariants, and a report that the caller's click had worked.
+        // This rung is defined by what it does not do. A dispatch across which the foreground
+        // changed was not background delivery, whatever it managed to deliver. The pointer is
+        // reported and not judged: keystrokes touch no pointing device.
+        let held = dispatch.frontmost_unchanged;
         let mut result = json!({
-            "success": goal_success(&verification, dispatch.complete && problems.is_empty()),
-            "dispatch": {"success": dispatch.complete, "mechanism": candidate.mechanism},
+            "success": goal_success(&verification, held),
+            "dispatch": {"success": true, "mechanism": candidate.mechanism},
             "verification": verification,
             "backgroundDelivery": {
-                "targetProcessIdentifier": target.process_identifier,
+                "targetApplication": process.identity,
+                "targetProcessIdentifier": process.process_identifier,
                 "frontmostAppUnchanged": dispatch.frontmost_unchanged,
                 "pointerUnchanged": dispatch.pointer_unchanged,
-                // Whether that reading is a promise this dispatch made or an observation of the
-                // desktop it ran on.
-                "pointerAsserted": pointer.is_asserted(),
+                "pointerAsserted": PointerContract::Observed.is_asserted(),
             },
-            "targetWindow": target.evidence(),
         });
         let object = result
             .as_object_mut()
             .expect("a JSON object literal is an object");
-        if !problems.is_empty() {
-            object.insert("message".into(), json!(problems.join("; ")));
+        if !held {
+            object.insert(
+                "message".into(),
+                json!("the foreground application changed across the dispatch"),
+            );
         }
-        DeliveryOutcome {
-            policy,
-            delivery: Some(DeliveryRung::Pixel),
-            dispatch_success: dispatch.complete,
-            refusal: None,
-        }
-        .merge_into(object);
+        DeliveryOutcome::dispatched(policy, DeliveryRung::Application).merge_into(object);
         Ok(result)
     }
 
-    /// The stable identity of the application that owns the currently resolved target.
+    /// The application that owns the currently resolved target, spelled the way foreground
+    /// delivery compares it, and its process.
     ///
     /// Foreground delivery has to activate the application the *target* belongs to, not whichever
     /// app string the request happened to carry. A handle-only request carries no app string at
     /// all, and treating that as "already frontmost" would dispatch global input with no
     /// activation and no proof — the exact bug this contract exists to close.
-    fn resolved_application(&self) -> Option<String> {
-        let app = &self.snapshot.as_ref()?.app;
-        app.identifier
-            .as_deref()
-            .or(Some(app.name.as_str()))
-            .filter(|identity| !identity.is_empty())
-            .map(str::to_owned)
+    fn snapshot_aim(&mut self) -> Result<Option<PointerAim>, JsonRpcError> {
+        let Some(app) = self.snapshot.as_ref().map(|snapshot| &snapshot.app) else {
+            return Ok(None);
+        };
+        let query = match app.process_id {
+            Some(process_id) => AppQuery {
+                process_id: Some(process_id),
+                name: None,
+                identifier: None,
+            },
+            None => AppQuery {
+                process_id: None,
+                name: app.identifier.is_none().then(|| app.name.clone()),
+                identifier: app.identifier.clone(),
+            },
+        };
+        Ok(self
+            .backend
+            .application_process(&query)
+            .map_err(backend_error)?
+            .map(|process| PointerAim {
+                identity: process.identity,
+                process_identifier: process.process_identifier,
+            }))
     }
 
     fn pump_recording(&mut self) -> Result<(), JsonRpcError> {
