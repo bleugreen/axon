@@ -2412,15 +2412,28 @@ mod tests {
     /// that can record and a backend whose Accessibility grant is denied.
     struct EnumerationBackend {
         global_input: bool,
+        /// The window titles a capture reports, for the browser cross-check. A capture of a
+        /// backend without them is a test asking for more than it set up.
+        window_titles: Option<Vec<String>>,
     }
 
     impl EnumerationBackend {
         fn new() -> Self {
-            Self { global_input: true }
+            Self {
+                global_input: true,
+                window_titles: None,
+            }
         }
         fn without_global_input() -> Self {
             Self {
                 global_input: false,
+                window_titles: None,
+            }
+        }
+        fn with_windows(titles: &[&str]) -> Self {
+            Self {
+                global_input: true,
+                window_titles: Some(titles.iter().map(|title| (*title).to_owned()).collect()),
             }
         }
     }
@@ -2451,7 +2464,36 @@ mod tests {
             Ok(vec![])
         }
         fn capture(&mut self, _: &AppQuery) -> Result<Snapshot, axon_core::BackendError> {
-            unreachable!()
+            let titles = self.window_titles.clone().expect("no capture was set up");
+            Ok(Snapshot::new(axon_core::Application {
+                name: "Safari".into(),
+                process_id: Some(42),
+                identifier: Some("com.apple.Safari".into()),
+                windows: titles
+                    .into_iter()
+                    .map(|title| axon_core::Window {
+                        title: Some(title.clone()),
+                        root: axon_core::Node {
+                            role: "AXWindow".into(),
+                            subrole: None,
+                            name: None,
+                            title: Some(title),
+                            label: None,
+                            value: None,
+                            description: None,
+                            identifier: None,
+                            actions: Vec::new(),
+                            frame: None,
+                            editable: false,
+                            focused: None,
+                            enabled: None,
+                            children: Vec::new(),
+                            child_count: None,
+                            truncation_reason: None,
+                        },
+                    })
+                    .collect(),
+            }))
         }
         fn invoke(&mut self, _: &SnapshotHandle, _: &str) -> Result<(), axon_core::BackendError> {
             unreachable!()
@@ -2892,11 +2934,133 @@ mod tests {
         assert_eq!(error.data.unwrap()["path"], "params.arguments.value");
     }
 
+    /// Every tool this backend has no code path for refuses through the router, typed, before
+    /// anything is dispatched.
     #[test]
-    fn excluded_tools_are_capability_errors_before_dispatch() {
-        for tool in ["drag", "navigate"] {
-            let (_, capability) = EXCLUDED.iter().find(|(name, _)| *name == tool).unwrap();
-            assert!(!capability.is_empty());
+    fn excluded_tools_are_capability_errors_through_the_router() {
+        let mut router = Router::new(EnumerationBackend::new());
+        for (tool, capability) in EXCLUDED {
+            let error = router_error(&mut router, tool, Map::new());
+            assert_eq!(error.code, -32004, "{tool}");
+            let data = error.data.unwrap();
+            assert_eq!(data["code"], "capability-unavailable", "{tool}");
+            assert_eq!(data["capability"], *capability, "{tool}");
+        }
+    }
+
+    /// The tool surface and the exclusion list are two declarations of one fact, so a tool the
+    /// surface advertises on this backend can never also be one it refuses outright.
+    #[test]
+    fn no_tool_advertised_on_mac_is_excluded() {
+        let advertised = axon_core::backend_tools(axon_core::ToolBackend::Mac).unwrap();
+        for tool in advertised {
+            let name = tool["name"].as_str().unwrap();
+            assert!(
+                EXCLUDED.iter().all(|(excluded, _)| *excluded != name),
+                "{name} is advertised on mac and excluded"
+            );
+        }
+    }
+
+    /// A router without a browser service refuses the verbs the same typed way.
+    #[test]
+    fn browser_verbs_without_a_service_are_unavailable() {
+        let error = router_error(
+            &mut Router::new(EnumerationBackend::new()),
+            "windows",
+            Map::from_iter([("app".to_owned(), json!("Safari"))]),
+        );
+        assert_eq!(error.code, -32004);
+        assert_eq!(error.data.unwrap()["capability"], "BrowserScripting");
+    }
+
+    /// Every file in `schema/fixtures/browser` is the Swift router's answer to one request. The
+    /// Rust router, over the real service and settle against a scripted browser and consent
+    /// host, gives exactly the same answer to the same request.
+    #[test]
+    fn the_router_answers_every_browser_fixture_exactly_as_swift_does() {
+        use crate::apple_events::AeError;
+        use crate::automation::{EVENT_NOT_PERMITTED, NO_ERR, WOULD_REQUIRE_CONSENT};
+        use crate::browser::{Dictionary, fake};
+
+        let directory =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schema/fixtures/browser");
+        let mut names: Vec<String> = std::fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .filter(|name| name != "url-cases.json")
+            .collect();
+        names.sort();
+        assert_eq!(names.len(), 17, "a fixture without a scenario here is unpinned");
+
+        for name in names {
+            let fixture: Value =
+                serde_json::from_str(&std::fs::read_to_string(directory.join(&name)).unwrap())
+                    .unwrap();
+            let navigation = || fake::navigation_state("navigate-verified.json");
+            let (dictionary, status, running, state, ax): (_, _, _, _, &[&str]) = match name.as_str() {
+                "navigate-verified.json" | "navigate-redirect.json" | "navigate-unsettled.json" => {
+                    let (dictionary, state) = fake::navigation_state(&name);
+                    (dictionary, NO_ERR, true, state, &[])
+                }
+                "windows-matched.json" => (
+                    Dictionary::SAFARI,
+                    NO_ERR,
+                    true,
+                    fake::State {
+                        windows: vec![
+                            fake::window("Example Domain", &[], 1),
+                            fake::window("Second", &[], 1),
+                        ],
+                        ..fake::State::default()
+                    },
+                    &["Second", "Example Domain"],
+                ),
+                "windows-partial.json" => (
+                    Dictionary::SAFARI,
+                    NO_ERR,
+                    true,
+                    fake::State {
+                        windows: vec![fake::window("Same", &[], 1), fake::window("Same", &[], 1)],
+                        ..fake::State::default()
+                    },
+                    &["Same", "Different"],
+                ),
+                "tabs.json" => (Dictionary::CHROME, NO_ERR, true, fake::tabs_state(), &[]),
+                "error-not-determined-checked.json" => {
+                    (Dictionary::CHROME, WOULD_REQUIRE_CONSENT, true, navigation().1, &[])
+                }
+                "error-denied-checked.json" => {
+                    (Dictionary::SAFARI, EVENT_NOT_PERMITTED, true, navigation().1, &[])
+                }
+                "error-denied-executed.json" => (
+                    Dictionary::SAFARI,
+                    NO_ERR,
+                    true,
+                    fake::State {
+                        refuse: Some(AeError::NotPermitted),
+                        ..navigation().1
+                    },
+                    &[],
+                ),
+                "error-not-running.json" => (Dictionary::SAFARI, NO_ERR, false, navigation().1, &[]),
+                _ => (Dictionary::SAFARI, NO_ERR, true, fake::State::default(), &[]),
+            };
+            let rig = fake::rig_with(dictionary, status, running, state);
+            let mut router = Router::new(EnumerationBackend::with_windows(ax))
+                .with_browser(Box::new(rig.service));
+            let response = serde_json::to_value(
+                router
+                    .request(JsonRpcRequest::new(
+                        Some(JsonRpcId::Integer(1)),
+                        fixture["method"].as_str().unwrap(),
+                        Some(fixture["params"].clone()),
+                    ))
+                    .unwrap(),
+            )
+            .unwrap();
+            let key = if fixture.get("error").is_some() { "error" } else { "result" };
+            assert_eq!(response.get(key), fixture.get(key), "{name}");
         }
     }
 

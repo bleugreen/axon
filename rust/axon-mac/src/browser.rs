@@ -399,12 +399,9 @@ impl BrowserVerbs for BrowserService {
 pub(crate) mod fake {
     use super::*;
     use crate::automation::{AutomationHost, ConsentService};
-    use std::{
-        collections::HashMap,
-        sync::{
-            Mutex,
-            atomic::{AtomicU64, Ordering},
-        },
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
     };
 
     #[derive(Default)]
@@ -564,11 +561,15 @@ pub(crate) mod fake {
     }
 
     pub(crate) fn rig(dictionary: Dictionary, status: i32, state: State) -> Rig {
+        rig_with(dictionary, status, true, state)
+    }
+
+    pub(crate) fn rig_with(dictionary: Dictionary, status: i32, running: bool, state: State) -> Rig {
         let clock = Arc::new(FakeClock::default());
         let state = Arc::new(Mutex::new(state));
         let determinations = Arc::new(Mutex::new(Vec::new()));
         let consent = Arc::new(ConsentService::new(Box::new(Host {
-            running: true,
+            running,
             status,
             calls: Arc::clone(&determinations),
         })));
@@ -664,13 +665,6 @@ pub(crate) mod fake {
             ..State::default()
         }
     }
-
-    pub(crate) const _ASSERT_SEND: fn() = || {
-        fn send<T: Send>() {}
-        send::<BrowserService>();
-    };
-
-    pub(crate) fn _unused(_: HashMap<(), ()>) {}
 }
 
 #[cfg(test)]
