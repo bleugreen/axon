@@ -2930,6 +2930,12 @@ mod tests {
                         &["AXPress"],
                         rect(10.0, 10.0, 40.0, 20.0),
                     ),
+                    node(
+                        "AXPopUpButton",
+                        Some("Format"),
+                        &[],
+                        rect(60.0, 10.0, 80.0, 20.0),
+                    ),
                 ];
                 Self {
                     snapshot: Snapshot::new(axon_core::Application {
