@@ -38,7 +38,7 @@ def socket_health(**overrides: Any) -> dict[str, Any]:
     """
     A healthy macOS daemon's answer to ``health``, recorded from a live 0.3.6 daemon.
 
-    The socket returns ``DaemonReport`` (``Sources/AxonCore/HealthStatus.swift``), which is flat.
+    The socket returns ``DaemonReport`` (``Sources/AxonClient/HealthStatus.swift``), which is flat.
     It is not the ``health-v1`` document under ``schema/fixtures/health/``: that one is what the
     CLI's ``status --json`` synthesizes.
     """

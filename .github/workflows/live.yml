@@ -19,7 +19,7 @@ jobs:
     timeout-minutes: 30
     env:
       # The label `LaunchAgentConfiguration` registers by, in
-      # `Sources/AxonCore/LaunchAgentManager.swift`. Named once here because the parking and restore
+      # `Sources/AxonClient/LaunchAgentManager.swift`. Named once here because the parking and restore
       # steps address the agent through `launchctl` directly, which the CLI cannot do for them: the
       # question they ask is whether the agent is loaded, and no Axon subcommand reports that.
       AXON_LAUNCH_AGENT_LABEL: dev.axon.daemon

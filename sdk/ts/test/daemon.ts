@@ -117,7 +117,7 @@ export const socketFixture = <T = Record<string, unknown>>(name: string): T =>
 /**
  * A healthy macOS daemon's answer to `health`, recorded from a live 0.3.6 daemon over the socket.
  *
- * The socket returns `DaemonReport` (`Sources/AxonCore/HealthStatus.swift`), which is flat. It is
+ * The socket returns `DaemonReport` (`Sources/AxonClient/HealthStatus.swift`), which is flat. It is
  * not the `health-v1` document under `schema/fixtures/health/`: that one is what the CLI's
  * `status --json` synthesizes, and a fake replaying it lets a client pass tests it cannot pass
  * against a real daemon.

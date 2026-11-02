@@ -1443,7 +1443,7 @@ every macOS recording once ended with zero actions.
 The display name is `NSRunningApplication.localizedName`, falling back to the
 application element's `AXTitle`, decided in one place in
 `rust/axon-mac/src/global_input.rs` for enumeration, capture, and the recorder
-alike. That matches `AppResolver` in `Sources/AxonCore`, which reports and
+alike. That matches `AppResolver` in `Sources/AxonClient`, which reports and
 resolves applications by localized name and bundle identifier and never consults
 AXTitle; AXTitle names windows and elements, not applications. Sharing the
 decision keeps a recorded artifact calling an application what `look` calls it.

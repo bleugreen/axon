@@ -111,7 +111,7 @@ The `Settings` scene is a small, singleton window. v1 surfaces:
 
 - **Accessibility permission** — current grant status, button to open System Settings if missing.
 - **Daemon** — install / uninstall / restart, last-launched, log tail.
-- **Updates** — channel, "Check now", current cask status (reuses existing [HomebrewInstaller](../../Sources/AxonCore/HomebrewInstaller.swift)).
+- **Updates** — channel, "Check now", current cask status (reuses existing [HomebrewInstaller](../../Sources/AxonClient/HomebrewInstaller.swift)).
 - **Secrets** — HMAC key status, rotate key (with confirmation), default `op` vault for new bindings.
 - **History** — retention window, "Clear history" with confirmation, redaction-level setting.
 
