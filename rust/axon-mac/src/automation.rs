@@ -533,6 +533,8 @@ mod tests {
 
         release.send(()).unwrap();
         assert!(waiting.join().unwrap().unwrap().outcomes[0].granted);
+        // The scripted silent leg still answers undetermined, so the next request prompts again.
+        release.send(()).unwrap();
         assert!(consent.request().is_ok(), "the flag clears when the request ends");
     }
 
