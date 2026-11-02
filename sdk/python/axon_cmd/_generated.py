@@ -17,7 +17,7 @@ AVAILABILITY: Final[Mapping[str, Mapping[str, bool]]] = {
     "find": {"linux": True, "mac": True, "swift": True, "windows": True},
     "wait_for_value": {"linux": True, "mac": True, "swift": True, "windows": True},
     "wait_for_stability": {"linux": True, "mac": True, "swift": True, "windows": True},
-    "permit": {"linux": False, "mac": False, "swift": True, "windows": False},
+    "permit": {"linux": False, "mac": True, "swift": True, "windows": False},
     "run": {"linux": True, "mac": True, "swift": True, "windows": True},
     "save": {"linux": True, "mac": True, "swift": True, "windows": True},
     "click": {"linux": True, "mac": True, "swift": True, "windows": True},
