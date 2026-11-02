@@ -1178,15 +1178,63 @@ mod tests {
     #[test]
     fn all_capabilities_are_reported() {
         let backend = MacBackend::new().unwrap();
-        let capabilities = backend.capabilities().unwrap();
-        assert_eq!(capabilities.len(), Capability::ALL.len());
-        assert!(
-            !capabilities
+        assert_eq!(backend.capabilities().unwrap().len(), Capability::ALL.len());
+    }
+
+    /// Native input is usable exactly when Accessibility is, because posting to the HID tap, posting
+    /// to a process, and hit testing all need that grant. What stays unimplemented says so rather
+    /// than claiming a version it was excluded from.
+    #[test]
+    fn native_input_follows_the_accessibility_grant() {
+        for accessibility in [true, false] {
+            let report = capability_report(MacPermissions {
+                accessibility,
+                screen_recording: true,
+            });
+            for capability in [
+                Capability::PointerInput,
+                Capability::KeyboardInput,
+                Capability::HitTest,
+            ] {
+                let info = report.iter().find(|info| info.capability == capability).unwrap();
+                assert_eq!(info.usable, accessibility, "{capability:?}");
+                if !accessibility {
+                    assert_eq!(
+                        info.restriction.as_deref(),
+                        Some("Accessibility permission is not granted")
+                    );
+                }
+            }
+            let observe = report
                 .iter()
-                .find(|info| info.capability == Capability::KeyboardInput)
-                .unwrap()
-                .usable
-        );
+                .find(|info| info.capability == Capability::ObserveChanges)
+                .unwrap();
+            assert!(!observe.usable);
+            if accessibility {
+                assert_eq!(observe.restriction.as_deref(), Some("not implemented by axon-mac"));
+            }
+        }
+    }
+
+    /// A recorded point fallback writes the bundle identifier into `app` (axn/208), and the single
+    /// `app` field resolves either spelling.
+    #[test]
+    fn an_app_string_resolves_by_display_name_or_bundle_identifier() {
+        let listed = || {
+            vec![
+                running(4242, "TextEdit", Some("com.apple.TextEdit")),
+                running(5150, "Notes", Some("com.apple.Notes")),
+            ]
+        };
+        for spelling in ["TextEdit", "textedit", "com.apple.TextEdit"] {
+            assert_eq!(
+                resolve_listed(listed(), &query(None, Some(spelling), None))
+                    .unwrap()
+                    .process_id,
+                4242,
+                "{spelling}"
+            );
+        }
     }
     /// The matching rule under an Accessibility API that answered normally, which is what the
     /// resolution tests below are about. Only the withdrawn-access tests pass another verdict.

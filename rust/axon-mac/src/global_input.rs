@@ -28,8 +28,12 @@ const EVENT_SCROLL: u32 = 22;
 const EVENT_TAP_DISABLED_TIMEOUT: u32 = 0xffff_fffe;
 const EVENT_TAP_DISABLED_USER: u32 = 0xffff_ffff;
 const FIELD_KEYCODE: u32 = 9;
-const FIELD_SCROLL_Y: u32 = 11;
-const FIELD_SCROLL_X: u32 = 12;
+/// `kCGScrollWheelEventPointDeltaAxis1` and `Axis2`: the wheel delta in pixels, which is the unit
+/// the `scroll` tool's `deltaX`/`deltaY` and its replay are in. Fields 11 and 12 are the same
+/// delta in lines, roughly a tenth of the pixel value, and recording those made every replayed
+/// scroll about ten times too small.
+const FIELD_SCROLL_Y: u32 = 96;
+const FIELD_SCROLL_X: u32 = 97;
 const FLAG_COMMAND: u64 = 1 << 20;
 const FLAG_SHIFT: u64 = 1 << 17;
 const FLAG_CONTROL: u64 = 1 << 18;
@@ -725,6 +729,13 @@ mod tests {
         let mut enables = 0;
         assert!(recover_disabled_tap(EVENT_TAP_DISABLED_USER, || enables += 1));
         assert_eq!(enables, 1);
+    }
+    /// The recorded unit is the replayed unit. Pinned because the line fields sit one name away
+    /// in the Core Graphics header and read back plausible-looking numbers.
+    #[test]
+    fn scroll_deltas_are_read_from_the_pixel_fields() {
+        assert_eq!(FIELD_SCROLL_Y, 96, "kCGScrollWheelEventPointDeltaAxis1");
+        assert_eq!(FIELD_SCROLL_X, 97, "kCGScrollWheelEventPointDeltaAxis2");
     }
     #[test]
     fn callback_leaves_input_events_for_capture() {
