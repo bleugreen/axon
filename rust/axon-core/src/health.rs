@@ -345,6 +345,10 @@ fn classify_restriction(restriction: &str) -> &'static str {
     let lowered = restriction.to_ascii_lowercase();
     if lowered.contains("screen recording") {
         reason::SCREEN_RECORDING_NOT_GRANTED
+    } else if lowered.contains("accessibility permission") {
+        // The macOS grant, matched by that exact phrase: Linux restrictions speak of the AT-SPI
+        // "accessibility bus", which is a different fact with its own codes.
+        reason::ACCESSIBILITY_NOT_GRANTED
     } else if lowered.contains("wayland") {
         reason::WAYLAND_RESTRICTED
     } else if lowered.contains("portal") {
@@ -543,6 +547,16 @@ mod tests {
         assert_eq!(
             classify_restriction("Screen Recording permission is not granted"),
             reason::SCREEN_RECORDING_NOT_GRANTED
+        );
+        // A capability withheld for a missing grant is not a capability this build lacks; the
+        // two answers send a caller to System Settings and to a newer build respectively.
+        assert_eq!(
+            classify_restriction("Accessibility permission is not granted"),
+            reason::ACCESSIBILITY_NOT_GRANTED
+        );
+        assert_eq!(
+            classify_restriction("no applications are on the accessibility bus"),
+            reason::NOT_IMPLEMENTED
         );
         assert_eq!(reason_for("scroll"), reason::NOT_IMPLEMENTED);
         // The prose survives alongside the code; a person still gets the explanation.
