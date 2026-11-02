@@ -28,6 +28,10 @@ pub const CHARACTER_INTERVAL_MS: u64 = 20;
 pub struct Stroke {
     pub code: u16,
     pub flags: u64,
+    /// The character a character key types, carried as the key events' Unicode payload as a real
+    /// keyboard's are. A consumer that reads the characters of `cmd+a` (the recorder among them)
+    /// otherwise sees an empty string.
+    pub character: Option<char>,
 }
 
 /// The US-ANSI virtual key code that produces `character`, ignoring case.
@@ -90,6 +94,14 @@ pub fn ansi_key_code(character: char) -> Option<u16> {
     })
 }
 
+/// The character a US-ANSI key code types, unshifted: [`ansi_key_code`] run backwards, for a
+/// keystroke that arrives without a Unicode payload.
+pub fn ansi_character(code: u16) -> Option<char> {
+    "abcdefghijklmnopqrstuvwxyz0123456789=-][';\\,./`"
+        .chars()
+        .find(|character| ansi_key_code(*character) == Some(code))
+}
+
 /// The virtual key code of a named key.
 ///
 /// `Delete` is forward delete (117), which is what it means on Windows and Linux and what the
@@ -146,14 +158,18 @@ pub fn modifier_flag(modifier: Modifier) -> u64 {
 /// modifier the key code is what the application reads, and code 0 is `a`.
 pub fn stroke(spec: &str) -> Result<Stroke, String> {
     let chord = axon_core::parse_chord(spec)?;
-    let code = match chord.key {
-        Key::Named(key) => named_key_code(key)?,
-        Key::Character(character) => ansi_key_code(character).ok_or_else(|| {
-            format!("{character} has no key on the US-ANSI layout this backend posts with")
-        })?,
+    let (code, character) = match chord.key {
+        Key::Named(key) => (named_key_code(key)?, None),
+        Key::Character(character) => (
+            ansi_key_code(character).ok_or_else(|| {
+                format!("{character} has no key on the US-ANSI layout this backend posts with")
+            })?,
+            Some(character.to_ascii_lowercase()),
+        ),
     };
     Ok(Stroke {
         code,
+        character,
         flags: chord
             .modifiers
             .into_iter()
@@ -427,7 +443,12 @@ pub mod native {
             }
             let payload: Vec<u16> = character.encode_utf16(&mut [0; 2]).to_vec();
             let code = ansi_key_code(character).unwrap_or(0);
-            for event in build(&stroke_events(Stroke { code, flags: 0 }), Some(&payload))? {
+            let stroke = Stroke {
+                code,
+                flags: 0,
+                character: None,
+            };
+            for event in build(&stroke_events(stroke), |_| Some(payload.clone()))? {
                 post(destination, event);
             }
         }
@@ -436,7 +457,14 @@ pub mod native {
 
     /// Presses one key, with each of its modifiers pressed around it as a key of its own.
     pub fn post_stroke(destination: Destination, stroke: Stroke) -> Result<(), BackendError> {
-        for event in build(&stroke_events(stroke), None)? {
+        // Only the key's own events carry its character; a modifier key types nothing.
+        let payload = stroke
+            .character
+            .map(|character| character.encode_utf16(&mut [0; 2]).to_vec());
+        let key = stroke.code;
+        for event in build(&stroke_events(stroke), |event| {
+            (event.code == key).then(|| payload.clone()).flatten()
+        })? {
             post(destination, event);
         }
         Ok(())
@@ -633,12 +661,22 @@ mod tests {
     }
 
     #[test]
+    fn every_ansi_key_code_reads_back_to_the_character_that_produces_it() {
+        for character in "abcdefghijklmnopqrstuvwxyz0123456789=-][';\\,./`".chars() {
+            let code = ansi_key_code(character).unwrap();
+            assert_eq!(ansi_character(code), Some(character), "{character}");
+        }
+        assert_eq!(ansi_character(36), None, "Return is a named key, not a character");
+    }
+
+    #[test]
     fn chords_map_to_flags_with_super_and_command_as_one_key() {
         assert_eq!(
             stroke("cmd+s").unwrap(),
             Stroke {
                 code: 1,
-                flags: FLAG_COMMAND
+                flags: FLAG_COMMAND,
+                character: Some('s'),
             }
         );
         assert_eq!(stroke("super+s").unwrap(), stroke("command+s").unwrap());
@@ -646,10 +684,18 @@ mod tests {
             stroke("ctrl+option+shift+Tab").unwrap(),
             Stroke {
                 code: 48,
-                flags: FLAG_CONTROL | FLAG_OPTION | FLAG_SHIFT
+                flags: FLAG_CONTROL | FLAG_OPTION | FLAG_SHIFT,
+                character: None,
             }
         );
-        assert_eq!(stroke("Return").unwrap(), Stroke { code: 36, flags: 0 });
+        assert_eq!(
+            stroke("Return").unwrap(),
+            Stroke {
+                code: 36,
+                flags: 0,
+                character: None
+            }
+        );
         assert!(stroke("cmd+é").unwrap_err().contains("US-ANSI"));
         assert!(stroke("Insert").is_err());
         assert!(has_modifiers("cmd+a").unwrap());

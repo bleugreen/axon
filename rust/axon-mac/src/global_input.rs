@@ -431,7 +431,18 @@ fn classify_key(event: CGEventRef) -> RecordedKeystroke {
         unsafe {
             CGEventKeyboardGetUnicodeString(event, chars.len(), &mut len, chars.as_mut_ptr());
         }
-        String::from_utf16_lossy(&chars[..len.min(chars.len())]).to_lowercase()
+        let typed = String::from_utf16_lossy(&chars[..len.min(chars.len())]).to_lowercase();
+        // A synthetic chord can arrive with no characters at all. Recording `cmd+` would write an
+        // action no replay can parse, so the key is recovered from its position instead.
+        if typed.is_empty() {
+            u16::try_from(keycode)
+                .ok()
+                .and_then(crate::input::ansi_character)
+                .map(String::from)
+                .unwrap_or_default()
+        } else {
+            typed
+        }
     });
     let mut parts = Vec::new();
     if flags & FLAG_COMMAND != 0 {
