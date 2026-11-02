@@ -466,9 +466,9 @@ pub(crate) mod fake {
         pub before: Option<TabReading>,
         /// What it reads after, one entry per reading, holding on the last.
         pub after: Vec<TabReading>,
-        navigated: bool,
-        readings: usize,
-        current: Option<TabReading>,
+        pub navigated: bool,
+        pub readings: usize,
+        pub current: Option<TabReading>,
         pub queries: Vec<AeQuery>,
         /// What every event answers instead, when set.
         pub refuse: Option<AeError>,
