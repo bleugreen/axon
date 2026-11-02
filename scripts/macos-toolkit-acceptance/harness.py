@@ -760,6 +760,23 @@ class ElectronTarget(Target):
         self.process = None
 
 
+def locate_application(bundle_id: str, name: str) -> Path | None:
+    """Where an application with this bundle identifier is installed.
+
+    By identifier rather than by a fixed path: a cask installed without sudo lands in
+    ~/Applications, and an application that is installed must not be recorded as absent.
+    """
+    found = subprocess.run(
+        ["mdfind", f"kMDItemCFBundleIdentifier == '{bundle_id}'"],
+        capture_output=True,
+        text=True,
+    ).stdout.split("\n")
+    for candidate in [*found, f"/Applications/{name}", str(Path.home() / "Applications" / name)]:
+        if candidate and candidate.endswith(".app") and Path(candidate).exists():
+            return Path(candidate)
+    return None
+
+
 GHOSTTY_SCRIPT = """#!/bin/sh
 # Every byte the terminal receives goes straight to the sentinel file: non-canonical mode hands
 # each keystroke to cat as it arrives, so no Return is needed to see it and the measured
@@ -786,8 +803,9 @@ class GhosttyTarget(Target):
         self.probe = probe
         self.workdir = workdir
         self.remeasure_when = "a Ghostty or macOS major release"
-        self.application = Path("/Applications/Ghostty.app")
-        self.unavailable = None if self.application.exists() else "Ghostty is not installed"
+        located = locate_application("com.mitchellh.ghostty", "Ghostty.app")
+        self.application = located or Path("/Applications/Ghostty.app")
+        self.unavailable = None if located else "Ghostty is not installed"
         self.process: subprocess.Popen | None = None
         self.sentinel: Path | None = None
         self.nonce = ""
