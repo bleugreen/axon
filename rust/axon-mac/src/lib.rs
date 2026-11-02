@@ -2262,18 +2262,36 @@ mod tests {
             unreachable!()
         }
     }
-    impl BackgroundPixelPointer for EnumerationBackend {
-        fn plan_pixel_click(
-            &mut self,
-            _: &SnapshotHandle,
-            _: (f64, f64),
-        ) -> Result<PixelPlan, axon_core::BackendError> {
+    impl NativeInput for EnumerationBackend {
+        fn point_owner(&mut self, _: (f64, f64)) -> Result<Option<i32>, axon_core::BackendError> {
             unreachable!()
         }
-        fn dispatch_pixel_click(
+        fn focused_window_frame(
             &mut self,
-            _: &PixelTarget,
-        ) -> Result<PixelDispatch, PixelDispatchError> {
+            _: &AppQuery,
+        ) -> Result<Option<axon_core::Rect>, axon_core::BackendError> {
+            unreachable!()
+        }
+        fn scroll_wheel(
+            &mut self,
+            _: (f64, f64),
+            _: (f64, f64),
+        ) -> Result<Vec<(i32, i32)>, axon_core::BackendError> {
+            unreachable!()
+        }
+    }
+    impl BackgroundApplicationKeyboard for EnumerationBackend {
+        fn application_process(
+            &mut self,
+            _: &AppQuery,
+        ) -> Result<Option<ApplicationProcess>, axon_core::BackendError> {
+            unreachable!()
+        }
+        fn dispatch_application_keyboard(
+            &mut self,
+            _: &ApplicationProcess,
+            _: KeyboardIntent<'_>,
+        ) -> Result<ApplicationDispatch, BackgroundDispatchError> {
             unreachable!()
         }
     }
@@ -2561,52 +2579,6 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.code, -32602);
         assert_eq!(error.data.unwrap()["path"], "params.arguments.value");
-    }
-
-    #[test]
-    fn unsupported_click_forms_refuse_before_dispatch() {
-        for target in [
-            json!({"point":{"x":10,"y":20}}),
-            json!({"x":10,"y":20,"coordinateSpace":"screen"}),
-        ] {
-            let params = validated_params("click", json!({"target":target}));
-            let error = router_error(&mut Router::new(EnumerationBackend::new()), "click", params);
-            assert_eq!(error.code, -32004);
-            assert_eq!(error.data.as_ref().unwrap()["capability"], "point-target");
-            assert_eq!(error.data.as_ref().unwrap()["reason"], "not-implemented");
-        }
-    }
-
-    #[test]
-    fn canonical_scroll_defaults_and_unsupported_forms_refuse_before_dispatch() {
-        let defaulted = validated_params("scroll", json!({"target":{"app":"Notes","name":"List"}}));
-        assert_eq!(defaulted["deltaX"], 0);
-        assert_eq!(defaulted["deltaY"], -120);
-        let error = router_error(
-            &mut Router::new(EnumerationBackend::new()),
-            "scroll",
-            defaulted,
-        );
-        assert_eq!(error.code, -32004);
-        assert_eq!(
-            error.data.as_ref().unwrap()["capability"],
-            "directional-scroll"
-        );
-
-        for arguments in [
-            json!({"app":"Notes","deltaX":0,"deltaY":0}),
-            json!({"target":{"point":{"x":10,"y":20}},"deltaX":0,"deltaY":0}),
-            json!({"target":{"location":{"app":"Notes","text":"Bottom"}},"deltaX":0,"deltaY":0}),
-        ] {
-            let params = validated_params("scroll", arguments);
-            let error = router_error(
-                &mut Router::new(EnumerationBackend::new()),
-                "scroll",
-                params,
-            );
-            assert_eq!(error.code, -32004);
-            assert_eq!(error.data.as_ref().unwrap()["reason"], "not-implemented");
-        }
     }
 
     #[test]
