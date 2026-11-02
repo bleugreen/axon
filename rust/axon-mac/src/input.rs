@@ -402,10 +402,11 @@ pub mod native {
     /// text into shortcuts in an application they are not looking at.
     fn build(
         events: &[KeyEvent],
-        payload: Option<&[u16]>,
+        payload_for: impl Fn(&KeyEvent) -> Option<Vec<u16>>,
     ) -> Result<Vec<CGEventRef>, BackendError> {
         let mut built = Vec::with_capacity(events.len());
         for event in events {
+            let payload = payload_for(event);
             match created(
                 unsafe { CGEventCreateKeyboardEvent(std::ptr::null(), event.code, event.down) },
                 "keyboard",
@@ -414,7 +415,7 @@ pub mod native {
                 Ok(created) => {
                     unsafe {
                         CGEventSetFlags(created, event.flags);
-                        if let Some(payload) = payload {
+                        if let Some(payload) = &payload {
                             CGEventKeyboardSetUnicodeString(
                                 created,
                                 payload.len(),
