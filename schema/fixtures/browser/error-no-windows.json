@@ -1,0 +1,11 @@
+{
+  "error" : {
+    "code" : -32603,
+    "message" : "Browser automation failed: browser has no windows"
+  },
+  "method" : "navigate",
+  "params" : {
+    "app" : "Safari",
+    "url" : "https://example.com"
+  }
+}

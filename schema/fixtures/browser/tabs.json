@@ -1,0 +1,42 @@
+{
+  "method" : "tabs",
+  "params" : {
+    "app" : "Google Chrome"
+  },
+  "result" : {
+    "authority" : "application_scripting",
+    "crossCheck" : {
+      "reason" : "AX does not expose a portable authoritative tab model",
+      "status" : "unavailable"
+    },
+    "tabs" : [
+      {
+        "active" : false,
+        "id" : "window:1:tab:1",
+        "index" : 1,
+        "title" : "Example Domain",
+        "url" : "https://example.com/",
+        "windowID" : "window:1",
+        "windowIndex" : 1
+      },
+      {
+        "active" : true,
+        "id" : "window:1:tab:2",
+        "index" : 2,
+        "title" : "Navigated",
+        "url" : "https://example.com/navigated",
+        "windowID" : "window:1",
+        "windowIndex" : 1
+      },
+      {
+        "active" : true,
+        "id" : "window:2:tab:1",
+        "index" : 1,
+        "title" : "Second",
+        "url" : "https://example.org/",
+        "windowID" : "window:2",
+        "windowIndex" : 2
+      }
+    ]
+  }
+}

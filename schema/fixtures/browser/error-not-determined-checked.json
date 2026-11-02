@@ -1,0 +1,19 @@
+{
+  "error" : {
+    "code" : -32603,
+    "data" : {
+      "app" : "Google Chrome",
+      "authorization" : "notDetermined",
+      "capability" : "browserAutomation",
+      "leg" : "checked",
+      "nativeStatus" : -1744,
+      "reason" : "automation-not-granted"
+    },
+    "message" : "Automation permission for Google Chrome has not been granted. Open the Axon menu bar item and choose Browser Automation... to grant it. Axon does not appear in System Settings > Privacy & Security > Automation until consent has been requested once."
+  },
+  "method" : "navigate",
+  "params" : {
+    "app" : "Chrome",
+    "url" : "https://example.com"
+  }
+}
