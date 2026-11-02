@@ -1951,7 +1951,7 @@ fn visible_frame(snapshot: &Snapshot, index: usize) -> Option<axon_core::Rect> {
             (a.x + a.width).min(b.x + b.width),
             (a.y + a.height).min(b.y + b.height),
         );
-        (right > left && bottom > top).then(|| axon_core::Rect {
+        (right > left && bottom > top).then_some(axon_core::Rect {
             x: left,
             y: top,
             width: right - left,
