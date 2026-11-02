@@ -1138,7 +1138,9 @@ jobs:
             cat /tmp/axon-probe-window.log
             exit 1
           fi
-          retained_app="$(mcp '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{"app":"Calculator","screenshot":false}}}' | jq -r '.result.structuredContent.app.name')"
+          calculator="$(mcp '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{"app":"Calculator","screenshot":false}}}')"
+          retained_app="$(printf '%s' "$calculator" | jq -r '.result.structuredContent.app.name')"
+          display_name="$(printf '%s' "$calculator" | jq -r '[.result.structuredContent.app.windows[].root | .. | objects | select(.role == "text box" and .value? == "0")][0].name')"
 
           xdotool search --name 'Axon Probe Window' windowactivate --sync >/dev/null 2>&1 || true
           foreground="$(xdotool getactivewindow getwindowname 2>/dev/null || echo '<none>')"
@@ -1167,7 +1169,7 @@ jobs:
           test "$(display_value)" = 0
           echo 'keyboard under backgroundOnly refused, naming the foreground rung it needs and the GTK 4 pixel rung it cannot have'
 
-          jq -cn --arg app "$retained_app" '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"wait_for_value","arguments":{"target":{"app":$app,"role":"text box"},"equals":"07","timeoutMs":5000,"intervalMs":50}}}' \
+          jq -cn --arg app "$retained_app" --arg name "$display_name" '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"wait_for_value","arguments":{"target":{"app":$app,"name":$name},"equals":"07","timeoutMs":5000,"intervalMs":50}}}' \
             | "$daemon" mcp > /tmp/axon-linux-x11-keyboard-wait.json &
           wait_pid=$!
           sleep 0.1
