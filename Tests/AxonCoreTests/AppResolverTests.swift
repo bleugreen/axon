@@ -1,3 +1,4 @@
+@testable import AxonClient
 import Testing
 @testable import AxonCore
 

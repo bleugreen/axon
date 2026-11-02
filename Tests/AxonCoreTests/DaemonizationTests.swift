@@ -1,3 +1,4 @@
+@testable import AxonClient
 import Foundation
 import Darwin
 import Testing
