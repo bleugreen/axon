@@ -18,8 +18,8 @@
 use crate::browser::Dictionary;
 use axon_core::{
     AutomationAuthorization, AutomationLeg, AutomationRequestReport, AutomationStatusReport,
-    BrowserCapability, BrowserConsentState, BrowserError, BrowserRefusalData,
-    BrowserRefusalReason, ConsentNeed, ConsentOutcome, JsonRpcError, consent_in_progress,
+    BrowserCapability, BrowserConsentState, BrowserError, BrowserRefusalData, BrowserRefusalReason,
+    ConsentNeed, ConsentOutcome, JsonRpcError, consent_in_progress,
 };
 use std::{
     collections::HashMap,
@@ -762,10 +762,18 @@ mod tests {
     #[test]
     fn browsers_are_named_the_way_swift_names_them() {
         for query in ["Safari", "SAFARI", "com.apple.Safari", "com.apple.safari"] {
-            assert_eq!(SupportedBrowser::named(query), Some(SAFARI), "{query}");
+            assert_eq!(
+                SupportedBrowser::named(query),
+                Some(super::SAFARI),
+                "{query}"
+            );
         }
         for query in ["Google Chrome", "chrome", "Chrome", "com.google.Chrome"] {
-            assert_eq!(SupportedBrowser::named(query), Some(CHROME), "{query}");
+            assert_eq!(
+                SupportedBrowser::named(query),
+                Some(super::CHROME),
+                "{query}"
+            );
         }
         for query in ["Firefox", "Safari Technology Preview", "google", ""] {
             assert_eq!(SupportedBrowser::named(query), None, "{query}");
@@ -782,35 +790,38 @@ mod tests {
     #[test]
     fn the_verb_check_never_prompts_and_names_the_menu_gesture() {
         let fake = Fake {
-            running: vec![SAFARI.bundle_identifier],
-            checked: HashMap::from([(SAFARI.bundle_identifier, WOULD_REQUIRE_CONSENT)]),
+            running: vec![SAFARI],
+            checked: HashMap::from([(SAFARI, WOULD_REQUIRE_CONSENT)]),
             ..Fake::default()
         };
-        let (message, data) = refusal(service(&fake).check(&SAFARI).unwrap_err());
-        assert_eq!(*fake.calls.lock().unwrap(), vec![(SAFARI.bundle_identifier.to_owned(), false)]);
+        let (message, data) = refusal(service(&fake).check(&super::SAFARI).unwrap_err());
+        assert_eq!(
+            *fake.calls.lock().unwrap(),
+            vec![(SAFARI.to_owned(), false)]
+        );
         assert_eq!(data.authorization, AutomationAuthorization::NotDetermined);
         assert_eq!(data.leg, AutomationLeg::Checked);
         assert_eq!(data.native_status, Some(WOULD_REQUIRE_CONSENT));
         assert!(message.contains("choose Browser Automation... to grant it"));
 
         let denied = Fake {
-            checked: HashMap::from([(SAFARI.bundle_identifier, EVENT_NOT_PERMITTED)]),
+            checked: HashMap::from([(SAFARI, EVENT_NOT_PERMITTED)]),
             ..Fake::default()
         };
         let consent = service(&denied);
-        let (message, data) = refusal(consent.check(&SAFARI).unwrap_err());
+        let (message, data) = refusal(consent.check(&super::SAFARI).unwrap_err());
         assert_eq!(data.authorization, AutomationAuthorization::Denied);
         assert!(message.contains("System Settings > Privacy & Security > Automation"));
         assert!(!message.contains("earlier in this session"));
-        let (again, _) = refusal(consent.check(&SAFARI).unwrap_err());
+        let (again, _) = refusal(consent.check(&super::SAFARI).unwrap_err());
         assert!(again.contains("earlier in this session"), "{again}");
 
         let failing = Fake {
-            checked: HashMap::from([(SAFARI.bundle_identifier, -50)]),
+            checked: HashMap::from([(SAFARI, -50)]),
             ..Fake::default()
         };
         assert_eq!(
-            service(&failing).check(&SAFARI).unwrap_err(),
+            service(&failing).check(&super::SAFARI).unwrap_err(),
             BrowserError::AuthorizationFailed {
                 app: "Safari".into(),
                 status: -50
@@ -823,39 +834,48 @@ mod tests {
     #[test]
     fn a_passing_check_does_not_retire_an_executed_denial() {
         let fake = Fake {
-            running: vec![SAFARI.bundle_identifier],
-            checked: HashMap::from([(SAFARI.bundle_identifier, NO_ERR)]),
+            running: vec![SAFARI],
+            checked: HashMap::from([(SAFARI, NO_ERR)]),
             ..Fake::default()
         };
         let consent = service(&fake);
-        consent.check(&SAFARI).unwrap();
-        consent.record_executed_denial(&SAFARI);
-        consent.check(&SAFARI).unwrap();
+        consent.check(&super::SAFARI).unwrap();
+        consent.record_executed_denial(&super::SAFARI);
+        consent.check(&super::SAFARI).unwrap();
 
         let status = consent.status();
         assert_eq!(status.need, ConsentNeed::Explain);
-        assert_eq!(status.browsers[0].status, Some(AutomationAuthorization::Denied));
+        assert_eq!(
+            status.browsers[0].status,
+            Some(AutomationAuthorization::Denied)
+        );
         assert_eq!(status.browsers[0].leg, Some(AutomationLeg::Executed));
     }
 
     #[test]
     fn only_a_prompted_answer_replaces_an_executed_denial() {
         let consent = service(&Fake::default());
-        consent.record_executed_denial(&SAFARI);
+        consent.record_executed_denial(&super::SAFARI);
         let executed = Answer {
             status: EVENT_NOT_PERMITTED,
             leg: AutomationLeg::Executed,
         };
         for leg in [AutomationLeg::Checked, AutomationLeg::Executed] {
-            consent.record(SAFARI.bundle_identifier, Answer { status: NO_ERR, leg });
-            assert_eq!(consent.held(SAFARI.bundle_identifier), Some(executed), "{leg:?}");
+            consent.record(
+                SAFARI,
+                Answer {
+                    status: NO_ERR,
+                    leg,
+                },
+            );
+            assert_eq!(consent.held(SAFARI), Some(executed), "{leg:?}");
         }
         let prompted = Answer {
             status: NO_ERR,
             leg: AutomationLeg::Prompted,
         };
-        consent.record(SAFARI.bundle_identifier, prompted);
-        assert_eq!(consent.held(SAFARI.bundle_identifier), Some(prompted));
+        consent.record(SAFARI, prompted);
+        assert_eq!(consent.held(SAFARI), Some(prompted));
     }
 
     /// Asking the determination again would return the same wrong `noErr` and report a grant, so
@@ -863,20 +883,23 @@ mod tests {
     #[test]
     fn the_gesture_honors_an_executed_denial_without_asking_again() {
         let fake = Fake {
-            running: vec![SAFARI.bundle_identifier],
-            checked: HashMap::from([(SAFARI.bundle_identifier, NO_ERR)]),
-            prompted: HashMap::from([(SAFARI.bundle_identifier, NO_ERR)]),
+            running: vec![SAFARI],
+            checked: HashMap::from([(SAFARI, NO_ERR)]),
+            prompted: HashMap::from([(SAFARI, NO_ERR)]),
             ..Fake::default()
         };
         let consent = service(&fake);
-        consent.record_executed_denial(&SAFARI);
+        consent.record_executed_denial(&super::SAFARI);
         let report = consent.request().unwrap();
 
         assert!(fake.calls.lock().unwrap().is_empty(), "no determination");
         assert!(!report.outcomes[0].granted);
         let detail = report.outcomes[0].detail.as_deref().unwrap();
         assert!(detail.starts_with("Automation permission for Safari is denied."));
-        assert!(!detail.contains("Browser Automation..."), "the gesture must not point at itself");
+        assert!(
+            !detail.contains("Browser Automation..."),
+            "the gesture must not point at itself"
+        );
         assert_eq!(report.need, ConsentNeed::Explain);
     }
 }
