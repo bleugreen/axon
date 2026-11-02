@@ -26,9 +26,16 @@ pub mod probe;
 
 #[cfg(target_os = "macos")]
 mod accessibility;
-#[cfg(target_os = "macos")]
+// The daemon that sends Apple events and answers consent is macOS-only; elsewhere these modules
+// are compiled for their hermetic tests, which drive the verb and ledger logic against a scripted
+// browser.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod apple_events;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod automation;
 mod background;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod browser;
 #[cfg(target_os = "macos")]
 mod core_foundation;
 #[cfg(target_os = "macos")]
@@ -46,9 +53,6 @@ pub use platform::MacBackend;
 /// names something the macOS daemon has no code path for, which stays a JSON-RPC error.
 const EXCLUDED: &[(&str, &str)] = &[
     ("drag", "PointerDrag"),
-    ("navigate", "BrowserScripting"),
-    ("windows", "BrowserScripting"),
-    ("tabs", "BrowserScripting"),
     ("debug.create", "DebugSession"),
     ("debug.start", "DebugSession"),
     ("debug.step", "DebugSession"),
@@ -104,6 +108,9 @@ pub struct Router<B> {
     observation_redaction: axon_core::ObservationRedactionContext,
     daemon: axon_core::NativeDaemonState,
     recorder: Option<axon_core::UserActionRecorder>,
+    /// The browser verbs. Absent, they refuse as an unavailable capability: the daemon installs
+    /// the service, and a router built without one has no browser to talk to.
+    browser: Option<Box<dyn browser::BrowserVerbs>>,
 }
 
 fn visual_observation_result(
@@ -482,8 +489,78 @@ impl<
             observation_redaction: Default::default(),
             daemon: Default::default(),
             recorder: None,
+            browser: None,
         }
     }
+
+    /// Serves `navigate`, `windows`, and `tabs` through `browser`.
+    pub(crate) fn with_browser(mut self, browser: Box<dyn browser::BrowserVerbs>) -> Self {
+        self.browser = Some(browser);
+        self
+    }
+
+    /// One browser verb. The parameter errors are worded as Swift's `ToolParamDecoder` words them,
+    /// and every other refusal comes from the service already in its wire shape.
+    fn browser_verb(
+        &mut self,
+        method: &str,
+        params: &Map<String, Value>,
+    ) -> Result<Value, JsonRpcError> {
+        let Some(service) = self.browser.as_deref() else {
+            return Err(capability_unavailable(
+                method,
+                "BrowserScripting",
+                "not-implemented",
+            ));
+        };
+        let app = browser_string(params, "app")?;
+        match method {
+            "navigate" => {
+                let url = browser_string(params, "url")?;
+                let result = service
+                    .navigate(app, url)
+                    .map_err(axon_core::BrowserError::into_rpc)?;
+                serde_json::to_value(result).map_err(internal_error)
+            }
+            "windows" => {
+                let windows = service
+                    .windows(app)
+                    .map_err(axon_core::BrowserError::into_rpc)?;
+                let scripted: Vec<String> =
+                    windows.iter().map(|window| window.title.clone()).collect();
+                // Accessibility is the cross-check, never the authority: a capture that fails
+                // leaves the scripted answer standing and says why it went unchecked.
+                let cross_check = match self.backend.capture(&query_for_app(app)) {
+                    Ok(snapshot) => axon_core::window_cross_check(
+                        &scripted,
+                        &snapshot
+                            .app
+                            .windows
+                            .iter()
+                            .filter_map(|window| window.title.clone())
+                            .collect::<Vec<_>>(),
+                    ),
+                    Err(error) => axon_core::CrossCheck::Unavailable {
+                        reason: format!("Accessibility cross-check unavailable: {error}"),
+                    },
+                };
+                serde_json::to_value(axon_core::WindowsReport {
+                    windows,
+                    authority: axon_core::ScriptingAuthority::ApplicationScripting,
+                    cross_check,
+                })
+                .map_err(internal_error)
+            }
+            _ => {
+                let window = browser_integer(params, "window")?;
+                let tabs = service
+                    .tabs(app, window)
+                    .map_err(axon_core::BrowserError::into_rpc)?;
+                serde_json::to_value(axon_core::TabsReport::new(tabs)).map_err(internal_error)
+            }
+        }
+    }
+
     fn register_snapshot(&mut self, snapshot: &Snapshot) -> Vec<axon_core::SemanticElementName> {
         let live_processes = self.backend.live_process_ids().ok();
         self.semantic_names.register_with_liveness(snapshot, |pid| {
@@ -955,6 +1032,10 @@ impl<
                 capability,
                 "not-implemented",
             ));
+        }
+        // Browser verbs deliver nothing to a window, so they take no delivery policy.
+        if matches!(method, "navigate" | "windows" | "tabs") {
+            return self.browser_verb(method, params);
         }
         // The policy is decoded before the target is resolved and before any backend call, so an
         // unknown value can never reach a native API.
@@ -2173,6 +2254,28 @@ fn required_str<'a>(p: &'a Map<String, Value>, key: &str) -> Result<&'a str, Jso
     p.get(key)
         .and_then(Value::as_str)
         .ok_or_else(|| rpc_error(-32602, format!("missing string parameter {key}")))
+}
+
+/// A required string, refused in Swift's words: absent and mistyped are different mistakes.
+fn browser_string<'a>(params: &'a Map<String, Value>, key: &str) -> Result<&'a str, JsonRpcError> {
+    match params.get(key) {
+        None | Some(Value::Null) => Err(rpc_error(
+            -32602,
+            format!("Missing string parameter: {key}"),
+        )),
+        Some(Value::String(value)) => Ok(value),
+        Some(_) => Err(rpc_error(-32602, format!("{key} must be a string"))),
+    }
+}
+
+fn browser_integer(params: &Map<String, Value>, key: &str) -> Result<Option<i64>, JsonRpcError> {
+    match params.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_i64()
+            .map(Some)
+            .ok_or_else(|| rpc_error(-32602, format!("{key} must be an integer"))),
+    }
 }
 
 fn number_param(params: &Map<String, Value>, key: &str, default: f64) -> Result<f64, JsonRpcError> {
