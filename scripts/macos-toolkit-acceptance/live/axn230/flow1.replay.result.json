@@ -1,0 +1,270 @@
+{
+ "batch": {
+  "continueOnError": true,
+  "dryRun": false,
+  "success": false,
+  "trace": [
+   {
+    "actionId": "a001",
+    "error": "action failed",
+    "index": 0,
+    "result": {
+     "delivery": "foreground",
+     "deliveryPolicy": "foregroundPermitted",
+     "dispatch": {
+      "mechanism": "CGEventPost(kCGHIDEventTap)",
+      "success": true
+     },
+     "dispatchSuccess": true,
+     "foreground": {
+      "activationProved": true,
+      "alreadyFrontmost": true,
+      "message": null,
+      "pointerRestored": true,
+      "priorApp": "com.apple.calculator",
+      "priorAppProcessIdentifier": 46413,
+      "restored": true
+     },
+     "refusal": null,
+     "success": false,
+     "verification": {
+      "reason": "click has no declared postcondition",
+      "verified": false
+     }
+    },
+    "success": false,
+    "tool": "click"
+   },
+   {
+    "actionId": "a002",
+    "error": "action failed",
+    "index": 1,
+    "result": {
+     "backgroundDelivery": {
+      "evidence": [
+       "safari-keyboard-2026-08-16",
+       "chrome-keyboard-2026-08-16",
+       "electron-keyboard-2026-08-16",
+       "AxonAcceptanceTarget-keyboard-2026-08-16",
+       "AxonAcceptanceWebView-keyboard-2026-08-16"
+      ],
+      "frontmostAppUnchanged": true,
+      "modifiersRestored": true,
+      "pointerAsserted": false,
+      "pointerUnchanged": true,
+      "targetApplication": "com.apple.calculator",
+      "targetProcessIdentifier": 46413,
+      "variant": "keyDown+keyUp/source=null"
+     },
+     "delivery": "application",
+     "deliveryPolicy": "backgroundOnly",
+     "dispatch": {
+      "mechanism": "CGEventPostToPid",
+      "success": true
+     },
+     "dispatchSuccess": true,
+     "refusal": null,
+     "success": false,
+     "verification": {
+      "reason": "keyboard input has no declared postcondition",
+      "verified": false
+     }
+    },
+    "success": false,
+    "tool": "keyboard"
+   },
+   {
+    "actionId": "a003",
+    "error": "action failed",
+    "index": 2,
+    "result": {
+     "delivery": "foreground",
+     "deliveryPolicy": "foregroundPermitted",
+     "dispatch": {
+      "mechanism": "CGEventPost(kCGHIDEventTap)",
+      "success": true
+     },
+     "dispatchSuccess": true,
+     "foreground": {
+      "activationProved": true,
+      "alreadyFrontmost": false,
+      "message": "com.apple.TextEdit: NSRunningApplication.activateWithOptions: returned true; com.apple.calculator: NSRunningApplication.activateWithOptions: returned true",
+      "pointerRestored": true,
+      "priorApp": "com.apple.calculator",
+      "priorAppProcessIdentifier": 46413,
+      "restored": true
+     },
+     "refusal": null,
+     "success": false,
+     "targetResolution": {
+      "candidates": [],
+      "confidence": "medium",
+      "context": "complete",
+      "evidence": [
+       {
+        "actual": "AXTextArea",
+        "expected": "AXTextArea",
+        "field": "role",
+        "outcome": "matched"
+       },
+       {
+        "actual": "First Text View",
+        "expected": "First Text View",
+        "field": "identifier",
+        "outcome": "matched"
+       }
+      ],
+      "observedLocator": {
+       "frame": {
+        "height": 384.0,
+        "width": 656.0,
+        "x": 213.0,
+        "y": 109.0
+       },
+       "identifier": {
+        "exact": "First Text View"
+       },
+       "role": "AXTextArea",
+       "value": {
+        "exact": "Z"
+       }
+      },
+      "path": "fullSnapshot",
+      "reasons": [
+       "role AXTextArea",
+       "identifier exact First Text View"
+      ],
+      "status": "unique"
+     },
+     "verification": {
+      "reason": "click has no declared postcondition",
+      "verified": false
+     }
+    },
+    "success": false,
+    "targetResolution": {
+     "candidates": [],
+     "confidence": "medium",
+     "context": "complete",
+     "evidence": [
+      {
+       "actual": "AXTextArea",
+       "expected": "AXTextArea",
+       "field": "role",
+       "outcome": "matched"
+      },
+      {
+       "actual": "First Text View",
+       "expected": "First Text View",
+       "field": "identifier",
+       "outcome": "matched"
+      }
+     ],
+     "observedLocator": {
+      "frame": {
+       "height": 384.0,
+       "width": 656.0,
+       "x": 213.0,
+       "y": 109.0
+      },
+      "identifier": {
+       "exact": "First Text View"
+      },
+      "role": "AXTextArea",
+      "value": {
+       "exact": "Z"
+      }
+     },
+     "path": "fullSnapshot",
+     "reasons": [
+      "role AXTextArea",
+      "identifier exact First Text View"
+     ],
+     "status": "unique"
+    },
+    "tool": "click"
+   },
+   {
+    "actionId": "a004",
+    "error": "action failed",
+    "index": 3,
+    "result": {
+     "delivery": "foreground",
+     "deliveryPolicy": "foregroundPermitted",
+     "dispatch": {
+      "mechanism": "CGEventPost(kCGHIDEventTap)",
+      "success": true
+     },
+     "dispatchSuccess": true,
+     "foreground": {
+      "activationProved": true,
+      "alreadyFrontmost": false,
+      "message": "com.apple.TextEdit: NSRunningApplication.activateWithOptions: returned true; com.apple.calculator: NSRunningApplication.activateWithOptions: returned true",
+      "modifiersRestored": true,
+      "pointerRestored": null,
+      "priorApp": "com.apple.calculator",
+      "priorAppProcessIdentifier": 46413,
+      "restored": true
+     },
+     "refusal": null,
+     "success": false,
+     "verification": {
+      "reason": "keyboard input has no declared postcondition",
+      "verified": false
+     }
+    },
+    "success": false,
+    "tool": "keyboard"
+   },
+   {
+    "actionId": "a005",
+    "error": "action failed",
+    "index": 4,
+    "result": {
+     "delivery": "foreground",
+     "deliveryPolicy": "foregroundPermitted",
+     "dispatch": {
+      "mechanism": "CGEventPost(kCGHIDEventTap)",
+      "success": true
+     },
+     "dispatchSuccess": true,
+     "eventPath": {
+      "at": {
+       "coordinateSpace": "screen",
+       "x": 549.5,
+       "y": 296.5
+      },
+      "steps": [
+       {
+        "deltaX": 0,
+        "deltaY": -120
+       },
+       {
+        "deltaX": 0,
+        "deltaY": -120
+       }
+      ],
+      "units": "pixel"
+     },
+     "foreground": {
+      "activationProved": true,
+      "alreadyFrontmost": false,
+      "message": "com.apple.TextEdit: NSRunningApplication.activateWithOptions: returned true; com.apple.calculator: NSRunningApplication.activateWithOptions: returned true",
+      "pointerRestored": true,
+      "priorApp": "com.apple.calculator",
+      "priorAppProcessIdentifier": 46413,
+      "restored": true
+     },
+     "refusal": null,
+     "success": false,
+     "verification": {
+      "reason": "scroll has no declared postcondition",
+      "verified": false
+     }
+    },
+    "success": false,
+    "tool": "scroll"
+   }
+  ]
+ }
+}

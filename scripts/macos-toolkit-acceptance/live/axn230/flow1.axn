@@ -1,0 +1,36 @@
+version: 2
+args: []
+actions:
+- id: a001
+  tool: click
+  target:
+    app: com.apple.calculator
+    point:
+      x: 596.0
+      y: 762.0
+  warnings:
+  - could not derive a canonical semantic target; recorded point fallback
+- id: a002
+  tool: keyboard
+  app: Calculator
+  text: '12'
+  warnings:
+  - focused element did not expose a value; recorded keyboard fallback
+- id: a003
+  tool: click
+  target:
+    app: com.apple.TextEdit
+    locator:
+      identifier:
+        exact: First Text View
+      role: AXTextArea
+    name: axn230-long-txt/line-01-of-the-axn230-caret
+- id: a004
+  tool: keyboard
+  app: TextEdit
+  key: cmd+Right
+- id: a005
+  tool: scroll
+  app: TextEdit
+  deltaX: 0.0
+  deltaY: -240.0

@@ -1,0 +1,40 @@
+version: 2
+args: []
+actions:
+- id: a001
+  tool: click
+  target:
+    app: com.apple.TextEdit
+    locator:
+      identifier:
+        exact: First Text View
+      role: AXTextArea
+    name: axn230-long-txt/z
+  deliveryPolicy: foregroundPermitted
+- id: a002
+  tool: keyboard
+  app: Calculator
+  text: yy
+  warnings:
+  - focused element did not expose a value; recorded keyboard fallback
+- id: a003
+  tool: click
+  target:
+    app: com.apple.calculator
+    point:
+      x: 711.0
+      y: 817.0
+  warnings:
+  - could not derive a canonical semantic target; recorded point fallback
+  deliveryPolicy: foregroundPermitted
+- id: a004
+  tool: keyboard
+  app: TextEdit
+  key: cmd+a
+  deliveryPolicy: foregroundPermitted
+- id: a005
+  tool: scroll
+  app: TextEdit
+  deltaX: 0.0
+  deltaY: -120.0
+  deliveryPolicy: foregroundPermitted
