@@ -594,6 +594,37 @@ mod tests {
         );
     }
 
+    fn shell_fixture(name: &str) -> serde_json::Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../schema/fixtures/shell")
+            .join(name);
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    /// The service produces exactly the shapes shell-v1 pins, from the scenarios they describe.
+    #[test]
+    fn the_service_answers_with_the_pinned_shell_fixtures() {
+        let undetermined = Fake {
+            running: vec![SAFARI],
+            checked: HashMap::from([(SAFARI, WOULD_REQUIRE_CONSENT)]),
+            prompted: HashMap::from([(SAFARI, NO_ERR)]),
+            ..Fake::default()
+        };
+        let consent = service(&undetermined);
+        assert_eq!(
+            serde_json::to_value(consent.status()).unwrap(),
+            shell_fixture("automation-status.json")
+        );
+        assert_eq!(
+            serde_json::to_value(consent.request().unwrap()).unwrap(),
+            shell_fixture("automation-request.json")
+        );
+        assert_eq!(
+            serde_json::to_value(service(&Fake::default()).request().unwrap()).unwrap(),
+            shell_fixture("automation-request-no-browser.json")
+        );
+    }
+
     #[test]
     fn the_bundle_id_descriptor_type_codes_match_the_headers() {
         assert_eq!(TYPE_APPLICATION_BUNDLE_ID, 0x6275_6e64);

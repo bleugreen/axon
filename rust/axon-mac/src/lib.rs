@@ -2570,6 +2570,14 @@ mod tests {
         // Refused before dispatch: nothing was started, so nothing had to be abandoned.
         assert!(router.recorder.is_none());
         assert!(!router.daemon.recording.status().recording);
+
+        // The menu shell keys its "request Accessibility" alert on exactly this error, so its
+        // whole shape is shell-v1 contract (`schema/fixtures/shell`).
+        let pinned: Value = serde_json::from_str(include_str!(
+            "../../../schema/fixtures/shell/error-accessibility-denied.json"
+        ))
+        .unwrap();
+        assert_eq!(serde_json::to_value(&failure.error).unwrap(), pinned);
     }
 
     #[test]

@@ -1,0 +1,11 @@
+{
+  "code": -32004,
+  "data": {
+    "capability": "observeGlobalInput",
+    "code": "accessibility-denied",
+    "diagnostic": null,
+    "kind": "capability-unavailable",
+    "reason": "Accessibility permission is not granted"
+  },
+  "message": "capability observeGlobalInput is unavailable: Accessibility permission is not granted"
+}
