@@ -163,7 +163,7 @@ final class MenuShell: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 item.isEnabled = false
                 menu.addItem(item)
             case let .action(title, action, enabled, key):
-                let item = ActionItem(title: title, action: #selector(perform(_:)), keyEquivalent: key)
+                let item = ActionItem(title: title, action: #selector(chooseMenuAction(_:)), keyEquivalent: key)
                 item.menuAction = action
                 item.target = self
                 item.isEnabled = enabled
@@ -175,7 +175,7 @@ final class MenuShell: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.autoenablesItems = false
     }
 
-    @objc private func perform(_ sender: ActionItem) {
+    @objc private func chooseMenuAction(_ sender: ActionItem) {
         guard let action = sender.menuAction else { return }
         switch action {
         case .useThisCopy: useThisCopy()
