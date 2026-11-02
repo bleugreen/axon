@@ -524,7 +524,8 @@ fn send_key(spec: &str) -> Result<(), BackendError> {
     let modifier_keys = modifiers
         .into_iter()
         .map(crate::keys::modifier_key)
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| cap(Capability::KeyboardInput, error))?;
     let mut inputs = Vec::with_capacity(modifier_keys.len() * 2 + 2);
     for modifier in &modifier_keys {
         inputs.push(key_input(*modifier, false));
@@ -2625,7 +2626,7 @@ impl Drop for ProbeAttachments {
 }
 
 fn send_alt_unlock() {
-    let alt = crate::keys::modifier_key(Modifier::Alt);
+    let alt = crate::keys::modifier_key(Modifier::Alt).expect("Alt is a Windows modifier");
     let inputs = [key_input(alt, false), key_input(alt, true)];
     let _ = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
 }

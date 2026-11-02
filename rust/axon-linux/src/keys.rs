@@ -8,12 +8,14 @@ pub const SUPER_L: Keysym = 0xFFEB;
 const RETURN: Keysym = 0xFF0D;
 const TAB: Keysym = 0xFF09;
 
-pub fn keysym_for_modifier(modifier: Modifier) -> Keysym {
+/// X11 has no Command key, so a chord naming one is refused here rather than pressed as Super.
+pub fn keysym_for_modifier(modifier: Modifier) -> Result<Keysym, &'static str> {
     match modifier {
-        Modifier::Shift => SHIFT_L,
-        Modifier::Control => CONTROL_L,
-        Modifier::Alt => ALT_L,
-        Modifier::Super => SUPER_L,
+        Modifier::Shift => Ok(SHIFT_L),
+        Modifier::Control => Ok(CONTROL_L),
+        Modifier::Alt => Ok(ALT_L),
+        Modifier::Super => Ok(SUPER_L),
+        Modifier::Command => Err(axon_core::COMMAND_IS_MACOS_ONLY),
     }
 }
 pub fn keysym_for(key: Key) -> Keysym {
