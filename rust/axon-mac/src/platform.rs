@@ -587,14 +587,36 @@ pub struct MacBackend {
     global_input: MacGlobalInputObserver,
     /// What each activation call since the last take did, by primitive and return value.
     activation_evidence: Vec<String>,
+    /// When this backend last brought an application forward. A pointer post waits out
+    /// [`POINTER_SETTLE_AFTER_ACTIVATION`] from here.
+    last_activation: Option<std::time::Instant>,
 }
+
+/// How long a pointer post waits after an activation before it lands.
+///
+/// Being frontmost is not the same as having a key window. AppKit's first-mouse rule spends the
+/// first click on a window that is not yet key on making it key, and `NSTextView` does not accept
+/// that click as a click: on bgsrv-mac (axn/230) a click posted about 120 ms after the frontmost
+/// readback succeeded was delivered and placed no caret. The acceptance campaign's foreground
+/// control, which acted on every target, waits 600 ms after activating; this matches it.
+const POINTER_SETTLE_AFTER_ACTIVATION: Duration = Duration::from_millis(600);
 impl MacBackend {
     pub fn new() -> Result<Self, BackendError> {
         Ok(Self {
             handles: HashMap::new(),
             global_input: MacGlobalInputObserver::default(),
             activation_evidence: Vec::new(),
+            last_activation: None,
         })
+    }
+    /// Holds a pointer post until the most recent activation has had time to make its window key.
+    fn settle_after_activation(&self) {
+        if let Some(remaining) = self
+            .last_activation
+            .and_then(|at| POINTER_SETTLE_AFTER_ACTIVATION.checked_sub(at.elapsed()))
+        {
+            std::thread::sleep(remaining);
+        }
     }
     pub fn accessibility_enabled(&self) -> bool {
         accessibility::granted()
@@ -777,6 +799,7 @@ impl PlatformBackend for MacBackend {
                 .push(format!("{identity}: no single running process to activate"));
             return Ok(false);
         };
+        self.last_activation = Some(std::time::Instant::now());
         let (primitive, accepted) =
             workspace::activate(pid).unwrap_or(("NSRunningApplication lookup", false));
         self.activation_evidence
@@ -986,6 +1009,7 @@ impl PlatformBackend for MacBackend {
         Err(cap(Capability::ObserveChanges, "excluded from v1"))
     }
     fn pointer_click(&mut self, point: (f64, f64)) -> Result<(), BackendError> {
+        self.settle_after_activation();
         input::native::click(point)
     }
     fn pointer_drag(
@@ -1042,6 +1066,7 @@ impl NativeInput for MacBackend {
         point: (f64, f64),
         delta: (f64, f64),
     ) -> Result<Vec<(i32, i32)>, BackendError> {
+        self.settle_after_activation();
         input::native::scroll(point, &input::wheel_steps(delta.0, delta.1))
     }
     fn modifier_state(&mut self) -> Option<crate::ModifierState> {
