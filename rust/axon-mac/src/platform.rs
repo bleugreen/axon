@@ -647,7 +647,7 @@ impl MacBackend {
                 continue;
             };
             let (name, bundle_identifier) =
-                crate::global_input::application_identity(pid, accessibility_name);
+                workspace::application_identity(pid, accessibility_name);
             found.push(RunningApplication {
                 process_id: pid,
                 name,
