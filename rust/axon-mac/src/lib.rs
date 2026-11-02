@@ -279,6 +279,33 @@ impl ModifierState {
     }
 }
 
+/// How long the after-reading waits for the window server to apply a dispatch's releases.
+const MODIFIER_SETTLE: Duration = Duration::from_millis(300);
+
+/// The modifier state after a dispatch, read once the window server has caught up.
+///
+/// Posted events are applied asynchronously, so a reading taken the instant a chord's final
+/// release is posted can still show the modifier held; on bgsrv-mac (axn/230) it did, while a
+/// reading a moment later showed it released. The reading is retried until it matches `before` or
+/// the bound passes, and only a state still changed at the bound is a held modifier.
+fn settled_modifier_state<B: NativeInput>(
+    backend: &mut B,
+    before: Option<ModifierState>,
+) -> Option<ModifierState> {
+    let deadline = Instant::now() + MODIFIER_SETTLE;
+    loop {
+        let after = backend.modifier_state();
+        let settled = match (before, after) {
+            (Some(before), Some(after)) => before.held() == after.held(),
+            _ => true,
+        };
+        if settled || Instant::now() >= deadline {
+            return after;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
 /// Stamps the modifier invariant onto a keyboard result's `section` (`foreground` or
 /// `backgroundDelivery`), beside the pointer's.
 ///
@@ -684,7 +711,10 @@ impl<
     ) -> Result<Value, JsonRpcError> {
         let modifiers_before = self.backend.modifier_state();
         let dispatched = self.backend.dispatch_application_keyboard(process, intent);
-        let readback = Some((modifiers_before, self.backend.modifier_state()));
+        let readback = Some((
+            modifiers_before,
+            settled_modifier_state(&mut self.backend, modifiers_before),
+        ));
         let dispatch = match dispatched {
             Ok(dispatch) => dispatch,
             // Revalidation failed, so nothing was posted and the pid now names something else.
@@ -1068,7 +1098,7 @@ impl<
                     move |backend| {
                         let before = backend.modifier_state();
                         let posted = backend.keyboard(&app, intent);
-                        *slot = Some((before, backend.modifier_state()));
+                        *slot = Some((before, settled_modifier_state(backend, before)));
                         posted.map(|_| Value::Null).map_err(backend_error)
                     },
                 )?;
