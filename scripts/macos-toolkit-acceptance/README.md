@@ -191,6 +191,26 @@ rows, every one of them with both controls acting and every invariant held. See
 click, and every target acted on PID-targeted keystrokes — across three unrelated engines and a
 native AppKit control, with the decoy frontmost and the real pointer provably unmoved throughout.
 
+### Ghostty, 2026-11-01 (axn/204)
+
+One keyboard row was added on bgsrv-mac, macOS 26.6 (25G72), on a different machine and a newer
+macOS than the ten rows above, which were measured on 26.4. Ghostty 1.4.0 is keyboard-only because
+it was added to answer one question, and its readback is a sentinel file: the terminal runs a
+script that puts the line discipline in non-canonical mode and appends every byte it receives, so
+the measured variant stays exactly `keyDown+keyUp/source=null` of the typed characters. It was
+**accepted**, with both controls acting, the decoy frontmost throughout, and the pointer unmoved.
+axn/204's field report that pid-targeted keystrokes into Ghostty did nothing came from the Swift
+daemon's layout-translated construction, which is a different variant. The harness locates an
+application by bundle identifier, because a cask installed without sudo lives in `~/Applications`.
+
+### Live daemon evidence
+
+`live/axn230/` holds the transcript of the Rust daemon's live acceptance on the signed bench, not a
+campaign row: each request and response, with `look` trees condensed. It also holds the two
+recorded flows, their replay copies with `deliveryPolicy` added, and the replay results. The entry
+labelled `flow1-replay` overlapped the lane's own live loop and is not evidence; its rerun,
+`flow1-replay-acceptance`, is.
+
 ### One mechanism explains all ten rows
 
 The AppKit fixture reports every event `NSApplication` is handed, which makes the cause visible

@@ -41,14 +41,19 @@ pub const PID_POINTER_REFUSED: &str = "macOS delivers no window-bound mouse even
      and AxonAcceptanceWebView-click-2026-08-16)";
 
 /// The measured rows the keyboard availability rests on, across WebKit, Chromium, Electron,
-/// AppKit, and an embedded WKWebView. Mechanism evidence, not an allowlist: an application absent
-/// from this list is available all the same.
+/// AppKit, an embedded WKWebView, and a terminal. Mechanism evidence, not an allowlist: an
+/// application absent from this list is available all the same.
+///
+/// The Ghostty row answers axn/204, a field report that pid-targeted keystrokes into Ghostty did
+/// nothing. Measured at this variant they act, so that report was a property of the Swift daemon's
+/// layout-translated event construction, and Ghostty is not on the denylist.
 pub const KEYBOARD_EVIDENCE: &[&str] = &[
     "safari-keyboard-2026-08-16",
     "chrome-keyboard-2026-08-16",
     "electron-keyboard-2026-08-16",
     "AxonAcceptanceTarget-keyboard-2026-08-16",
     "AxonAcceptanceWebView-keyboard-2026-08-16",
+    "ghostty-keyboard-2026-11-01",
 ];
 
 /// The one event construction the keyboard rows measured. A denylist entry must cite a row

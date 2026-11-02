@@ -284,7 +284,13 @@ pre-dispatch exits always restore because no input is pending.
 Activation is skipped when the target already holds the foreground. If activation
 cannot be proved, nothing is posted and the action refuses with
 `activationNotProved`. If a dispatch moves the real pointer, the pointer is
-captured and restored around it. If restoration fails after dispatch, the result
+captured and restored around it. A keyboard dispatch, at any rung, must leave the
+session's modifier state as it found it: a chord presses and releases its
+modifiers as keys, and the backend reads the window server's modifier state
+before and after and reports `modifiersRestored`. A modifier left logically held
+turns every later keystroke on the machine into a shortcut, so a state still
+changed after a bounded settle fails the dispatch rather than only being
+reported. If restoration fails after dispatch, the result
 keeps its `delivery`, `dispatchSuccess`, and verification evidence and reports
 the failed hand-back separately.
 
