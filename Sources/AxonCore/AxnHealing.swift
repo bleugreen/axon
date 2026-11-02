@@ -1,4 +1,5 @@
 
+import AxonClient
 import Foundation
 
 public enum LocatorHealStatus: String, Codable, Sendable {

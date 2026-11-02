@@ -1,3 +1,4 @@
+import AxonClient
 import Foundation
 
 /// The command line's translation from argv into the wire parameters the daemon's router reads.

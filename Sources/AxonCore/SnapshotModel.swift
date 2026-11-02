@@ -1,3 +1,4 @@
+import AxonClient
 import Foundation
 
 public struct SnapshotID: RawRepresentable, Codable, Equatable, Hashable, Sendable {

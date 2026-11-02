@@ -1,4 +1,5 @@
 import ApplicationServices
+import AxonClient
 import Foundation
 
 public struct ObservedAppChange: Codable, Equatable, Sendable {

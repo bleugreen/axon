@@ -1,5 +1,6 @@
 import ApplicationServices
 import AppKit
+import AxonClient
 import Foundation
 
 public enum SnapshotCaptureError: Error, CustomStringConvertible {

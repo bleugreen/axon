@@ -1,3 +1,4 @@
+import AxonClient
 public extension LocatorResolution {
     var jsonValue: JSONValue {
         jsonValue(activeSecretRedactor: ActiveSecretRedactor())
