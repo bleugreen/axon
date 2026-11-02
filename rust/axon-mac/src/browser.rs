@@ -851,9 +851,9 @@ mod tests {
 
     #[test]
     fn windows_and_tabs_read_every_index_in_order() {
-        for dictionary in [Dictionary::SAFARI, Dictionary::CHROME] {
+        for (dictionary, app) in [(Dictionary::SAFARI, "Safari"), (Dictionary::CHROME, "Chrome")] {
             let rig = rig(dictionary, NO_ERR, tabs_state());
-            let windows = rig.service.windows("Safari").unwrap();
+            let windows = rig.service.windows(app).unwrap();
             assert_eq!(
                 windows,
                 vec![
@@ -863,7 +863,7 @@ mod tests {
             );
             assert!(windows[0].active && !windows[1].active);
 
-            let tabs = rig.service.tabs("Safari", None).unwrap();
+            let tabs = rig.service.tabs(app, None).unwrap();
             assert_eq!(
                 tabs,
                 vec![

@@ -584,7 +584,7 @@ pub(crate) mod system {
                 (Dictionary::SAFARI, "cTab", "pURL"),
                 (Dictionary::CHROME, "acTa", "URL "),
             ] {
-                let tab = property_of(current, FRONT_WINDOW);
+                let tab = property_of(current, &element("cwin", 1, "null()"));
                 assert_eq!(
                     params(
                         &AeQuery::Get(dictionary.active_tab_property(1, dictionary.url)),
@@ -613,7 +613,7 @@ pub(crate) mod system {
                     ["null()".to_owned(), "'cwin'".to_owned()]
                 );
             }
-            let window_two = "'obj '{ 'form':'indx', 'want':'cwin', 'seld':2, 'from':null() }";
+            let window_two = &element("cwin", 2, "null()");
             assert_eq!(
                 params(
                     &Dictionary::SAFARI.count_tabs(2),
