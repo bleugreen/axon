@@ -684,6 +684,9 @@ mod tests {
             names,
             [
                 "look",
+                "navigate",
+                "windows",
+                "tabs",
                 "find",
                 "wait_for_value",
                 "wait_for_stability",
@@ -694,10 +697,7 @@ mod tests {
                 "type",
                 "keyboard",
                 "scroll",
-                "invoke",
-                "navigate",
-                "windows",
-                "tabs"
+                "invoke"
             ]
         );
         assert_eq!(tools[0]["inputSchema"]["additionalProperties"], false);

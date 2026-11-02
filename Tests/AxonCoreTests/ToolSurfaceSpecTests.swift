@@ -64,9 +64,9 @@ import Testing
     let expected: [(String, String, Set<ToolFacade>)] = [
         ("capture_screen", "capture_screen", [.linux]),
         ("look", "look", [.swift, .mac, .windows, .linux]),
-        ("navigate", "navigate", [.swift]),
-        ("windows", "windows", [.swift]),
-        ("tabs", "tabs", [.swift]),
+        ("navigate", "navigate", [.swift, .mac]),
+        ("windows", "windows", [.swift, .mac]),
+        ("tabs", "tabs", [.swift, .mac]),
         ("find", "find", [.swift, .mac, .windows, .linux]),
         ("wait_for_value", "wait_for_value", [.swift, .mac, .windows, .linux]),
         ("wait_for_stability", "wait_for_stability", [.swift, .mac, .windows, .linux]),
