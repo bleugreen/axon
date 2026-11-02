@@ -39,9 +39,9 @@ pub enum AutomationLeg {
     Prompted,
     /// The Apple event itself was refused after a determination passed.
     ///
-    /// Reserved: only a browser verb sends Apple events, and the Rust daemon has none yet, so
-    /// nothing produces this leg. It is part of the vocabulary now so a shell built against this
-    /// contract can read a daemon that does.
+    /// Only a browser verb sends Apple events, so only a verb's refusal produces this leg. A held
+    /// executed-leg denial outlives any later passing determination for the same target, because
+    /// it is the answer that proved the determination wrong there.
     Executed,
 }
 
