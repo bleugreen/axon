@@ -95,7 +95,10 @@ pub(crate) enum AeError {
     /// `errAETimeout`: the browser did not answer in time.
     Timeout,
     /// Anything else, with the browser's own error string when the reply carried one.
-    Failed { status: i32, message: Option<String> },
+    Failed {
+        status: i32,
+        message: Option<String>,
+    },
 }
 
 pub(crate) const EVENT_NOT_PERMITTED: i32 = -1743;
@@ -173,8 +176,12 @@ pub(crate) mod system {
 
     #[link(name = "CoreServices", kind = "framework")]
     unsafe extern "C" {
-        fn AECreateDesc(type_code: u32, data: *const c_void, size: isize, result: *mut AEDesc)
-        -> i16;
+        fn AECreateDesc(
+            type_code: u32,
+            data: *const c_void,
+            size: isize,
+            result: *mut AEDesc,
+        ) -> i16;
         fn AEDisposeDesc(desc: *mut AEDesc) -> i16;
         fn AEDeterminePermissionToAutomateTarget(
             target: *const AEDesc,
@@ -370,7 +377,10 @@ pub(crate) mod system {
             }
             AeQuery::Count { container, class } => {
                 event.put(KEY_DIRECT_OBJECT, &specifier(container)?)?;
-                event.put(KEY_OBJECT_CLASS, &OwnedDesc::create(TYPE_TYPE, &class.0.to_ne_bytes())?)?;
+                event.put(
+                    KEY_OBJECT_CLASS,
+                    &OwnedDesc::create(TYPE_TYPE, &class.0.to_ne_bytes())?,
+                )?;
             }
         }
         Ok(event)
@@ -539,7 +549,10 @@ pub(crate) mod system {
 
         fn printed(desc: &OwnedDesc) -> String {
             let mut handle: *mut *mut i8 = std::ptr::null_mut();
-            assert_eq!(unsafe { AEPrintDescToHandle(desc.ptr(), &raw mut handle) }, 0);
+            assert_eq!(
+                unsafe { AEPrintDescToHandle(desc.ptr(), &raw mut handle) },
+                0
+            );
             let text = unsafe { std::ffi::CStr::from_ptr(*handle) }
                 .to_string_lossy()
                 .into_owned();
@@ -557,7 +570,8 @@ pub(crate) mod system {
                 .collect()
         }
 
-        const FRONT_WINDOW: &str = "'obj '{ 'form':'indx', 'want':'cwin', 'seld':1, 'from':null() }";
+        const FRONT_WINDOW: &str =
+            "'obj '{ 'form':'indx', 'want':'cwin', 'seld':1, 'from':null() }";
 
         fn property_of(code: &str, from: &str) -> String {
             format!("'obj '{{ 'form':'prop', 'want':'prop', 'seld':'{code}', 'from':{from} }}")
@@ -572,28 +586,46 @@ pub(crate) mod system {
             ] {
                 let tab = property_of(current, FRONT_WINDOW);
                 assert_eq!(
-                    params(&AeQuery::Get(dictionary.active_tab_property(1, dictionary.url)), &[KEY_DIRECT_OBJECT]),
+                    params(
+                        &AeQuery::Get(dictionary.active_tab_property(1, dictionary.url)),
+                        &[KEY_DIRECT_OBJECT]
+                    ),
                     [property_of(url, &tab)]
                 );
                 assert_eq!(
                     params(
-                        &AeQuery::Set(dictionary.active_tab_property(1, dictionary.url), "https://example.com/".into()),
+                        &AeQuery::Set(
+                            dictionary.active_tab_property(1, dictionary.url),
+                            "https://example.com/".into()
+                        ),
                         &[KEY_DIRECT_OBJECT, KEY_DATA]
                     ),
-                    [property_of(url, &tab), "'utxt'(\"https://example.com/\")".to_owned()]
+                    [
+                        property_of(url, &tab),
+                        "'utxt'(\"https://example.com/\")".to_owned()
+                    ]
                 );
                 assert_eq!(
-                    params(&dictionary.count_windows(), &[KEY_DIRECT_OBJECT, KEY_OBJECT_CLASS]),
+                    params(
+                        &dictionary.count_windows(),
+                        &[KEY_DIRECT_OBJECT, KEY_OBJECT_CLASS]
+                    ),
                     ["null()".to_owned(), "'cwin'".to_owned()]
                 );
             }
             let window_two = "'obj '{ 'form':'indx', 'want':'cwin', 'seld':2, 'from':null() }";
             assert_eq!(
-                params(&Dictionary::SAFARI.count_tabs(2), &[KEY_DIRECT_OBJECT, KEY_OBJECT_CLASS]),
+                params(
+                    &Dictionary::SAFARI.count_tabs(2),
+                    &[KEY_DIRECT_OBJECT, KEY_OBJECT_CLASS]
+                ),
                 [window_two.to_owned(), "'bTab'".to_owned()]
             );
             assert_eq!(
-                params(&Dictionary::CHROME.count_tabs(2), &[KEY_DIRECT_OBJECT, KEY_OBJECT_CLASS]),
+                params(
+                    &Dictionary::CHROME.count_tabs(2),
+                    &[KEY_DIRECT_OBJECT, KEY_OBJECT_CLASS]
+                ),
                 [window_two.to_owned(), "'CrTb'".to_owned()]
             );
             assert_eq!(
@@ -604,13 +636,20 @@ pub(crate) mod system {
                 params(&Dictionary::CHROME.active_index(2), &[KEY_DIRECT_OBJECT]),
                 [property_of("acTI", window_two)]
             );
-            let tab_three = format!("'obj '{{ 'form':'indx', 'want':'bTab', 'seld':3, 'from':{window_two} }}");
+            let tab_three =
+                format!("'obj '{{ 'form':'indx', 'want':'bTab', 'seld':3, 'from':{window_two} }}");
             assert_eq!(
-                params(&AeQuery::Get(Dictionary::SAFARI.tab_property(2, 3, Dictionary::SAFARI.url)), &[KEY_DIRECT_OBJECT]),
+                params(
+                    &AeQuery::Get(Dictionary::SAFARI.tab_property(2, 3, Dictionary::SAFARI.url)),
+                    &[KEY_DIRECT_OBJECT]
+                ),
                 [property_of("pURL", &tab_three)]
             );
             assert_eq!(
-                params(&AeQuery::Get(Dictionary::window_name(2)), &[KEY_DIRECT_OBJECT]),
+                params(
+                    &AeQuery::Get(Dictionary::window_name(2)),
+                    &[KEY_DIRECT_OBJECT]
+                ),
                 [property_of("pnam", window_two)]
             );
         }

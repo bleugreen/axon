@@ -135,7 +135,7 @@
     {
       "availability" : {
         "linux" : false,
-        "mac" : false,
+        "mac" : true,
         "swift" : true,
         "windows" : false
       },
@@ -165,7 +165,7 @@
     {
       "availability" : {
         "linux" : false,
-        "mac" : false,
+        "mac" : true,
         "swift" : true,
         "windows" : false
       },
@@ -190,7 +190,7 @@
     {
       "availability" : {
         "linux" : false,
-        "mac" : false,
+        "mac" : true,
         "swift" : true,
         "windows" : false
       },

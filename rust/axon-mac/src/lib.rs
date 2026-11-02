@@ -2991,14 +2991,20 @@ mod tests {
             .filter(|name| name != "url-cases.json")
             .collect();
         names.sort();
-        assert_eq!(names.len(), 17, "a fixture without a scenario here is unpinned");
+        assert_eq!(
+            names.len(),
+            17,
+            "a fixture without a scenario here is unpinned"
+        );
 
         for name in names {
             let fixture: Value =
                 serde_json::from_str(&std::fs::read_to_string(directory.join(&name)).unwrap())
                     .unwrap();
             let navigation = || fake::navigation_state("navigate-verified.json");
-            let (dictionary, status, running, state, ax): (_, _, _, _, &[&str]) = match name.as_str() {
+            let (dictionary, status, running, state, ax): (_, _, _, _, &[&str]) = match name
+                .as_str()
+            {
                 "navigate-verified.json" | "navigate-redirect.json" | "navigate-unsettled.json" => {
                     let (dictionary, state) = fake::navigation_state(&name);
                     (dictionary, NO_ERR, true, state, &[])
@@ -3027,12 +3033,20 @@ mod tests {
                     &["Same", "Different"],
                 ),
                 "tabs.json" => (Dictionary::CHROME, NO_ERR, true, fake::tabs_state(), &[]),
-                "error-not-determined-checked.json" => {
-                    (Dictionary::CHROME, WOULD_REQUIRE_CONSENT, true, navigation().1, &[])
-                }
-                "error-denied-checked.json" => {
-                    (Dictionary::SAFARI, EVENT_NOT_PERMITTED, true, navigation().1, &[])
-                }
+                "error-not-determined-checked.json" => (
+                    Dictionary::CHROME,
+                    WOULD_REQUIRE_CONSENT,
+                    true,
+                    navigation().1,
+                    &[],
+                ),
+                "error-denied-checked.json" => (
+                    Dictionary::SAFARI,
+                    EVENT_NOT_PERMITTED,
+                    true,
+                    navigation().1,
+                    &[],
+                ),
                 "error-denied-executed.json" => (
                     Dictionary::SAFARI,
                     NO_ERR,
@@ -3043,8 +3057,16 @@ mod tests {
                     },
                     &[],
                 ),
-                "error-not-running.json" => (Dictionary::SAFARI, NO_ERR, false, navigation().1, &[]),
-                _ => (Dictionary::SAFARI, NO_ERR, true, fake::State::default(), &[]),
+                "error-not-running.json" => {
+                    (Dictionary::SAFARI, NO_ERR, false, navigation().1, &[])
+                }
+                _ => (
+                    Dictionary::SAFARI,
+                    NO_ERR,
+                    true,
+                    fake::State::default(),
+                    &[],
+                ),
             };
             let rig = fake::rig_with(dictionary, status, running, state);
             let mut router = Router::new(EnumerationBackend::with_windows(ax))
@@ -3059,7 +3081,11 @@ mod tests {
                     .unwrap(),
             )
             .unwrap();
-            let key = if fixture.get("error").is_some() { "error" } else { "result" };
+            let key = if fixture.get("error").is_some() {
+                "error"
+            } else {
+                "result"
+            };
             assert_eq!(response.get(key), fixture.get(key), "{name}");
         }
     }

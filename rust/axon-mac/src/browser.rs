@@ -215,9 +215,9 @@ impl BrowserService {
                 false,
             ),
             AeError::Timeout => BrowserError::Timeout(browser.name.into()),
-            AeError::Failed { status, message } => {
-                BrowserError::ExecutionFailed(message.unwrap_or_else(|| format!("OSStatus {status}")))
-            }
+            AeError::Failed { status, message } => BrowserError::ExecutionFailed(
+                message.unwrap_or_else(|| format!("OSStatus {status}")),
+            ),
         }
     }
 
@@ -302,21 +302,32 @@ impl BrowserVerbs for BrowserService {
         let browser = self.resolve(app)?;
         let dictionary = browser.dictionary;
         let dispatch = self.deadline(DISPATCH_BUDGET_MS);
-        if self.count(&browser, &dictionary.count_windows(), dispatch, "navigation")? == 0 {
-            return Err(BrowserError::ExecutionFailed("browser has no windows".into()));
+        if self.count(
+            &browser,
+            &dictionary.count_windows(),
+            dispatch,
+            "navigation",
+        )? == 0
+        {
+            return Err(BrowserError::ExecutionFailed(
+                "browser has no windows".into(),
+            ));
         }
         // The baseline is read before the navigation is sent, so the settle can tell the page
         // being left from the one arriving.
         let before = self.read_active_tab(&browser, dispatch)?;
         self.send(
             &browser,
-            &AeQuery::Set(dictionary.active_tab_property(1, dictionary.url), url.into()),
+            &AeQuery::Set(
+                dictionary.active_tab_property(1, dictionary.url),
+                url.into(),
+            ),
             dispatch,
         )?;
         let reads = self.deadline(self.settler.timeout_ms + TRAILING_READ_MS);
-        let outcome = self
-            .settler
-            .settle(&*self.clock, url, &before, || self.read_active_tab(&browser, reads))?;
+        let outcome = self.settler.settle(&*self.clock, url, &before, || {
+            self.read_active_tab(&browser, reads)
+        })?;
         Ok(NavigateResult {
             navigation: NavigationReport {
                 app: browser.bundle_identifier.into(),
@@ -332,10 +343,16 @@ impl BrowserVerbs for BrowserService {
     fn windows(&self, app: &str) -> Result<Vec<BrowserWindow>, BrowserError> {
         let browser = self.resolve(app)?;
         let deadline = self.deadline(ENUMERATION_BUDGET_MS);
-        let count = self.count(&browser, &browser.dictionary.count_windows(), deadline, "window")?;
+        let count = self.count(
+            &browser,
+            &browser.dictionary.count_windows(),
+            deadline,
+            "window",
+        )?;
         (1..=count)
             .map(|index| {
-                let title = self.text(&browser, Dictionary::window_name(index), deadline, "window")?;
+                let title =
+                    self.text(&browser, Dictionary::window_name(index), deadline, "window")?;
                 Ok(BrowserWindow::new(index as u32, title))
             })
             .collect()
@@ -366,7 +383,8 @@ impl BrowserVerbs for BrowserService {
                 AeValue::Int(index) => index,
                 _ => return Err(unexpected("tab")),
             };
-            let tab_count = self.count(&browser, &dictionary.count_tabs(window), deadline, "tab")?;
+            let tab_count =
+                self.count(&browser, &dictionary.count_tabs(window), deadline, "tab")?;
             for index in 1..=tab_count {
                 let title = self.text(
                     &browser,
@@ -469,7 +487,9 @@ pub(crate) mod fake {
         fn answer(&self, state: &mut State, query: &AeQuery) -> Result<AeValue, AeError> {
             let d = self.dictionary;
             let window_index = |spec: &Spec| match spec {
-                Spec::Element { class, index, from } if *class == WINDOW && **from == Spec::Application => {
+                Spec::Element { class, index, from }
+                    if *class == WINDOW && **from == Spec::Application =>
+                {
                     Some(*index)
                 }
                 _ => None,
@@ -479,9 +499,10 @@ pub(crate) mod fake {
                 message: Some("Can’t get object.".into()),
             };
             match query {
-                AeQuery::Count { container: Spec::Application, class } if *class == WINDOW => {
-                    Ok(AeValue::Int(state.windows.len() as i64))
-                }
+                AeQuery::Count {
+                    container: Spec::Application,
+                    class,
+                } if *class == WINDOW => Ok(AeValue::Int(state.windows.len() as i64)),
                 AeQuery::Count { container, class } if *class == d.tab_class => {
                     let window = window_index(container).ok_or_else(missing)?;
                     let window = state.windows.get(window as usize - 1).ok_or_else(missing)?;
@@ -494,13 +515,16 @@ pub(crate) mod fake {
                 AeQuery::Get(spec) => {
                     for window in 1..=state.windows.len() as i32 {
                         if *spec == Dictionary::window_name(window) {
-                            return Ok(AeValue::Text(state.windows[window as usize - 1].title.clone()));
+                            return Ok(AeValue::Text(
+                                state.windows[window as usize - 1].title.clone(),
+                            ));
                         }
                         if AeQuery::Get(spec.clone()) == d.active_index(window) {
                             return Ok(AeValue::Int(state.windows[window as usize - 1].active));
                         }
                         for tab in 1..=state.windows[window as usize - 1].tabs.len() as i32 {
-                            let (title, url) = &state.windows[window as usize - 1].tabs[tab as usize - 1];
+                            let (title, url) =
+                                &state.windows[window as usize - 1].tabs[tab as usize - 1];
                             if *spec == d.tab_property(window, tab, NAME) {
                                 return Ok(AeValue::Text(title.clone()));
                             }
@@ -524,7 +548,9 @@ pub(crate) mod fake {
                     if *spec == d.active_tab_property(1, NAME) {
                         return Ok(AeValue::Text(current.title));
                     }
-                    if d.loading.is_some_and(|code| *spec == d.active_tab_property(1, code)) {
+                    if d.loading
+                        .is_some_and(|code| *spec == d.active_tab_property(1, code))
+                    {
                         return current.loading.map(AeValue::Bool).ok_or_else(missing);
                     }
                     Err(missing())
@@ -564,7 +590,12 @@ pub(crate) mod fake {
         rig_with(dictionary, status, true, state)
     }
 
-    pub(crate) fn rig_with(dictionary: Dictionary, status: i32, running: bool, state: State) -> Rig {
+    pub(crate) fn rig_with(
+        dictionary: Dictionary,
+        status: i32,
+        running: bool,
+        state: State,
+    ) -> Rig {
         let clock = Arc::new(FakeClock::default());
         let state = Arc::new(Mutex::new(state));
         let determinations = Arc::new(Mutex::new(Vec::new()));
@@ -641,7 +672,11 @@ pub(crate) mod fake {
                 State {
                     windows: one_window(),
                     before: Some(reading("https://start.example/", "Start", Some(false))),
-                    after: vec![reading("https://example.com/slow", "example.com/slow", Some(true))],
+                    after: vec![reading(
+                        "https://example.com/slow",
+                        "example.com/slow",
+                        Some(true),
+                    )],
                     ..State::default()
                 },
             ),
@@ -685,7 +720,9 @@ mod tests {
     fn invalid_navigation_input_never_reaches_the_automation_boundary() {
         let rig = rig(Dictionary::SAFARI, NO_ERR, State::default());
         assert_eq!(
-            rig.service.navigate("Safari", "file:///tmp/private").unwrap_err(),
+            rig.service
+                .navigate("Safari", "file:///tmp/private")
+                .unwrap_err(),
             BrowserError::InvalidUrl("an absolute http or https URL is required".into())
         );
         assert!(rig.determinations.lock().unwrap().is_empty());
@@ -733,10 +770,16 @@ mod tests {
     fn safari_navigation_reads_a_baseline_sends_one_set_and_settles_by_stability() {
         let (dictionary, state) = navigation_state("navigate-verified.json");
         let rig = rig(dictionary, NO_ERR, state);
-        let result = rig.service.navigate("Safari", "https://example.com").unwrap();
+        let result = rig
+            .service
+            .navigate("Safari", "https://example.com")
+            .unwrap();
 
         assert!(result.navigation.success());
-        assert_eq!(result.navigation.settle_evidence, SettleEvidence::StableReadback);
+        assert_eq!(
+            result.navigation.settle_evidence,
+            SettleEvidence::StableReadback
+        );
         assert_eq!(result.navigation.title, "Example Domain");
         assert_eq!(result.navigation.app, "com.apple.Safari");
         let queries = rig.state.lock().unwrap().queries.clone();
@@ -753,20 +796,32 @@ mod tests {
             ]
         );
         assert_eq!(
-            queries.iter().filter(|query| matches!(query, AeQuery::Set(..))).count(),
+            queries
+                .iter()
+                .filter(|query| matches!(query, AeQuery::Set(..)))
+                .count(),
             1
         );
         assert!(!queries.iter().any(|query| matches!(query, AeQuery::Get(Spec::Property { code, .. }) if *code == Code::of(b"ldng"))));
-        assert_eq!(*rig.determinations.lock().unwrap(), vec![("com.apple.Safari".to_owned(), false)]);
+        assert_eq!(
+            *rig.determinations.lock().unwrap(),
+            vec![("com.apple.Safari".to_owned(), false)]
+        );
     }
 
     #[test]
     fn chrome_navigation_asks_the_active_tab_whether_it_is_still_loading() {
         let (dictionary, state) = navigation_state("navigate-redirect.json");
         let rig = rig(dictionary, NO_ERR, state);
-        let result = rig.service.navigate("Chrome", "https://example.com/redirect").unwrap();
+        let result = rig
+            .service
+            .navigate("Chrome", "https://example.com/redirect")
+            .unwrap();
 
-        assert_eq!(result.navigation.settle_evidence, SettleEvidence::LoadingFlag);
+        assert_eq!(
+            result.navigation.settle_evidence,
+            SettleEvidence::LoadingFlag
+        );
         assert!(!result.navigation.success(), "a redirect is a mismatch");
         let queries = rig.state.lock().unwrap().queries.clone();
         assert_eq!(
@@ -781,7 +836,9 @@ mod tests {
     fn a_browser_with_no_windows_says_so() {
         let rig = rig(Dictionary::SAFARI, NO_ERR, State::default());
         assert_eq!(
-            rig.service.navigate("Safari", "https://example.com").unwrap_err(),
+            rig.service
+                .navigate("Safari", "https://example.com")
+                .unwrap_err(),
             BrowserError::ExecutionFailed("browser has no windows".into())
         );
         assert_eq!(rig.service.windows("Safari").unwrap(), vec![]);
@@ -799,7 +856,10 @@ mod tests {
             let windows = rig.service.windows("Safari").unwrap();
             assert_eq!(
                 windows,
-                vec![BrowserWindow::new(1, "Navigated"), BrowserWindow::new(2, "Second")]
+                vec![
+                    BrowserWindow::new(1, "Navigated"),
+                    BrowserWindow::new(2, "Second")
+                ]
             );
             assert!(windows[0].active && !windows[1].active);
 
@@ -814,7 +874,13 @@ mod tests {
             );
             assert_eq!(
                 rig.service.tabs("Safari", Some(2)).unwrap(),
-                vec![BrowserTab::new(2, 1, "Second", "https://example.org/", true)]
+                vec![BrowserTab::new(
+                    2,
+                    1,
+                    "Second",
+                    "https://example.org/",
+                    true
+                )]
             );
             assert_eq!(
                 rig.service.tabs("Safari", Some(3)).unwrap_err(),
@@ -836,13 +902,20 @@ mod tests {
             },
         );
         for _ in 0..2 {
-            let data = refusal(rig.service.navigate("Safari", "https://example.com").unwrap_err());
+            let data = refusal(
+                rig.service
+                    .navigate("Safari", "https://example.com")
+                    .unwrap_err(),
+            );
             assert_eq!(data.authorization, AutomationAuthorization::Denied);
             assert_eq!(data.leg, AutomationLeg::Executed);
             assert_eq!(data.native_status, Some(EVENT_NOT_PERMITTED));
             let status = rig.consent.status();
             assert_eq!(status.browsers[0].leg, Some(AutomationLeg::Executed));
-            assert_eq!(status.browsers[0].status, Some(AutomationAuthorization::Denied));
+            assert_eq!(
+                status.browsers[0].status,
+                Some(AutomationAuthorization::Denied)
+            );
         }
         let gesture = rig.consent.request().unwrap();
         assert!(!gesture.outcomes[0].granted);
@@ -864,7 +937,10 @@ mod tests {
         assert_eq!(data.native_status, Some(WOULD_REQUIRE_CONSENT));
         let status = rig.consent.status();
         assert_eq!(status.browsers[1].leg, Some(AutomationLeg::Checked));
-        assert_eq!(status.browsers[1].status, Some(AutomationAuthorization::Granted));
+        assert_eq!(
+            status.browsers[1].status,
+            Some(AutomationAuthorization::Granted)
+        );
     }
 
     #[test]
@@ -896,13 +972,28 @@ mod tests {
     #[test]
     fn navigate_is_bounded_in_wall_clock_time_however_slowly_the_browser_answers() {
         let bound = DISPATCH_BUDGET_MS + Settler::DEFAULT_TIMEOUT_MS + TRAILING_READ_MS;
-        for latency_ms in [0, 400, 1_000, 2_500, 3_000, 3_900, 5_000, 7_000, 14_000, 16_000, 120_000] {
-            for (fixture, app) in [("navigate-unsettled.json", "Chrome"), ("navigate-verified.json", "Safari")] {
+        for latency_ms in [
+            0, 400, 1_000, 2_500, 3_000, 3_900, 5_000, 7_000, 14_000, 16_000, 120_000,
+        ] {
+            for (fixture, app) in [
+                ("navigate-unsettled.json", "Chrome"),
+                ("navigate-verified.json", "Safari"),
+            ] {
                 let (dictionary, state) = navigation_state(fixture);
-                let rig = rig(dictionary, NO_ERR, State { latency_ms, ..state });
+                let rig = rig(
+                    dictionary,
+                    NO_ERR,
+                    State {
+                        latency_ms,
+                        ..state
+                    },
+                );
                 let outcome = rig.service.navigate(app, "https://example.com/slow");
                 let spent = rig.clock.now_ms();
-                assert!(spent <= bound, "{app} at {latency_ms} ms per event spent {spent} ms");
+                assert!(
+                    spent <= bound,
+                    "{app} at {latency_ms} ms per event spent {spent} ms"
+                );
                 assert!(
                     matches!(outcome, Ok(_) | Err(BrowserError::Timeout(_))),
                     "{app} at {latency_ms} ms: {outcome:?}"
@@ -910,17 +1001,37 @@ mod tests {
             }
         }
         let (dictionary, state) = navigation_state("navigate-unsettled.json");
-        let hung = rig(dictionary, NO_ERR, State { latency_ms: 120_000, ..state });
+        let hung = rig(
+            dictionary,
+            NO_ERR,
+            State {
+                latency_ms: 120_000,
+                ..state
+            },
+        );
         assert_eq!(
-            hung.service.navigate("Chrome", "https://example.com/slow").unwrap_err(),
+            hung.service
+                .navigate("Chrome", "https://example.com/slow")
+                .unwrap_err(),
             BrowserError::Timeout("Google Chrome".into())
         );
-        assert_eq!(hung.clock.now_ms(), EVENT_TIMEOUT_MS, "the first event's timeout ends the call");
+        assert_eq!(
+            hung.clock.now_ms(),
+            EVENT_TIMEOUT_MS,
+            "the first event's timeout ends the call"
+        );
     }
 
     #[test]
     fn an_enumeration_spends_one_budget_across_all_its_events() {
-        let rig = rig(Dictionary::SAFARI, NO_ERR, State { latency_ms: 4_000, ..tabs_state() });
+        let rig = rig(
+            Dictionary::SAFARI,
+            NO_ERR,
+            State {
+                latency_ms: 4_000,
+                ..tabs_state()
+            },
+        );
         assert_eq!(
             rig.service.tabs("Safari", None).unwrap_err(),
             BrowserError::Timeout("Safari".into())

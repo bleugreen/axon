@@ -18,19 +18,19 @@ export const availability = {
   },
   "navigate": {
     "linux": false,
-    "mac": false,
+    "mac": true,
     "swift": true,
     "windows": false
   },
   "windows": {
     "linux": false,
-    "mac": false,
+    "mac": true,
     "swift": true,
     "windows": false
   },
   "tabs": {
     "linux": false,
-    "mac": false,
+    "mac": true,
     "swift": true,
     "windows": false
   },
