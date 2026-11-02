@@ -26,6 +26,8 @@ pub mod probe;
 
 #[cfg(target_os = "macos")]
 mod accessibility;
+#[cfg(target_os = "macos")]
+mod automation;
 mod background;
 #[cfg(target_os = "macos")]
 mod core_foundation;
@@ -44,7 +46,6 @@ pub use platform::MacBackend;
 /// names something the macOS daemon has no code path for, which stays a JSON-RPC error.
 const EXCLUDED: &[(&str, &str)] = &[
     ("drag", "PointerDrag"),
-    ("permit", "PermissionPrompt"),
     ("navigate", "BrowserScripting"),
     ("windows", "BrowserScripting"),
     ("tabs", "BrowserScripting"),
@@ -2778,7 +2779,7 @@ mod tests {
 
     #[test]
     fn excluded_tools_are_capability_errors_before_dispatch() {
-        for tool in ["drag", "permit"] {
+        for tool in ["drag", "navigate"] {
             let (_, capability) = EXCLUDED.iter().find(|(name, _)| *name == tool).unwrap();
             assert!(!capability.is_empty());
         }
