@@ -231,7 +231,9 @@ impl ConsentService {
                     status,
                     leg: answer.map(|answer| answer.leg),
                     detail: answer
-                        .filter(|answer| authorization(answer.status) == AutomationAuthorization::Failed)
+                        .filter(|answer| {
+                            authorization(answer.status) == AutomationAuthorization::Failed
+                        })
                         .map(|answer| failure_detail(browser.name, answer.status)),
                 }
             })
@@ -261,7 +263,11 @@ impl ConsentService {
         // from it without asking macOS again.
         let need = SUPPORTED_BROWSERS
             .iter()
-            .filter(|browser| outcomes.iter().any(|outcome| outcome.bundle_identifier == browser.bundle_identifier))
+            .filter(|browser| {
+                outcomes
+                    .iter()
+                    .any(|outcome| outcome.bundle_identifier == browser.bundle_identifier)
+            })
             .filter_map(|browser| self.held(browser.bundle_identifier))
             .map(|answer| ConsentNeed::of(authorization(answer.status)))
             .max()
@@ -376,7 +382,10 @@ mod tests {
 
     impl AutomationHost for Fake {
         fn determine(&self, bundle_identifier: &str, ask: bool) -> i32 {
-            self.calls.lock().unwrap().push((bundle_identifier.into(), ask));
+            self.calls
+                .lock()
+                .unwrap()
+                .push((bundle_identifier.into(), ask));
             if ask && let Some(gate) = &self.gate {
                 gate.lock().unwrap().recv().unwrap();
             }
@@ -415,14 +424,20 @@ mod tests {
         );
         let chrome = &first.browsers[1];
         assert!(!chrome.running);
-        assert_eq!(chrome.status, None, "no claim about a browser macOS cannot answer for");
+        assert_eq!(
+            chrome.status, None,
+            "no claim about a browser macOS cannot answer for"
+        );
     }
 
     #[test]
     fn explain_outranks_request_and_failures_explain() {
         let fake = Fake {
             running: vec![SAFARI, CHROME],
-            checked: HashMap::from([(SAFARI, WOULD_REQUIRE_CONSENT), (CHROME, EVENT_NOT_PERMITTED)]),
+            checked: HashMap::from([
+                (SAFARI, WOULD_REQUIRE_CONSENT),
+                (CHROME, EVENT_NOT_PERMITTED),
+            ]),
             ..Fake::default()
         };
         assert_eq!(service(&fake).status().need, ConsentNeed::Explain);
@@ -434,8 +449,17 @@ mod tests {
         };
         let report = service(&failing).status();
         assert_eq!(report.need, ConsentNeed::Explain);
-        assert_eq!(report.browsers[0].status, Some(AutomationAuthorization::Failed));
-        assert!(report.browsers[0].detail.as_deref().unwrap().contains("OSStatus -50"));
+        assert_eq!(
+            report.browsers[0].status,
+            Some(AutomationAuthorization::Failed)
+        );
+        assert!(
+            report.browsers[0]
+                .detail
+                .as_deref()
+                .unwrap()
+                .contains("OSStatus -50")
+        );
     }
 
     #[test]
@@ -448,14 +472,21 @@ mod tests {
         let consent = service(&fake);
         consent.status();
         consent.status();
-        assert_eq!(fake.calls.lock().unwrap().len(), 2, "asked again: nothing was answered");
+        assert_eq!(
+            fake.calls.lock().unwrap().len(),
+            2,
+            "asked again: nothing was answered"
+        );
     }
 
     #[test]
     fn request_prompts_only_for_an_undetermined_grant() {
         let fake = Fake {
             running: vec![SAFARI, CHROME],
-            checked: HashMap::from([(SAFARI, WOULD_REQUIRE_CONSENT), (CHROME, EVENT_NOT_PERMITTED)]),
+            checked: HashMap::from([
+                (SAFARI, WOULD_REQUIRE_CONSENT),
+                (CHROME, EVENT_NOT_PERMITTED),
+            ]),
             prompted: HashMap::from([(SAFARI, NO_ERR)]),
             ..Fake::default()
         };
@@ -475,14 +506,20 @@ mod tests {
         assert!(!report.outcomes[1].granted);
         let detail = report.outcomes[1].detail.as_deref().unwrap();
         assert!(detail.starts_with("Automation permission for Google Chrome is denied."));
-        assert!(!detail.contains("Browser Automation..."), "the gesture must not point at itself");
+        assert!(
+            !detail.contains("Browser Automation..."),
+            "the gesture must not point at itself"
+        );
         assert_eq!(report.need, ConsentNeed::Explain);
 
         // The prompt's answer retires the item without another round trip.
         let calls_before = fake.calls.lock().unwrap().len();
         let status = consent.status();
         assert_eq!(status.browsers[0].leg, Some(AutomationLeg::Prompted));
-        assert_eq!(status.browsers[0].status, Some(AutomationAuthorization::Granted));
+        assert_eq!(
+            status.browsers[0].status,
+            Some(AutomationAuthorization::Granted)
+        );
         assert_eq!(fake.calls.lock().unwrap().len(), calls_before);
     }
 
@@ -495,9 +532,21 @@ mod tests {
         };
         let consent = service(&fake);
         let first = consent.request().unwrap();
-        assert!(!first.outcomes[0].detail.as_deref().unwrap().contains("earlier in this session"));
+        assert!(
+            !first.outcomes[0]
+                .detail
+                .as_deref()
+                .unwrap()
+                .contains("earlier in this session")
+        );
         let second = consent.request().unwrap();
-        assert!(second.outcomes[0].detail.as_deref().unwrap().contains("earlier in this session"));
+        assert!(
+            second.outcomes[0]
+                .detail
+                .as_deref()
+                .unwrap()
+                .contains("earlier in this session")
+        );
     }
 
     #[test]
@@ -529,13 +578,20 @@ mod tests {
         let refused = consent.request().unwrap_err();
         assert_eq!(refused.code, -32005);
         assert_eq!(refused.data.unwrap()["reason"], "consent-in-progress");
-        assert_eq!(consent.status().need, ConsentNeed::Request, "status answers mid-dialog");
+        assert_eq!(
+            consent.status().need,
+            ConsentNeed::Request,
+            "status answers mid-dialog"
+        );
 
         release.send(()).unwrap();
         assert!(waiting.join().unwrap().unwrap().outcomes[0].granted);
         // The scripted silent leg still answers undetermined, so the next request prompts again.
         release.send(()).unwrap();
-        assert!(consent.request().is_ok(), "the flag clears when the request ends");
+        assert!(
+            consent.request().is_ok(),
+            "the flag clears when the request ends"
+        );
     }
 
     #[test]

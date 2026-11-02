@@ -154,10 +154,13 @@ mod tests {
         .unwrap_or_default();
         assert_eq!(strongest, ConsentNeed::Explain);
         assert_eq!(
-            [AutomationAuthorization::Granted, AutomationAuthorization::NotDetermined]
-                .into_iter()
-                .map(ConsentNeed::of)
-                .max(),
+            [
+                AutomationAuthorization::Granted,
+                AutomationAuthorization::NotDetermined
+            ]
+            .into_iter()
+            .map(ConsentNeed::of)
+            .max(),
             Some(ConsentNeed::Request)
         );
         assert_eq!(

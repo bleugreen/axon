@@ -293,8 +293,14 @@ fn dispatch(
         // the same reason `health` is: the backend worker is serialized and may be owned by a
         // replay for minutes, and `automation.request` blocks for as long as a consent dialog is
         // on screen. Neither touches backend state; the consent ledger has its own lock.
-        "permit" => (reply(id, no_params(&request).map(|_| accessibility::permit())), false),
-        "automation.status" => (reply(id, no_params(&request).map(|_| consent.status())), false),
+        "permit" => (
+            reply(id, no_params(&request).map(|_| accessibility::permit())),
+            false,
+        ),
+        "automation.status" => (
+            reply(id, no_params(&request).map(|_| consent.status())),
+            false,
+        ),
         "automation.request" => (
             reply(id, no_params(&request).and_then(|_| consent.request())),
             false,
@@ -602,7 +608,11 @@ mod tests {
         let (router, _receiver) = mpsc::channel();
         for method in ["permit", "automation.status", "automation.request"] {
             let response = call(method, json!({"extra": true}), &router);
-            assert_eq!(response.pointer("/error/code"), Some(&json!(-32602)), "{method}");
+            assert_eq!(
+                response.pointer("/error/code"),
+                Some(&json!(-32602)),
+                "{method}"
+            );
         }
     }
 
