@@ -12,6 +12,7 @@ decides what to authorize; a target absent from the table authorizes nothing.
 | campaign | measured | machine | macOS | Accessibility | bench record |
 | --- | --- | --- | --- | --- | --- |
 | `bbl-2026-08-16` | 2026-08-16T19:44:22-04:00 | arm64 macOS bench | Version 26.4 (Build 25E246) | granted | `raw/bbl-2026-08-16.json` |
+| `bgsrv-mac-2026-11-01T165817` | 2026-11-01T16:58:33-08:00 | arm64 macOS bench | Version 26.6 (Build 25G72) | granted | `raw/bgsrv-mac-2026-11-01T165817.jsonl` |
 
 ## Rows
 
@@ -27,6 +28,7 @@ decides what to authorize; a target absent from the table authorizes nothing.
 | `AxonAcceptanceTarget-keyboard-2026-08-16` | AxonAcceptanceTarget (appkit-native) | `dev.axon.acceptance.target` 1.0.0 | `keyboard` | **accepted** | accepted | yes | reached | all held | before: acted; after: acted |
 | `AxonAcceptanceWebView-click-2026-08-16` | AxonAcceptanceWebView (wkwebview) | `dev.axon.acceptance.webview` 1.0.0 | `click` | **refused** | accepted | no | never arrived | all held | before: acted; after: acted |
 | `AxonAcceptanceWebView-keyboard-2026-08-16` | AxonAcceptanceWebView (wkwebview) | `dev.axon.acceptance.webview` 1.0.0 | `keyboard` | **accepted** | accepted | yes | reached | all held | before: acted; after: acted |
+| `ghostty-keyboard-2026-11-01` | ghostty (terminal) | `com.mitchellh.ghostty` 1.4.0 | `keyboard` | **accepted** | accepted | yes | not observed | all held | before: acted; after: acted |
 
 ## Reading this table
 
@@ -200,3 +202,16 @@ the target acted on input posted to its process while a decoy held the foregroun
 - Control after: acted via `CGEventPost(kCGHIDEventTap) with the target activated` — the page's input read 'Axonaxon' before and 'Axonaxonaxon' after
 - Bench record: `raw/bbl-2026-08-16.json#AxonAcceptanceWebView-keyboard` (written by the run, not committed)
 - Re-measure when: a macOS major release, which is what changes how AppKit routes a posted event
+
+### `ghostty-keyboard-2026-11-01`
+
+the target acted on input posted to its process while a decoy held the foreground and the real pointer did not move
+
+- Variant: `keyDown+keyUp/source=null` through `CGEventPostToPid`
+- Campaign: `bgsrv-mac-2026-11-01T165817`
+- Fresh state: fresh — the measured keystrokes were the first synthetic input this target received: its foreground control was a keystroke, not a click
+- Target-side observation: the terminal's sentinel file read 'axon' before and 'axonaxon' after
+- Control before: acted via `CGEventPost(kCGHIDEventTap) with the target activated` — the terminal's sentinel file read '' before and 'axon' after
+- Control after: acted via `CGEventPost(kCGHIDEventTap) with the target activated` — the terminal's sentinel file read 'axonaxon' before and 'axonaxonaxon' after
+- Bench record: `raw/bgsrv-mac-2026-11-01T165817.jsonl#ghostty-keyboard` (written by the run, not committed)
+- Re-measure when: a Ghostty or macOS major release
