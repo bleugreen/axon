@@ -466,7 +466,8 @@ def protocol(state):
 
 def main():
     BENCH.mkdir(parents=True, exist_ok=True)
-    state = {"launched": ["Safari", "Google Chrome"]}
+    # Only what this run launched is quit, and until the run knows, that is nothing.
+    state = {"launched": []}
     try:
         protocol(state)
     except Exception as error:  # the teardown below must run whatever happened
