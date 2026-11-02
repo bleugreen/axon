@@ -23,6 +23,8 @@ The matrix below is the current user-facing contract. Contributors can consult t
 
 Axon is most complete at semantic actions such as pressing a button or setting a field value. Pointer, keyboard, and screenshot paths exist but remain experimental until they have live end-to-end verification.
 
+Keystrokes aimed at a named app can be delivered in the background: they are posted to that app's process without bringing it forward or touching the pointer. Keyboard shortcuts that hold a modifier, such as `cmd+s`, and every click or scroll that the app does not expose as an accessibility action, need the app in front, so they require `foregroundPermitted`. macOS gives no way to deliver a click or a wheel event to a background window, for any app.
+
 Browser `navigate`, `windows`, and `tabs` use Apple Events in addition to Accessibility. Those verbs
 only check the existing Automation grant; they never present macOS's consent prompt. The prompt
 blocks until a person answers it, and an agent's call must not hang on a dialog nobody asked for.

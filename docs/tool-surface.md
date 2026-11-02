@@ -445,6 +445,15 @@ delta too small to round to a whole pixel of wheel movement is reported as a fai
 rather than as an empty dispatch, and a zero delta is a no-op carrying
 `semanticStatus: "noop"` that claims no dispatch and names no rung.
 
+The Rust macOS daemon has no background rung for a wheel. A zero delta with a
+semantic target is `AXScrollToVisible`; any other delta is a pixel wheel burst
+posted to the HID tap at the target's point (an element's centre, a point, a text
+location, or the centre of `app`'s focused window), under `foregroundPermitted`
+only. Under `backgroundOnly` it refuses, and `alsoRefused` names why each quieter
+rung is missing: `AXScrollToVisible` cannot carry a delta, and a wheel event
+posted to a process arrives with window number 0 and reaches no window. The
+result reports `eventPath` with `units: "pixel"` and the steps actually posted.
+
 `type` fills writable fields by setting `AXValue`; use it when the desired
 intent is "make this field contain this value." Its exact AXValue readback is a
 verified success. If it must fall back to click-and-keyboard events, dispatch is
