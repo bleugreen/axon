@@ -666,7 +666,11 @@ mod tests {
             let code = ansi_key_code(character).unwrap();
             assert_eq!(ansi_character(code), Some(character), "{character}");
         }
-        assert_eq!(ansi_character(36), None, "Return is a named key, not a character");
+        assert_eq!(
+            ansi_character(36),
+            None,
+            "Return is a named key, not a character"
+        );
     }
 
     #[test]
