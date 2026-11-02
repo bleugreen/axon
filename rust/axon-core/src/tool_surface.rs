@@ -616,6 +616,7 @@ mod tests {
                 "find",
                 "wait_for_value",
                 "wait_for_stability",
+                "permit",
                 "run",
                 "save",
                 "click",
