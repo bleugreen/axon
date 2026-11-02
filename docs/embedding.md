@@ -433,7 +433,9 @@ structured `data.reason`, not the human-readable remediation text.
 every browser verb performs, `prompted` for the consent dialog that only the daemon menu's Browser
 Automation item can raise, and `executed` for an Apple event the target refused after a check had
 passed. Browser verbs never prompt, so a verb error always carries `checked` or `executed`; the field
-is additive and a consumer that has never seen it can ignore it.
+is additive and a consumer that has never seen it can ignore it. The Rust macOS daemon sends its
+events with the do-not-prompt flag, so an event whose consent the check did not foresee reads
+`authorization: notDetermined` at the `executed` leg rather than raising a dialog.
 
 ### Capability vocabulary
 

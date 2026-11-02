@@ -1614,9 +1614,8 @@ The Rust daemon is the sender for consent from the split onward. It answers `aut
 port of the ledger and the two determination legs described below, in
 `rust/axon-mac/src/automation.rs`, while the gesture itself moves to the menu shell's Browser
 Automation item. The shell never calls `AEDeterminePermissionToAutomateTarget`: a prompt it issued
-would mint the grant for its own identity. Rust has no browser verbs yet, so the `executed` leg is
-reserved in its vocabulary and nothing produces it; the sticky executed-leg denial below arrives
-with those verbs.
+would mint the grant for its own identity. The Rust browser verbs consult the same ledger, so the
+`executed` leg below is produced by Rust too, and a refusal a verb met is the one the menu explains.
 
 The Rust daemon has no `NSApplication`, and that does not stop the prompt. On bgsrv-mac
 (2026-11-01, `scripts/macos-toolkit-acceptance/live/axn249/`), the launchd-started daemon's
@@ -1625,8 +1624,23 @@ daemon bundle and its `NSAppleEventsUsageDescription`. Allow and Don't Allow eac
 daemon's identity, and the shell held no row afterwards.
 
 The Swift daemon sends Safari and Google Chrome events directly through
-`NSAppleScript.executeAndReturnError`; it does not launch `osascript`. Authorization is split by who
-is asking. Agent-facing verbs call `AEDeterminePermissionToAutomateTarget` with
+`NSAppleScript.executeAndReturnError`; it does not launch `osascript`. The Rust daemon sends the same
+questions as raw Apple events through `AESendMessage` (`rust/axon-mac/src/apple_events.rs`), one
+event per question, each shaped as AppleScript's own events were measured to be: `core/getd` of a
+property specifier hung from index specifiers (`front window` is window 1), `core/setd` with a
+`utxt` value, and `core/cnte` of a container with the element class in `kocl`. The dictionary codes
+for each browser live in one table (`Dictionary` in `rust/axon-mac/src/browser.rs`, carried by the
+supported-browser list in `automation.rs`). Every send carries `kAEDoNotPromptForUserConsent`, so an
+event that would need consent answers `errAEEventWouldRequireUserConsent` rather than raising a
+dialog. The verbs run on the backend worker, which `windows` needs for its Accessibility
+cross-check and which records every answer in the action history; `AESendMessage` is thread-safe
+and blocks on a Mach port, not a run loop. Because that worker is serialized, each verb spends its
+events from one budget, every event waiting at most 15 seconds: `navigate` spends at most 15 seconds
+before its `set`, the settle's 4-second wall-clock bound (which counts the reads' own latency), and
+one trailing read, so even a browser that is slow without being hung ends inside the socket client's
+30-second request timeout. The wire contract is pinned by `schema/fixtures/browser`, which is the
+Swift router's own output, and the Rust router reproduces each file end to end. Authorization is
+split by who is asking. Agent-facing verbs call `AEDeterminePermissionToAutomateTarget` with
 `askUserIfNeeded: false` and refuse on anything but `noErr`: the prompting call blocks its thread
 until a person dismisses the dialog, and browser verbs run synchronously on the socket-handling
 thread, so prompting from there would stall an agent's call indefinitely on a dialog nobody asked
@@ -1648,7 +1662,16 @@ sender is `Axon.app/Contents/MacOS/Axon`, registered in launchd's `gui/<uid>` do
 
 Every decision names the leg that produced it — `checked`, `prompted`, or `executed` — in the
 JSON-RPC error's `data.leg` and in one stderr line per decision, which the LaunchAgent routes to
-`~/Library/Logs/Axon/daemon.err.log`. A field report should be readable without a bench protocol.
+`~/Library/Logs/Axon/daemon.err.log`. Both daemons do this; the Rust daemon also logs one line per
+Apple event with its status and latency. A field report should be readable without a bench
+protocol.
+
+Only a refused event writes the executed leg (`errAEEventNotPermitted` at the send, after the check
+passed). A successful send records nothing new: under the sticky rule an executed-leg success would
+block a later checked-leg denial from ever landing, and the menu would report nothing to request
+after a person revoked the grant. An event the Rust daemon sends that answers
+`errAEEventWouldRequireUserConsent` is reported as `notDetermined` at the `executed` leg and not
+recorded, because nobody answered anything.
 
 An Automation trial must restart the daemon after resetting a grant. macOS resolves an authorization
 inside the sending process once that process holds an answer for a sender/target pair, and `tccutil
