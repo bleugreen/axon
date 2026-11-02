@@ -161,8 +161,53 @@ pub fn stroke(spec: &str) -> Result<Stroke, String> {
     })
 }
 
-/// Whether a `key` intent holds any modifier. Text never does: it is posted without setting any
-/// flags, which is the variant the campaign measured.
+/// The modifier keys a chord presses, in the order they go down, with the flag each holds. Released
+/// in reverse.
+const MODIFIER_KEYS: [(u64, u16); 4] = [
+    (FLAG_COMMAND, 55),
+    (FLAG_SHIFT, 56),
+    (FLAG_OPTION, 58),
+    (FLAG_CONTROL, 59),
+];
+
+/// One keyboard event a stroke posts: a key code, whether it goes down, and the flags it carries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KeyEvent {
+    pub code: u16,
+    pub down: bool,
+    pub flags: u64,
+}
+
+/// Every event one stroke posts, in order.
+///
+/// Each modifier is pressed and released as a key of its own, and the last release carries no
+/// flags. Setting a modifier's flag on the key's events alone is not a chord the window server can
+/// close: it records the flag into the session's modifier state and nothing ever clears it, so
+/// Command stays logically held and every later keystroke on the machine, the user's included,
+/// arrives as a Command shortcut. That was measured on bgsrv-mac (axn/230), after a chord built that
+/// way.
+pub fn stroke_events(stroke: Stroke) -> Vec<KeyEvent> {
+    let held: Vec<(u64, u16)> = MODIFIER_KEYS
+        .into_iter()
+        .filter(|(flag, _)| stroke.flags & flag != 0)
+        .collect();
+    let mut events = Vec::with_capacity(held.len() * 2 + 2);
+    let mut flags = 0;
+    for &(flag, code) in &held {
+        flags |= flag;
+        events.push(KeyEvent { code, down: true, flags });
+    }
+    events.push(KeyEvent { code: stroke.code, down: true, flags });
+    events.push(KeyEvent { code: stroke.code, down: false, flags });
+    for &(flag, code) in held.iter().rev() {
+        flags &= !flag;
+        events.push(KeyEvent { code, down: false, flags });
+    }
+    events
+}
+
+/// Whether a `key` intent holds any modifier. Text never does: every text event carries no flags,
+/// which is the variant the campaign measured (it ran with no modifier held).
 pub fn has_modifiers(spec: &str) -> Result<bool, String> {
     Ok(!axon_core::parse_chord(spec)?.modifiers.is_empty())
 }
@@ -209,7 +254,10 @@ pub fn wheel_steps(delta_x: f64, delta_y: f64) -> Vec<(i32, i32)> {
 
 #[cfg(target_os = "macos")]
 pub mod native {
-    use super::{CHARACTER_INTERVAL_MS, Stroke, WHEEL_STEP_INTERVAL_MS, ansi_key_code};
+    use super::{
+        CHARACTER_INTERVAL_MS, KeyEvent, Stroke, WHEEL_STEP_INTERVAL_MS, ansi_key_code,
+        stroke_events,
+    };
     use axon_core::{BackendError, Capability};
     use std::{ffi::c_void, thread::sleep, time::Duration};
 
@@ -299,43 +347,38 @@ pub mod native {
         }
     }
 
-    /// Builds a down and an up event before posting either, so a creation failure posts nothing
+    /// Builds every event of a sequence before posting any, so a creation failure posts nothing
     /// rather than leaving a key held.
     ///
-    /// `flags` is `None` for text, which leaves Core Graphics' own flags in place exactly as the
-    /// measured variant did; a `key` intent sets its chord's flags, as the Swift daemon does.
-    fn key_pair(
-        code: u16,
-        flags: Option<u64>,
-        payload: Option<&[u16]>,
-    ) -> Result<[CGEventRef; 2], BackendError> {
-        let down = created(
-            unsafe { CGEventCreateKeyboardEvent(std::ptr::null(), code, true) },
-            "key-down",
-            Capability::KeyboardInput,
-        )?;
-        let up = match created(
-            unsafe { CGEventCreateKeyboardEvent(std::ptr::null(), code, false) },
-            "key-up",
-            Capability::KeyboardInput,
-        ) {
-            Ok(up) => up,
-            Err(error) => {
-                unsafe { CFRelease(down) };
-                return Err(error);
-            }
-        };
-        for event in [down, up] {
-            unsafe {
-                if let Some(flags) = flags {
-                    CGEventSetFlags(event, flags);
+    /// Every event's flags are set explicitly. A null-source event otherwise inherits the session's
+    /// current modifier state, so a modifier the user happens to be holding would turn background
+    /// text into shortcuts in an application they are not looking at.
+    fn build(events: &[KeyEvent], payload: Option<&[u16]>) -> Result<Vec<CGEventRef>, BackendError> {
+        let mut built = Vec::with_capacity(events.len());
+        for event in events {
+            match created(
+                unsafe { CGEventCreateKeyboardEvent(std::ptr::null(), event.code, event.down) },
+                "keyboard",
+                Capability::KeyboardInput,
+            ) {
+                Ok(created) => {
+                    unsafe {
+                        CGEventSetFlags(created, event.flags);
+                        if let Some(payload) = payload {
+                            CGEventKeyboardSetUnicodeString(created, payload.len(), payload.as_ptr());
+                        }
+                    }
+                    built.push(created);
                 }
-                if let Some(payload) = payload {
-                    CGEventKeyboardSetUnicodeString(event, payload.len(), payload.as_ptr());
+                Err(error) => {
+                    for event in built {
+                        unsafe { CFRelease(event) };
+                    }
+                    return Err(error);
                 }
             }
         }
-        Ok([down, up])
+        Ok(built)
     }
 
     /// Types `text` one character at a time, with no modifier flags.
@@ -346,16 +389,16 @@ pub mod native {
             }
             let payload: Vec<u16> = character.encode_utf16(&mut [0; 2]).to_vec();
             let code = ansi_key_code(character).unwrap_or(0);
-            for event in key_pair(code, None, Some(&payload))? {
+            for event in build(&stroke_events(Stroke { code, flags: 0 }), Some(&payload))? {
                 post(destination, event);
             }
         }
         Ok(())
     }
 
-    /// Presses one key with its modifier flags set on both the down and the up event.
+    /// Presses one key, with each of its modifiers pressed around it as a key of its own.
     pub fn post_stroke(destination: Destination, stroke: Stroke) -> Result<(), BackendError> {
-        for event in key_pair(stroke.code, Some(stroke.flags), None)? {
+        for event in build(&stroke_events(stroke), None)? {
             post(destination, event);
         }
         Ok(())
@@ -509,6 +552,37 @@ mod tests {
             named_key_code(NamedKey::Insert)
                 .unwrap_err()
                 .contains("Insert")
+        );
+    }
+
+    /// The sequence a chord posts presses its modifiers as keys and ends with nothing held: the
+    /// last event carries no flags, so the window server's modifier state is closed.
+    #[test]
+    fn a_chord_presses_and_releases_its_modifiers_and_ends_with_nothing_held() {
+        let event = |code, down, flags| KeyEvent { code, down, flags };
+        assert_eq!(
+            stroke_events(stroke("cmd+s").unwrap()),
+            vec![
+                event(55, true, FLAG_COMMAND),
+                event(1, true, FLAG_COMMAND),
+                event(1, false, FLAG_COMMAND),
+                event(55, false, 0),
+            ]
+        );
+        let all = FLAG_COMMAND | FLAG_SHIFT | FLAG_OPTION | FLAG_CONTROL;
+        let events = stroke_events(stroke("ctrl+option+shift+cmd+Tab").unwrap());
+        assert_eq!(events.len(), 10);
+        assert_eq!(events[4], event(48, true, all));
+        assert_eq!(events.last().unwrap().flags, 0);
+        // Every modifier that went down comes back up, in reverse.
+        let downs: Vec<u16> = events.iter().filter(|e| e.down && e.code != 48).map(|e| e.code).collect();
+        let mut ups: Vec<u16> = events.iter().filter(|e| !e.down && e.code != 48).map(|e| e.code).collect();
+        ups.reverse();
+        assert_eq!(downs, ups);
+        // An unmodified key, and every text character, is exactly one down and one up with no flags.
+        assert_eq!(
+            stroke_events(stroke("Return").unwrap()),
+            vec![event(36, true, 0), event(36, false, 0)]
         );
     }
 
