@@ -24,7 +24,7 @@ Axon prefers semantic actions supplied by the app, such as pressing a button or 
 
 ## Keep control of your desktop
 
-Actions run in the background when the operating system and app allow it. Axon does not silently move your pointer, steal focus, use the clipboard, or send global keyboard input.
+Actions run in the background when the operating system and app allow it. Axon does not silently move your pointer, steal focus, use the clipboard, or send global keyboard input. Keystrokes addressed to a named app may still reach it in the background where the platform has a measured way to post input to that one process; that input never touches the shared keyboard.
 
 When an action genuinely requires the app in front, your agent must opt in for that specific step. The permission does not carry into later actions.
 
@@ -254,12 +254,13 @@ rather than by the API that produced it:
 | rung | meaning on macOS |
 | --- | --- |
 | `semantic` | `AXPress`, `AXValue`, `AXScrollToVisible` — no focus change, no activation |
-| `pixel` | `CGEventPostToPid` against the target's process, with the frontmost app proved unchanged afterwards, and the real pointer too wherever the action synthesizes pointer input |
+| `pixel` | `CGEventPostToPid` against the target's process, with the frontmost app proved unchanged afterwards, and the real pointer too wherever the action synthesizes pointer input (Swift daemon) |
+| `application` | `CGEventPostToPid` keystrokes to the named app's process, with the frontmost app proved unchanged afterwards; carries no coordinate (Rust `axon-mac`, which reports pid-targeted keyboard input here rather than as `pixel`) |
 | `foreground` | Global `CGEvent` on the shared devices, allowed only by explicit opt-in |
 
 Actions climb that ladder in order and stop at the first rung their policy and
 the runtime allow. A failed semantic attempt may advance to pixel; under
-`backgroundOnly` the ladder ends there. An accessibility action the app *refuses*
+`backgroundOnly` the ladder ends after pixel and application. An accessibility action the app *refuses*
 is a failed action, never a reason to send unrelated global input at the same
 coordinates, so `invoke` has one rung only. An action reported as **unsupported**
 is not a refusal: the element advertised a mechanism it does not implement, and
@@ -460,6 +461,17 @@ not set `success` to true. `keyboard` has no semantic rung — there is no eleme
 to mutate, only input to deliver — so background delivery needs `app` to name the
 receiving application. Without it the only rung left is foreground, and
 `backgroundOnly` refuses.
+
+On the Rust macOS daemon, text and unmodified keys aimed at a named app travel
+the `application` rung: posted to that app's process without activating it,
+under either policy, for any app that resolves to a running process. A chord such
+as `cmd+s` was not measured at that rung, so it needs `foregroundPermitted`. Key
+codes come from a fixed US-ANSI table, never from the active keyboard layout;
+text still arrives in any script because each event also carries its characters.
+`Delete` is forward delete there, as on Windows and Linux, and `Backspace` is the
+key left of it. The Swift daemon instead treats `delete` as Backspace, so a
+`delete` recorded by one daemon replays as the other key on the other; that
+divergence is accepted until the cutover.
 
 `invoke` runs a named AX action such as `AXPress` or `AXShowMenu`. It is always
 semantic and never escalates.
