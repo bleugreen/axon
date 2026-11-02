@@ -462,17 +462,28 @@ impl<
         Ok((ClickTarget::Point(point.app), screen))
     }
 
-    /// The centre of a resolved element's frame, which is where a pointer action aims at it.
+    /// Where a pointer action aims at a resolved element: the centre of the part of it that is
+    /// actually on screen.
+    ///
+    /// Not the centre of its frame. A document view inside a scroll area reports the frame of the
+    /// whole document, thousands of points tall, and its centre is somewhere nobody can see; the
+    /// hit test there finds another window or nothing. Clipping by every ancestor's frame is what
+    /// the scroll area and the window do to it on screen.
     fn element_point(&self, handle: &SnapshotHandle) -> Result<(f64, f64), JsonRpcError> {
-        let frame = self
-            .snapshot_node(handle)
-            .and_then(|node| node.frame)
-            .ok_or_else(|| {
-                rpc_error(
-                    -32003,
-                    "the resolved element exposes no frame to aim a pointer at",
-                )
-            })?;
+        let snapshot = self
+            .snapshot
+            .as_ref()
+            .ok_or_else(|| rpc_error(-32003, "the resolved element is not in the current capture"))?;
+        let index = snapshot
+            .index_for_handle(handle)
+            .map_err(|error| rpc_error(-32003, error.to_string()))?;
+        let frame = visible_frame(snapshot, index).ok_or_else(|| {
+            rpc_error(
+                -32003,
+                "the resolved element exposes no frame, or none of it is visible, to aim a \
+                 pointer at",
+            )
+        })?;
         Ok((frame.x + frame.width / 2.0, frame.y + frame.height / 2.0))
     }
 
@@ -1929,6 +1940,50 @@ fn query_for_app(app: &str) -> AppQuery {
         name: process_id.is_none().then(|| app.to_owned()),
         identifier: None,
     }
+}
+
+/// The part of the node at `index` (in the flattened order handles use) that its ancestors leave
+/// visible: its frame intersected with every ancestor frame. `None` when it has no frame or the
+/// intersection is empty.
+fn visible_frame(snapshot: &Snapshot, index: usize) -> Option<axon_core::Rect> {
+    fn clip(a: axon_core::Rect, b: axon_core::Rect) -> Option<axon_core::Rect> {
+        let (left, top) = (a.x.max(b.x), a.y.max(b.y));
+        let (right, bottom) = ((a.x + a.width).min(b.x + b.width), (a.y + a.height).min(b.y + b.height));
+        (right > left && bottom > top).then(|| axon_core::Rect {
+            x: left,
+            y: top,
+            width: right - left,
+            height: bottom - top,
+        })
+    }
+    /// Walks in the same pre-order `Snapshot::node` numbers nodes in, carrying the clip.
+    fn find(
+        node: &axon_core::Node,
+        clip_to: Option<axon_core::Rect>,
+        next: &mut usize,
+        wanted: usize,
+    ) -> Option<Option<axon_core::Rect>> {
+        let here = *next;
+        *next += 1;
+        let visible = match (node.frame, clip_to) {
+            (Some(frame), Some(bound)) => clip(frame, bound),
+            (Some(frame), None) => Some(frame),
+            (None, bound) => bound,
+        };
+        if here == wanted {
+            return Some(node.frame.and(visible));
+        }
+        node.children
+            .iter()
+            .find_map(|child| find(child, visible.or(clip_to), next, wanted))
+    }
+    let mut next = 0;
+    snapshot
+        .app
+        .windows
+        .iter()
+        .find_map(|window| find(&window.root, None, &mut next, index))
+        .flatten()
 }
 
 /// The text location a pointer request carries, inside its target or beside it.
@@ -3393,6 +3448,41 @@ mod tests {
                 "no AXPress was attempted"
             );
             assert_eq!(router.backend.dispatches, vec!["click 200,150".to_string()]);
+        }
+
+        /// A document view reports the whole document's frame. Its centre is off screen, so the
+        /// click aims at the centre of what the window actually shows of it.
+        #[test]
+        fn an_element_taller_than_its_window_is_clicked_where_it_is_visible() {
+            let mut backend = NativeFake::new();
+            backend.snapshot.app.windows[0].root.children[0].frame =
+                Some(rect(100.0, 100.0, 200.0, 5000.0));
+            let mut router = router(backend);
+            let text_area = element(&mut router, TEXT_AREA);
+            ok(
+                &mut router,
+                "click",
+                json!({"target": text_area, "deliveryPolicy": "foregroundPermitted"}),
+            );
+            assert_eq!(router.backend.dispatches, vec!["click 200,350".to_string()]);
+        }
+
+        #[test]
+        fn an_element_scrolled_entirely_out_of_view_is_stale_and_posts_nothing() {
+            let mut backend = NativeFake::new();
+            backend.snapshot.app.windows[0].root.children[0].frame =
+                Some(rect(100.0, 900.0, 200.0, 100.0));
+            let mut router = router(backend);
+            let text_area = element(&mut router, TEXT_AREA);
+            let error = call(
+                &mut router,
+                "click",
+                json!({"target": text_area, "deliveryPolicy": "foregroundPermitted"}),
+            )
+            .unwrap_err();
+            assert_eq!(error.code, -32003);
+            assert!(router.backend.dispatches.is_empty());
+            assert!(router.backend.activations.is_empty(), "refused before the transaction");
         }
 
         #[test]
