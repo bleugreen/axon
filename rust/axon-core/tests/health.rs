@@ -125,6 +125,74 @@ fn every_fixture_reason_code_is_a_stable_kebab_case_token() {
     }
 }
 
+/// What the macOS fixtures *mean*, independent of the code that produces them
+/// (`rust/axon-mac/src/socket.rs`). A shape check alone let a fixture describing another backend
+/// pass: this one pins the Rust daemon's census.
+#[test]
+fn macos_fixtures_state_the_rust_daemons_capability_semantics() {
+    let load = |name: &str| -> HealthReport {
+        let body = fs::read_to_string(schema_root().join("fixtures/health").join(name)).unwrap();
+        serde_json::from_str(&body).unwrap()
+    };
+    let state = |report: &HealthReport, key: &str| {
+        report
+            .capabilities
+            .iter()
+            .find(|state| state.capability == key)
+            .cloned()
+            .unwrap()
+    };
+
+    for name in ["macos-healthy.json", "macos-accessibility-denied.json"] {
+        let report = load(name);
+        let provenance = report.daemon.provenance.as_ref().expect(name);
+        assert_eq!(provenance.backend, "rust-axon-mac", "{name}");
+        assert_eq!(report.daemon.shell_contract, Some(1), "{name}");
+        // axon-mac has no AX observer: change detection is look(since:) diffing and the waits
+        // poll, so the event-observation capability is honestly absent with every grant.
+        let observe = state(&report, "observeChanges");
+        assert!(!observe.usable, "{name}");
+        assert_eq!(observe.reason.as_deref(), Some("not-implemented"), "{name}");
+        assert!(state(&report, "serializeHistory").usable, "{name}");
+    }
+
+    let healthy = load("macos-healthy.json");
+    assert!(healthy.daemon.ready);
+    let unusable = healthy
+        .capabilities
+        .iter()
+        .filter(|state| !state.usable)
+        .map(|state| state.capability.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(unusable, ["observeChanges"]);
+
+    let denied = load("macos-accessibility-denied.json");
+    assert!(!denied.daemon.ready);
+    assert!(
+        denied
+            .permissions
+            .iter()
+            .any(|p| p.name == "screenRecording" && p.granted),
+        "each permission reports only its own grant"
+    );
+    // Screenshots need Accessibility on this backend: it names the window to capture by resolving
+    // the application through the Accessibility API.
+    for state in &denied.capabilities {
+        match state.capability.as_str() {
+            "serializeHistory" => assert!(state.usable),
+            "observeChanges" => {}
+            other => {
+                assert!(!state.usable, "{other} is usable without Accessibility");
+                assert_eq!(
+                    state.reason.as_deref(),
+                    Some("accessibility-not-granted"),
+                    "{other} must name the missing grant, not not-implemented"
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn every_fixture_explains_each_unusable_capability() {
     for (name, body) in fixtures() {

@@ -472,6 +472,63 @@ fn mcp_success_response(id: Value, result: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The shared macOS health fixtures are what this daemon publishes, composed the way the CLI
+    /// composes `status --json`. Set `AXON_REGENERATE_HEALTH_FIXTURES=1` to rewrite them from this
+    /// code path after a deliberate change; the semantic checks in
+    /// `rust/axon-core/tests/health.rs` then say whether the change means what it should.
+    #[test]
+    fn macos_health_fixtures_are_what_this_daemon_publishes() {
+        use axon_core::{HealthReport, RegistrationHealth, RegistrationMechanism};
+        let main = "/Applications/Axon.app/Contents/MacOS/Axon";
+        for (name, permissions) in [
+            (
+                "macos-healthy.json",
+                MacPermissions {
+                    accessibility: true,
+                    screen_recording: true,
+                },
+            ),
+            (
+                "macos-accessibility-denied.json",
+                MacPermissions {
+                    accessibility: false,
+                    screen_recording: true,
+                },
+            ),
+        ] {
+            let report = daemon_report(
+                permissions,
+                SessionHealth::usable(None),
+                4210,
+                DEFAULT_SOCKET_PATH,
+                main,
+                "0.4.0",
+            );
+            let produced = serde_json::to_value(HealthReport::running(
+                report,
+                RegistrationHealth::present(RegistrationMechanism::Launchd, main),
+            ))
+            .unwrap();
+            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../schema/fixtures/health")
+                .join(name);
+            if std::env::var_os("AXON_REGENERATE_HEALTH_FIXTURES").is_some() {
+                fs::write(
+                    &path,
+                    serde_json::to_string_pretty(&produced).unwrap() + "\n",
+                )
+                .unwrap();
+            }
+            let committed: Value =
+                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(
+                produced, committed,
+                "{name} is not what axon-mac publishes; regenerate it"
+            );
+        }
+    }
+
     #[test]
     fn facade_matches_shared_observation_envelope() {
         let fixture: Value = serde_json::from_str(include_str!(
