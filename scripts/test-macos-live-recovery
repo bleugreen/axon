@@ -600,7 +600,7 @@ def main() -> int:
           expect=["could not bootstrap", "is not loaded in this domain", "log show --last 30s"],
           STUB_BOOTSTRAP_FAILS=live_daemon, **{pid_var: 5150})
     dies_var = "STUB_DIES_" + live_daemon.replace(".", "_")
-    check("probe", probe_assert, "asserts the candidate launchd is running is the one serving", 0,
+    check("probe", probe_assert, "passes when the job launchd runs is the one serving", 0,
           expect=["ASSERTED=[5150]", "the daemon under test (pid 5150) is serving"],
           forbid=["launchctl print gui/", "log show"],
           STUB_STATUS=status_doc(pid=5150), **{pid_var: 5150})
