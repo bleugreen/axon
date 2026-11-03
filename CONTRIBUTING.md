@@ -22,7 +22,7 @@ talk to it with the CLI from a second terminal:
 
 ```sh
 make serve          # cd rust && AXON_SOCKET_PATH=/tmp/axon-dev.sock cargo run -p axon-mac -- serve
-AXON_SOCKET_PATH=/tmp/axon-dev.sock swift run axon look --app Finder
+AXON_SOCKET_PATH=/tmp/axon-dev.sock swift run axon look Finder
 ```
 
 A daemon run this way holds only the grants macOS gives the binary at that path; the packaged
