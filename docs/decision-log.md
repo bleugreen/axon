@@ -15,6 +15,8 @@ axon mcp
 
 The daemon should own the persistent state. The MCP facade can speak to the daemon through JSON-RPC over a local Unix domain socket if stdio compatibility is required.
 
+Since 0.4.0 the macOS daemon is its own binary, `Axon.app/Contents/MacOS/Axon` (the Rust `axon-mac`), and the `axon` CLI is only its client: `axon serve` is gone, and `serve` is a verb of the Rust daemons for development.
+
 ## Daemon Socket Protocol
 
 Decision: Use JSON-RPC first.

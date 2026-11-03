@@ -2,10 +2,24 @@
 
 Status: Historical design. Partially superseded by the shipped split daemon/editor app architecture.
 
+## 2026-11-02 Conceptual Maintenance Note
+
+Since 0.4.0 the editor (`AxonEditorApp`, nested in `Axon.app`) is a client of
+the Rust daemon `axon-mac`, which is `Axon.app`'s main executable. Recording,
+running, and debugging are daemon-side; the editor only sends requests over the
+socket. The step debugger is currently unavailable: the daemon refuses `debug.*`
+with a typed `DebugSession` capability error, and the editor then disables Debug
+and Run to Selected with "Step debugging isn't available with this Axon daemon
+yet". Breakpoints stay in the document. Record From Here, which needed a paused
+debug session, records before the selected step instead and shows the menu's app
+picker for the recording scope. The menu bar surface is its own nested app,
+`Axon Menu.app`, and the Secrets preference below is moot: `refresh-secrets` and
+its HMAC key were retired in 0.4.0.
+
 ## 2026-05-22 Conceptual Maintenance Note
 
 This document is no longer the current implementation contract. The shipped
-architecture now has `AxonDaemonApp` as the menu bar/socket service and
+architecture at this date had `AxonDaemonApp` as the menu bar/socket service and
 `AxonEditorApp` as the foreground editor/settings app. The shared `.axn` model,
 explicit editor entry point, unsaved review window, and debugger loop survived;
 the one-bundle `MenuBarExtra` + `DocumentGroup` shape did not.

@@ -169,8 +169,10 @@ should be discoverable here first.
   per platform. macOS and Windows implement the observer hook — a listen-only
   CGEvent tap with Accessibility reads taken in the callback, and a low-level
   hook pair feeding an enrichment thread that reads UI Automation at event time,
-  respectively. Linux does not, which is why `observeGlobalInput` stays unusable
-  there and refuses with a typed capability reason rather than a bare error.
+  respectively. Linux implements it on X11 through the RECORD extension; a
+  Wayland session has no listen-only input protocol, so `observeGlobalInput`
+  stays unusable there and `recording.start` refuses with a typed capability
+  reason rather than a bare error.
 
   A keystroke burst captured under a sensitive focus is never serialized; the
   rule and the floor each observer owes it are the observer sensitivity contract

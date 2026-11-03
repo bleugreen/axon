@@ -2,8 +2,9 @@
 
 This document defines the contract shared by every Axon implementation. It
 separates that contract from the native accessibility vocabulary and mechanics
-used to fulfill it. The Swift implementation remains canonical on macOS; sibling
-implementations must conform to this document and the machine-readable surface.
+used to fulfill it. Every daemon is a Rust implementation over `rust/axon-core`:
+`axon-mac` on macOS since 0.4.0, `axon-win`, and `axon-linux`. Each must conform
+to this document and the machine-readable surface.
 
 ## Sources of truth
 
@@ -22,8 +23,10 @@ updates shared conformance fixtures. The behavioral descriptions in
 
 ## Targets
 
-An action target is polymorphic. The canonical decoding rules live in
-[`Sources/AxonCore/ToolTarget.swift`](../Sources/AxonCore/ToolTarget.swift).
+An action target is polymorphic. Its shapes are declared in
+`ToolSurfaceSpec.swift`, and the canonical decoding rules live in `rust/axon-core`:
+`WireElementTarget` in `snapshot.rs` for element targets and `point.rs` for
+points.
 
 - An **element target** is exactly `{app, name}`. The name is derived from the
   normalized observation vocabulary and is resolved within the named application.
@@ -349,8 +352,7 @@ available, and a backend must not claim it before a live probe passes.
 
 | platform | semantic | pixel | application | foreground |
 | --- | --- | --- | --- | --- |
-| macOS, Swift daemon | `AXPress`, `AXValue`, `AXScrollToVisible` | `CGEventPostToPid` against the target process, invariants proved after dispatch | not emitted | Global `CGEvent`, transactional activate/dispatch/restore |
-| macOS, `axon-mac` | `AXPress` (only for an element whose live action list advertises it), `AXValue`, `AXScrollToVisible` | none: no mechanism binds pointer input to one window, and keyboard input has no window geometry | `CGEventPostToPid` for unmodified text and keys to a named application; chords, unaimed input, and every pointer action refuse by mechanism (`rust/axon-mac/src/background.rs`) | `CGEventPost(kCGHIDEventTap)` clicks, keystrokes, and pixel wheel bursts, transactional activate/dispatch/restore with the target re-verified by hit test after activation |
+| macOS | `AXPress` (only for an element whose live action list advertises it), `AXValue`, `AXScrollToVisible` | none: no mechanism binds pointer input to one window, and keyboard input has no window geometry | `CGEventPostToPid` for unmodified text and keys to a named application; chords, unaimed input, and every pointer action refuse by mechanism (`rust/axon-mac/src/background.rs`) | `CGEventPost(kCGHIDEventTap)` clicks, keystrokes, and pixel wheel bursts, transactional activate/dispatch/restore with the target re-verified by hit test after activation |
 | Windows | UIA `InvokePattern`, `ValuePattern`, `ScrollItemPattern`, none of which call `SetFocus` | Client-coordinate window messages to a leaf HWND bound through UIA ancestry, for window classes a live probe has verified; every other class refuses `backgroundPixelUnsupported` by name | none measured | `SendInput` after proved activation for clicks, text, named keys, and chords; the target remains frontmost after dispatch because Windows exposes no input-consumption boundary, while pointer restoration is still attempted and reported |
 | Linux | AT-SPI `Action.DoAction`, `EditableText.SetTextContents`, `Component.ScrollTo`, none of which take focus | `XSendEvent` to a window resolved from the target's own AT-SPI application, for toolkits a committed measurement recorded as acting on it: Chromium clicks, GTK 3 and Qt 6 keystrokes. Every other toolkit, and every version series nobody measured, refuses `backgroundPixelUnsupported` by name | none measured | `XTest` on an X11 session with an EWMH-capable window manager, transactional activate/dispatch/restore; withheld on every other session |
 
@@ -513,8 +515,8 @@ and identify the missing capability; they must not silently substitute a weaker
 mechanism.
 
 The status vocabulary is now defined once, as the `health-v1` document described
-by `schema/health-v1.schema.json` and modelled in both implementations
-(`AxonCore`'s `HealthStatus` and `axon-core::health`). It carries the complete
+by `schema/health-v1.schema.json` and modelled by the macOS Swift CLI that writes
+it (`AxonClient`'s `HealthStatus`) and by `axon-core::health`. It carries the complete
 capability vocabulary — one entry per known capability, so "unusable here" stays
 distinguishable from "older than your vocabulary" — alongside daemon, session,
 and permission state, each degraded entry naming a stable kebab-case reason code
@@ -534,12 +536,12 @@ but Wayland's global-input restriction alone does not imply that limitation.
 The shared contract will be encoded as implementation-neutral fixtures covering
 tool schemas, strict `{app, name}` target decoding, locator filtering/scoring outcomes, result
 envelopes, `.axn` parsing and traces, capability failures, and honest action
-results. Both the Swift and Rust implementations must run those fixtures in
-addition to backend-specific integration tests.
+results. Every implementation that produces or consumes a shape must run its
+fixtures in addition to backend-specific integration tests.
 
 The status contract already works this way: `schema/fixtures/health/` holds the
-healthy and degraded examples, and both implementations are tested against those
-same files — round-tripping each one exactly, so a field either implementation
+healthy and degraded examples, and the Swift CLI and the Rust daemons are tested
+against those same files — round-tripping each one exactly, so a field either implementation
 silently dropped is a test failure rather than a document a consumer never meant
 to publish. No implementation may treat its
 own incidental native behavior as a shared guarantee without first changing

@@ -23,6 +23,8 @@ The matrix below is the current user-facing contract. Contributors can consult t
 
 Axon is most complete at semantic actions such as pressing a button or setting a field value. Pointer, keyboard, and screenshot paths exist but remain experimental until they have live end-to-end verification.
 
+Since 0.4.0 the macOS daemon is the Rust `axon-mac` binary, the main executable of `Axon.app`. Two capabilities the earlier Swift daemon had are unavailable on macOS since that change: `drag`, which the CLI and SDKs still accept and the daemon refuses with a typed capability error, and the `.axn` editor's step debugger, whose controls the editor disables with an explanation. `look(since:)`, `wait_for_value`, and `wait_for_stability` work by comparing and polling captures, so health reports the event-driven `observeChanges` capability as not implemented. Screen text through Vision is implemented and awaits live evidence from the shipping bundle.
+
 Keystrokes aimed at a named app can be delivered in the background: they are posted to that app's process without bringing it forward or touching the pointer. Keyboard shortcuts that hold a modifier, such as `cmd+s`, and every click or scroll that the app does not expose as an accessibility action, need the app in front, so they require `foregroundPermitted`. macOS gives no way to deliver a click or a wheel event to a background window, for any app.
 
 Browser `navigate`, `windows`, and `tabs` use Apple Events in addition to Accessibility. Those verbs
@@ -41,7 +43,7 @@ with structured reason `automation-not-granted`, the target app, an authorizatio
 or `notDetermined`, and the `leg` that produced the decision. Axon does not collapse these
 independent target grants into the global health document.
 
-Being allowed to *ask* is itself a signing property. The daemon app runs under the hardened runtime,
+Being allowed to *ask* is itself a signing property. The daemon runs under the hardened runtime,
 which forbids Apple events outright unless the signature carries
 `com.apple.security.automation.apple-events`, and forbids them silently: TCC refuses instantly,
 presents no dialog, records no row, and Axon never appears in System Settings > Privacy & Security >

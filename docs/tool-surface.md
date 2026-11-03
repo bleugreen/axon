@@ -47,9 +47,10 @@ For platform-specific limits, see [Cross-platform support](cross-platform.md).
 ## Protocol reference
 
 The Swift-owned contract in `Sources/AxonCore/ToolSurfaceSpec.swift` is exported as the
-versioned `schema/tool-surface-v1.json` artifact. Swift and Rust MCP facades consume that
-single ordered contract and filter its explicit platform availability; runtime health remains
-the authority for whether an advertised operation is currently usable. Run
+versioned `schema/tool-surface-v1.json` artifact. The MCP facades (the Swift CLI on macOS, the
+Rust binaries on Windows and Linux) consume that single ordered contract with its explicit
+platform availability; runtime health remains the authority for whether an advertised operation is
+currently usable. Run
 `scripts/check-tool-surface` to detect generated-artifact drift, or pass `--write` to regenerate it.
 
 The artifact has a second consumer: the client SDKs under `sdk/`, whose per-tool method signatures
@@ -107,20 +108,18 @@ tree. `none` means the app reported no focused UI element. `inaccessible` means
 the `AXFocusedUIElement` query itself failed and includes the Accessibility error;
 it is never collapsed into `none`.
 
-Active credential redaction is always on when a provider-backed index has been
-refreshed with `axon refresh-secrets`. Redacted active credentials appear as
-`<redacted: active-credential>` with matching `op://` references in structured
-redaction metadata; the secret value itself is never returned.
+Secret arguments are redacted wherever a run's own `secret`-typed or `op://` and
+`env://` bound values would appear. The 1Password active-credential index that
+`axon refresh-secrets` built before 0.4.0 is retired, and `<redacted:
+active-credential>` no longer appears.
 
-Deterministic rule redaction is also always on for AX and OCR text. Role rules
+Deterministic rule redaction is always on for AX and OCR text. Role rules
 and curated patterns redact secure field values, secret-labeled values,
 structured identifiers, Luhn-valid cards, and known token shapes as
 `<redacted: auth-credential>`, `<redacted: pii-identifier>`, or
 `<redacted: financial-data>`. Numeric `AXValue` strings on position controls such
 as scroll bars, sliders, and value indicators are excluded from card detection;
 their digits describe control state rather than financial data.
-When a screenshot request is known to contain an active credential through AX or
-OCR text, Axon omits the image and returns a warning instead of sending pixels.
 
 An application running with no open window still observes successfully, and the
 observation says so with `note: "no-windows"`. The note is the authority, not the
@@ -155,8 +154,9 @@ direct child. Child pages use the same DSL tree format as app observations.
 descendants so callers can page children by semantic name.
 
 `look(since: snapshot)` recaptures the app for a retained snapshot and reports
-whether the coarse app/window surface changed. It uses observer hints when
-available and always compares a fresh summary.
+whether the coarse app/window surface changed by comparing a fresh summary with
+the retained one. The macOS daemon has no Accessibility event observer to add
+hints, which is why health reports `observeChanges` as not implemented there.
 
 `find(app, locator)` resolves an AX locator against a fresh app snapshot and
 returns `unique`, `ambiguous`, or `missing` with candidate summaries.
@@ -257,8 +257,8 @@ rather than by the API that produced it:
 | rung | meaning on macOS |
 | --- | --- |
 | `semantic` | `AXPress`, `AXValue`, `AXScrollToVisible` — no focus change, no activation |
-| `pixel` | `CGEventPostToPid` against the target's process, with the frontmost app proved unchanged afterwards, and the real pointer too wherever the action synthesizes pointer input (Swift daemon) |
-| `application` | `CGEventPostToPid` keystrokes to the named app's process, with the frontmost app proved unchanged afterwards; carries no coordinate (Rust `axon-mac`, which reports pid-targeted keyboard input here rather than as `pixel`) |
+| `pixel` | not emitted: no macOS mechanism binds pointer input to one window, and keyboard input has no window geometry |
+| `application` | `CGEventPostToPid` keystrokes to the named app's process, with the frontmost app proved unchanged afterwards; carries no coordinate |
 | `foreground` | Global `CGEvent` on the shared devices, allowed only by explicit opt-in |
 
 Actions climb that ladder in order and stop at the first rung their policy and
@@ -373,7 +373,9 @@ target:
 ```
 
 `click` accepts semantic-name targets, point targets, and text locations.
-`drag` accepts the same pointer target vocabulary for `from` and `to`. Point
+`drag` accepts the same pointer target vocabulary for `from` and `to`, though no
+shipping daemon implements it: since 0.4.0 every platform, macOS included,
+refuses it with a typed `-32004` capability error. Point
 coordinates may explicitly use `screen`, `window`, or `screenshot` coordinate
 spaces. `screen` and `window` coordinates are logical macOS points, the same units
 used by Accessibility frames and dispatched `CGEvent` locations. `screenshot`
@@ -474,16 +476,15 @@ to mutate, only input to deliver — so background delivery needs `app` to name 
 receiving application. Without it the only rung left is foreground, and
 `backgroundOnly` refuses.
 
-On the Rust macOS daemon, text and unmodified keys aimed at a named app travel
+On macOS, text and unmodified keys aimed at a named app travel
 the `application` rung: posted to that app's process without activating it,
 under either policy, for any app that resolves to a running process. A chord such
 as `cmd+s` was not measured at that rung, so it needs `foregroundPermitted`. Key
 codes come from a fixed US-ANSI table, never from the active keyboard layout;
 text still arrives in any script because each event also carries its characters.
 `Delete` is forward delete there, as on Windows and Linux, and `Backspace` is the
-key left of it. The Swift daemon instead treats `delete` as Backspace, so a
-`delete` recorded by one daemon replays as the other key on the other; that
-divergence is accepted until the cutover.
+key left of it. The Swift daemon before 0.4.0 treated `delete` as Backspace, so a
+`delete` step in a recording it made replays as forward delete today.
 
 `invoke` runs a named AX action such as `AXPress` or `AXShowMenu`. It is always
 semantic and never escalates.
@@ -556,7 +557,6 @@ invoke(target, name, deliveryPolicy?)
 
 ```text
 axon permit
-axon refresh-secrets [--json]
 axon look [app | target-json] [--since snapshot-id] [--no-screenshot] [--screen-text] [--frames] [--json] [--details] [--debug] [--no-tree] [--offset n] [--limit n] [--depth n]
 axon find <app> '<locator-json>'
 axon wait_for_value '<target-json>' (--contains text | --equals text | --matches regex) [--timeout-ms n] [--interval-ms n]
