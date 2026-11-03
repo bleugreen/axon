@@ -7,20 +7,48 @@ private enum DebugFollowUp: Sendable {
     case clearStopped
 }
 
-/// Whether the daemon has a step debugger, learned once per editor process from its first typed
-/// refusal, so every window disables the debugger controls together.
+/// Whether the daemon has a step debugger, shared by every editor window so they disable the
+/// debugger controls together.
+///
+/// Learned from the daemon's typed refusal: either a real `debug.*` call, or a probe each window
+/// sends when it appears. The probe is `debug.stop` for a session that cannot exist, which a daemon
+/// with a debugger answers as an unknown session and changes nothing, and a daemon without one
+/// answers `-32004 capability-unavailable DebugSession`.
 @MainActor
-enum DebuggerAvailability {
+@Observable
+final class DebuggerAvailability {
+    static let shared = DebuggerAvailability()
     static let unavailableMessage = "Step debugging isn't available with this Axon daemon yet"
-    private(set) static var isUnavailable = false
 
-    /// Records the refusal and returns true when `error` says the daemon has no debugger.
-    static func noteIfUnavailable(_ error: JSONRPCError) -> Bool {
-        guard DaemonRefusal(error) == .notImplemented(capability: DaemonRefusal.debugSessionCapability) else {
+    private(set) var isUnavailable = false
+
+    /// Records the answer and returns true when `error` says the daemon has no debugger.
+    @discardableResult
+    func note(_ error: JSONRPCError?) -> Bool {
+        guard let error,
+              DaemonRefusal(error) == .notImplemented(capability: DaemonRefusal.debugSessionCapability)
+        else {
             return false
         }
         isUnavailable = true
         return true
+    }
+
+    func probe() {
+        Task.detached(priority: .utility) {
+            let response = try? SocketClient(path: AxonEnvironment.socketPath(), responseTimeoutSeconds: 5)
+                .send(JSONRPCRequest(
+                    id: .string("editor.debug.probe"),
+                    method: "debug.stop",
+                    params: .object(["sessionId": .string("editor-capability-probe")])
+                ))
+            await MainActor.run {
+                if let response {
+                    self.isUnavailable = DaemonRefusal(response.error ?? JSONRPCError(code: 0, message: "", data: nil))
+                        == .notImplemented(capability: DaemonRefusal.debugSessionCapability)
+                }
+            }
+        }
     }
 }
 
@@ -47,7 +75,8 @@ struct DocumentView: View {
     @State private var lastDebugActionID: String?
     @State private var pauseReason: String?
     @State private var repairActionID: String?
-    @State private var debuggerUnavailable = DebuggerAvailability.isUnavailable
+    private var debugger = DebuggerAvailability.shared
+    private var debuggerUnavailable: Bool { debugger.isUnavailable }
 
     init(
         document: Binding<AxnEditorDocument>,
@@ -161,6 +190,7 @@ struct DocumentView: View {
             if selectedBlockID == nil {
                 selectedBlockID = document.axn.blocks.first?.id
             }
+            debugger.probe()
         }
     }
 
@@ -425,8 +455,7 @@ struct DocumentView: View {
 
     private func handleDebugResponse(_ response: JSONRPCResponse) {
         if let error = response.error {
-            if DebuggerAvailability.noteIfUnavailable(error) {
-                debuggerUnavailable = true
+            if debugger.note(error) {
                 clearDebugState(status: "Idle")
                 return
             }
