@@ -85,6 +85,9 @@ jobs:
           if launchctl print "gui/$uid/$AXON_LAUNCH_AGENT_LABEL" >/dev/null 2>&1; then
             daemon_was_loaded=true
           fi
+          # The process launchd is running for the desktop's daemon, so the stop below can be
+          # confirmed against the process rather than against the endpoint.
+          desktop_daemon_pid="$(launchctl print "gui/$uid/$AXON_LAUNCH_AGENT_LABEL" 2>/dev/null | awk '/^[[:space:]]*pid = / { print $3; exit }' || true)"
           menu_was_loaded=false
           if launchctl print "gui/$uid/$AXON_MENU_AGENT_LABEL" >/dev/null 2>&1; then
             menu_was_loaded=true
@@ -140,6 +143,22 @@ jobs:
           # anything is still answering.
           "$cli" shutdown
 
+          # Nothing answering is not the same as nothing running: a daemon can close its endpoint
+          # and still be tearing down. The next step bootstraps the candidate, so it waits here for
+          # the desktop's daemon process to be gone rather than starting one beside it. `ps`, not
+          # `kill -0`, because only a command on PATH can be rehearsed by the recovery harness.
+          if [ -n "$desktop_daemon_pid" ]; then
+            for _ in {1..40}; do
+              ps -p "$desktop_daemon_pid" >/dev/null 2>&1 || break
+              sleep 0.25
+            done
+            if ps -p "$desktop_daemon_pid" >/dev/null 2>&1; then
+              echo "::error::the desktop's daemon (pid $desktop_daemon_pid) is still running 10 s after shutdown stopped answering; refusing to start the candidate beside it"
+              exit 1
+            fi
+            echo "the desktop's daemon (pid $desktop_daemon_pid) has exited"
+          fi
+
       - name: Capture, resolve, act, and verify
         run: |
           set -euo pipefail
@@ -149,8 +168,16 @@ jobs:
           uid="$(id -u)"
           daemon_plist="$RUNNER_TEMP/$AXON_LIVE_DAEMON_LABEL.plist"
           menu_plist="$RUNNER_TEMP/$AXON_LIVE_MENU_LABEL.plist"
-          daemon_log="$RUNNER_TEMP/$AXON_LIVE_DAEMON_LABEL.log"
-          menu_log="$RUNNER_TEMP/$AXON_LIVE_MENU_LABEL.log"
+          # The jobs' logs live under /tmp, where scripts/macos-cutover-qualification's jobs and
+          # hand-launched reproductions write theirs, rather than inside the runner's own temporary
+          # directory: launchd opens these paths for the job before it runs, and a path it cannot
+          # open there is a failure with no log to show for it. The directory is created here so
+          # that launchd only ever has to create the file. Per run for the socket's reason below.
+          log_dir="/tmp/axon-live-${GITHUB_RUN_ID}.logs"
+          rm -rf "$log_dir"
+          mkdir -m 700 "$log_dir"
+          daemon_log="$log_dir/$AXON_LIVE_DAEMON_LABEL.log"
+          menu_log="$log_dir/$AXON_LIVE_MENU_LABEL.log"
           # The candidate's own endpoint, exported so that every client below -- `status`, `mcp`,
           # `run`, and the assertion script -- talks to it and to nothing else. Per run, because a
           # re-run attempt of a cancelled run shares its id and the restore removes the file.
@@ -230,9 +257,12 @@ jobs:
           sys.exit(1 if problems else 0)
           PY
 
+          # Every failure from here to a serving candidate prints launchd's account of the job while
+          # the label is still loaded: a candidate that dies before writing to its log leaves no
+          # other evidence, and the restore step boots the label out.
           if ! launchctl bootstrap "gui/$uid" "$daemon_plist"; then
             echo "::error::launchctl could not bootstrap $AXON_LIVE_DAEMON_LABEL from $daemon_plist"
-            tail -40 "$daemon_log" 2>/dev/null || true
+            scripts/launchd-job-evidence "$AXON_LIVE_DAEMON_LABEL" "$daemon_log"
             exit 1
           fi
           # launchd's own answer for which process it started, never a process-table search: the
@@ -250,15 +280,17 @@ jobs:
           done
           if [[ -z "$daemon_pid" ]]; then
             echo "::error::launchd loaded $AXON_LIVE_DAEMON_LABEL but is not running it; the candidate daemon never launched or exited before it could serve"
-            launchctl print "gui/$uid/$AXON_LIVE_DAEMON_LABEL" 2>&1 | head -40 || true
-            tail -40 "$daemon_log" 2>/dev/null || true
+            scripts/launchd-job-evidence "$AXON_LIVE_DAEMON_LABEL" "$daemon_log"
             exit 1
           fi
 
           # Everything below is a client of the endpoint, so this is what makes the document
           # evidence about the process launchd started from this build rather than about whichever
-          # daemon is listening.
-          scripts/assert-daemon-under-test "$cli" "$daemon_pid" "$daemon_log"
+          # daemon is listening. The label makes its liveness launchd's answer, read afresh each
+          # time, rather than a signal to a pid read once while launchd may still have been
+          # spawning the job.
+          scripts/assert-daemon-under-test --launchd-label "$AXON_LIVE_DAEMON_LABEL" \
+            "$cli" "$daemon_pid" "$daemon_log"
 
           # The published contract, checked against a real logged-in Mac.
           expected_version="$(cat VERSION)"
@@ -310,7 +342,7 @@ jobs:
           # an installed Axon's own restart uses.
           if ! launchctl bootstrap "gui/$uid" "$menu_plist"; then
             echo "::error::launchctl could not bootstrap $AXON_LIVE_MENU_LABEL from $menu_plist"
-            tail -40 "$menu_log" 2>/dev/null || true
+            scripts/launchd-job-evidence "$AXON_LIVE_MENU_LABEL" "$menu_log"
             exit 1
           fi
           menu_pid=""
@@ -323,7 +355,7 @@ jobs:
           done
           if [[ -z "$menu_pid" ]]; then
             echo "::error::launchd loaded $AXON_LIVE_MENU_LABEL but is not running it; the candidate menu never launched"
-            tail -40 "$menu_log" 2>/dev/null || true
+            scripts/launchd-job-evidence "$AXON_LIVE_MENU_LABEL" "$menu_log"
             exit 1
           fi
           echo "the candidate menu is running as pid $menu_pid"
@@ -538,8 +570,7 @@ jobs:
           # of it would otherwise pass unnoticed, because nothing above is its client.
           if [[ -z "$(job_pid "$AXON_LIVE_MENU_LABEL")" ]]; then
             echo "::error::the candidate menu ($AXON_LIVE_MENU_LABEL, pid $menu_pid) is no longer running after the probes"
-            launchctl print "gui/$uid/$AXON_LIVE_MENU_LABEL" 2>&1 | head -40 || true
-            tail -40 "$menu_log" 2>/dev/null || true
+            scripts/launchd-job-evidence --pid "$menu_pid" "$AXON_LIVE_MENU_LABEL" "$menu_log"
             exit 1
           fi
           echo 'the candidate menu survived the probes'
@@ -575,6 +606,7 @@ jobs:
             "$GITHUB_WORKSPACE/$AXON_DIST_MAIN" "$GITHUB_WORKSPACE/$AXON_DIST_MENU" || sweep_failed=true
           rm -f "$RUNNER_TEMP/$AXON_LIVE_DAEMON_LABEL.plist" "$RUNNER_TEMP/$AXON_LIVE_MENU_LABEL.plist" \
             "/tmp/axon-live-${GITHUB_RUN_ID}.sock"
+          rm -rf "/tmp/axon-live-${GITHUB_RUN_ID}.logs"
           finish() {
             if [ "$sweep_failed" = true ]; then
               echo '::error::a candidate process survived its jobs being booted out; this runner needs attention before the next live run'
