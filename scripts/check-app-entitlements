@@ -10,19 +10,43 @@
 # The whole set is compared, not just the presence of the one key: an entitlement nothing needs
 # reopens a hole the hardened runtime otherwise closes, and adding one silently is as much a
 # regression as dropping one.
+#
+# The nested apps must carry none at all. The menu shell (`Axon Menu.app`) is unprivileged by
+# design: it asks macOS for nothing, so nothing is ever recorded against it, and the daemon does
+# every privileged thing under its own identity. The editor talks to the daemon over its socket
+# for the same reason. Either one gaining an entitlement is a privacy-boundary regression.
 set -euo pipefail
 
 APP="${1:-dist/Axon.app}"
 EXPECTED='{"com.apple.security.automation.apple-events":true}'
 
-# An unsigned or entitlement-free bundle prints nothing here, which compares unequal and reports as
-# `<none>` rather than passing on an empty match.
-ACTUAL="$(/usr/bin/codesign -d --entitlements - --xml "$APP" 2>/dev/null \
-  | /usr/bin/plutil -convert json -o - - 2>/dev/null || true)"
+entitlements_json() {
+  # An unsigned or entitlement-free bundle prints nothing here.
+  /usr/bin/codesign -d --entitlements - --xml "$1" 2>/dev/null \
+    | /usr/bin/plutil -convert json -o - - 2>/dev/null || true
+}
 
+ACTUAL="$(entitlements_json "$APP")"
 if [[ "$ACTUAL" != "$EXPECTED" ]]; then
   printf '%s: entitlements are %s, expected %s\n' "$APP" "${ACTUAL:-<none>}" "$EXPECTED" >&2
   exit 1
 fi
-
 printf '%s: entitlements %s\n' "$APP" "$ACTUAL"
+
+for nested in "Axon Menu.app" "Axon Editor.app"; do
+  NESTED_APP="$APP/Contents/Library/Applications/$nested"
+  if [[ ! -d "$NESTED_APP" ]]; then
+    printf '%s: missing nested %s\n' "$APP" "$nested" >&2
+    exit 1
+  fi
+  if ! /usr/bin/codesign --verify --strict "$NESTED_APP" 2>/dev/null; then
+    printf '%s: not validly signed\n' "$NESTED_APP" >&2
+    exit 1
+  fi
+  NESTED="$(entitlements_json "$NESTED_APP")"
+  if [[ -n "$NESTED" && "$NESTED" != "{}" ]]; then
+    printf '%s: entitlements are %s, expected none\n' "$NESTED_APP" "$NESTED" >&2
+    exit 1
+  fi
+  printf '%s: entitlements none\n' "$NESTED_APP"
+done
