@@ -479,7 +479,7 @@ mod tests {
     /// `rust/axon-core/tests/health.rs` then say whether the change means what it should.
     #[test]
     fn macos_health_fixtures_are_what_this_daemon_publishes() {
-        use axon_core::{HealthReport, RegistrationHealth, RegistrationMechanism};
+        use axon_core::{HealthReport, JobState, RegistrationHealth, RegistrationMechanism};
         let main = "/Applications/Axon.app/Contents/MacOS/Axon";
         for (name, permissions) in [
             (
@@ -505,11 +505,24 @@ mod tests {
                 main,
                 "0.4.0",
             );
-            let produced = serde_json::to_value(HealthReport::running(
-                report,
-                RegistrationHealth::present(RegistrationMechanism::Launchd, main),
-            ))
-            .unwrap();
+            let menu = "/Applications/Axon.app/Contents/Library/Applications/Axon Menu.app/Contents/MacOS/AxonMenu";
+            let mut registration = RegistrationHealth::present(RegistrationMechanism::Launchd, main);
+            registration.jobs = Some(vec![
+                JobState {
+                    label: "dev.axon.daemon".into(),
+                    loaded: true,
+                    process_id: Some(4210),
+                    path: Some(main.into()),
+                },
+                JobState {
+                    label: "dev.axon.menu".into(),
+                    loaded: true,
+                    process_id: Some(4211),
+                    path: Some(menu.into()),
+                },
+            ]);
+            let produced =
+                serde_json::to_value(HealthReport::running(report, registration)).unwrap();
             let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("../../schema/fixtures/health")
                 .join(name);

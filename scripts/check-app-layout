@@ -92,8 +92,10 @@ EXTRA="$(find "$APP/Contents/MacOS" -mindepth 1 ! -name Axon -print)"
 
 if [[ -n "$TEAM" ]]; then
   REQUIREMENT="$(/usr/bin/codesign -d -r- "$APP" 2>&1 | sed -n 's/^designated => //p')"
+  # The team clause ends the requirement codesign prints, so it is matched as a suffix: a prefix
+  # match would also accept a longer team identifier.
   if [[ "$REQUIREMENT" != identifier\ \"com.bleugreen.axon\"\ and\ anchor\ apple\ generic* ]] \
-    || [[ "$REQUIREMENT" != *"certificate leaf[subject.OU] = $TEAM"* && "$REQUIREMENT" != *"certificate leaf[subject.OU] = \"$TEAM\""* ]]; then
+    || [[ "$REQUIREMENT" != *"certificate leaf[subject.OU] = $TEAM" && "$REQUIREMENT" != *"certificate leaf[subject.OU] = \"$TEAM\"" ]]; then
     fail "designated requirement is '${REQUIREMENT:-<none>}', expected Axon's identifier anchored to team $TEAM"
   fi
 fi

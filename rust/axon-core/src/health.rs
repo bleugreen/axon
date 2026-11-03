@@ -190,6 +190,22 @@ pub struct RegistrationHealth {
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// macOS only: each launchd job of the install (the daemon and its menu), as the Swift CLI
+    /// reports them. `registered` and `path` describe the daemon job alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jobs: Option<Vec<JobState>>,
+}
+
+/// One launchd job of a macOS install, as `status --json` reports it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobState {
+    pub label: String,
+    pub loaded: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_id: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }
 
 impl RegistrationHealth {
@@ -200,6 +216,7 @@ impl RegistrationHealth {
             path: None,
             reason: Some(reason::NOT_REGISTERED.into()),
             detail: None,
+            jobs: None,
         }
     }
 
@@ -210,6 +227,7 @@ impl RegistrationHealth {
             path: Some(path.into()),
             reason: None,
             detail: None,
+            jobs: None,
         }
     }
 }

@@ -17,12 +17,16 @@ make build
 make test
 ```
 
-Run the CLI against a local socket without packaging the app:
+Run the macOS daemon (Rust, `rust/axon-mac`) on a private socket without packaging the app, and
+talk to it with the CLI from a second terminal:
 
 ```sh
-AXON_SOCKET_PATH=/tmp/axon.sock swift run axon serve
-swift run axon snapshot com.apple.finder
+make serve          # cd rust && AXON_SOCKET_PATH=/tmp/axon-dev.sock cargo run -p axon-mac -- serve
+AXON_SOCKET_PATH=/tmp/axon-dev.sock swift run axon look --app Finder
 ```
+
+A daemon run this way holds only the grants macOS gives the binary at that path; the packaged
+`Axon.app` is what carries Axon's own.
 
 Build a signed app bundle (unsigned ad-hoc by default, suitable for local testing):
 

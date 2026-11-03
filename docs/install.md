@@ -86,6 +86,10 @@ Opening `Axon.app` from Finder, Spotlight, or `open` never starts a second daemo
 - **This copy is registered**: it starts whichever of the two is not running. This is how a menu you quit comes back.
 - **A different copy is registered**: it changes nothing, starts that copy's menu, and prints which copy is registered and how to switch to the one you opened.
 
+A copy running from a temporary location, such as an app opened straight from Downloads that macOS runs from a translocated path, is not registered: move `Axon.app` to Applications first.
+
+After dragging 0.4.0 over a running 0.3.x, or after `brew upgrade`, run `axon start` from a terminal. Opening `Axon.app` while the 0.3.x app is still running may only bring that running app forward instead of starting the new bundle; `axon start` does not depend on Launch Services.
+
 **Quit Axon Menu** quits only the menu bar app. The daemon keeps serving agents, and the menu stays quit until you open `Axon.app` again or run `axon start`. Nothing in the menu stops the daemon; `axon shutdown` does.
 
 ## Runtime Commands

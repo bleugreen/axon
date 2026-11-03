@@ -42,11 +42,11 @@ final class DebuggerAvailability {
                     method: "debug.stop",
                     params: .object(["sessionId": .string("editor-capability-probe")])
                 ))
+            // No answer (no daemon) leaves what was known; any answer replaces it.
+            guard let response else { return }
             await MainActor.run {
-                if let response {
-                    self.isUnavailable = DaemonRefusal(response.error ?? JSONRPCError(code: 0, message: "", data: nil))
-                        == .notImplemented(capability: DaemonRefusal.debugSessionCapability)
-                }
+                self.isUnavailable = response.error.flatMap(DaemonRefusal.init)
+                    == .notImplemented(capability: DaemonRefusal.debugSessionCapability)
             }
         }
     }
