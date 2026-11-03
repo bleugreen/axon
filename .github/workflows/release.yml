@@ -76,6 +76,9 @@ jobs:
         with:
           swift-version: "6.2"
 
+      # Axon.app's main executable is the Rust daemon, which package-app builds with cargo.
+      - uses: dtolnay/rust-toolchain@stable
+
       - name: Check release secrets
         run: |
           set -euo pipefail
@@ -124,7 +127,7 @@ jobs:
         run: |
           set -euo pipefail
           ./scripts/package-app
-          # One bundle to verify: --deep and the stapled ticket both cover the nested editor.
+          # One bundle to verify: --deep and the stapled ticket both cover the nested apps.
           codesign --verify --deep --strict "dist/Axon.app"
           spctl -a -vvv -t install "dist/Axon.app"
           xcrun stapler validate "dist/Axon.app"
@@ -134,24 +137,21 @@ jobs:
           # check above still passes.
           ./scripts/check-app-entitlements "dist/Axon.app"
 
-      - name: Verify the packaged CLI and nested editor report the release version
+      # Read back from the stapled bundle and from the archive users download: the Rust daemon is
+      # the main executable, the menu and editor are nested at the release version with no
+      # entitlements, and the designated requirement every TCC grant is recorded against is
+      # Axon's identifier anchored to the Developer ID team.
+      - name: Verify the release layout, versions, and designated requirement
         env:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
-          PACKAGED="dist/Axon.app/Contents/Resources/bin/axon"
-          ACTUAL="$("$PACKAGED" version)"
-          if [[ "$ACTUAL" != "$VERSION" ]]; then
-            echo "::error::packaged CLI reports $ACTUAL, expected $VERSION"
-            exit 1
-          fi
-          # A skewed pair is the failure nesting exists to prevent; assert it rather than trust it.
-          EDITOR_PLIST="dist/Axon.app/Contents/Library/Applications/Axon Editor.app/Contents/Info.plist"
-          EDITOR_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$EDITOR_PLIST")"
-          if [[ "$EDITOR_VERSION" != "$VERSION" ]]; then
-            echo "::error::nested editor reports $EDITOR_VERSION, expected $VERSION"
-            exit 1
-          fi
+          ./scripts/check-app-layout "dist/Axon.app" "$VERSION" --team JBS95V8M7P
+          archive_dir="$(mktemp -d)"
+          trap 'rm -rf "$archive_dir"' EXIT
+          ditto -x -k "dist/Axon-$VERSION-macos-aarch64.zip" "$archive_dir"
+          ./scripts/check-app-layout "$archive_dir/Axon.app" "$VERSION" --team JBS95V8M7P
+          xcrun stapler validate "$archive_dir/Axon.app"
 
       - uses: actions/upload-artifact@v4
         with:

@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# Asserts that a packaged Axon.app has the release layout, at one version.
+#
+#   scripts/check-app-layout <Axon.app> <version> [--team TEAMID]
+#
+#   Contents/MacOS/Axon                          the Rust daemon (axon-mac), the bundle's main
+#                                                executable and only TCC subject
+#   Contents/Resources/bin/axon                  the Swift CLI
+#   Contents/Library/Applications/Axon Menu.app    the unprivileged menu shell
+#   Contents/Library/Applications/Axon Editor.app  the .axn editor
+#
+# With --team, also requires the outer bundle's designated requirement to be Axon's identifier
+# anchored to that Developer ID team: the requirement TCC grants are recorded against, so a
+# release that changed it would re-prompt every user. Used by the release job (after stapling)
+# and the self-hosted package smoke test, so both check one definition of the shape.
+set -euo pipefail
+
+APP="${1:?usage: check-app-layout <Axon.app> <version> [--team TEAMID]}"
+VERSION="${2:?usage: check-app-layout <Axon.app> <version> [--team TEAMID]}"
+TEAM=""
+if [[ "${3:-}" == "--team" ]]; then
+  TEAM="${4:?--team needs a team identifier}"
+fi
+
+MENU="$APP/Contents/Library/Applications/Axon Menu.app"
+EDITOR="$APP/Contents/Library/Applications/Axon Editor.app"
+failures=0
+fail() {
+  printf '%s: %s\n' "$APP" "$1" >&2
+  failures=$((failures + 1))
+}
+plist_value() {
+  /usr/bin/plutil -extract "$2" raw "$1/Contents/Info.plist" 2>/dev/null || true
+}
+expect_plist() {
+  local bundle="$1" key="$2" expected="$3" actual
+  actual="$(plist_value "$bundle" "$key")"
+  [[ "$actual" == "$expected" ]] || fail "$(basename "$bundle") $key is '${actual:-<missing>}', expected '$expected'"
+}
+
+expect_plist "$APP" CFBundleIdentifier com.bleugreen.axon
+expect_plist "$APP" CFBundleExecutable Axon
+expect_plist "$APP" CFBundleShortVersionString "$VERSION"
+expect_plist "$APP" CFBundleVersion "$VERSION"
+expect_plist "$APP" LSUIElement true
+expect_plist "$APP" NSAppleEventsUsageDescription "Axon uses browser automation to navigate and enumerate browser windows and tabs."
+
+# The main executable is the Rust daemon: it answers `version` itself (a verb, so it neither serves
+# nor takes the launcher path) and links no Swift runtime. The Swift daemon it replaced did both
+# differently, which is what makes this a check that the right binary shipped.
+MAIN="$APP/Contents/MacOS/Axon"
+if [[ -x "$MAIN" ]]; then
+  MAIN_VERSION="$("$MAIN" version 2>/dev/null || true)"
+  [[ "$MAIN_VERSION" == "$VERSION" ]] || fail "Contents/MacOS/Axon version is '${MAIN_VERSION:-<none>}', expected $VERSION"
+  if /usr/bin/otool -L "$MAIN" | grep -q libswiftCore; then
+    fail "Contents/MacOS/Axon links libswiftCore; the main executable must be the Rust daemon"
+  fi
+else
+  fail "Contents/MacOS/Axon is missing or not executable"
+fi
+
+CLI="$APP/Contents/Resources/bin/axon"
+if [[ -x "$CLI" ]]; then
+  CLI_VERSION="$("$CLI" version 2>/dev/null || true)"
+  [[ "$CLI_VERSION" == "$VERSION" ]] || fail "bundled CLI reports '${CLI_VERSION:-<none>}', expected $VERSION"
+else
+  fail "Contents/Resources/bin/axon is missing or not executable"
+fi
+
+expect_plist "$MENU" CFBundleIdentifier com.bleugreen.axon.menu
+expect_plist "$MENU" CFBundleExecutable AxonMenu
+expect_plist "$MENU" CFBundleShortVersionString "$VERSION"
+expect_plist "$MENU" CFBundleVersion "$VERSION"
+expect_plist "$MENU" LSUIElement true
+[[ -x "$MENU/Contents/MacOS/AxonMenu" ]] || fail "Axon Menu.app has no executable AxonMenu"
+[[ -f "$MENU/Contents/Resources/AxonMenuBarTemplate.png" ]] || fail "Axon Menu.app has no menu bar icon"
+# The shell asks macOS for nothing, so its plist declares no usage strings and no document types.
+if /usr/bin/plutil -p "$MENU/Contents/Info.plist" | grep -Eq 'UsageDescription|CFBundleDocumentTypes|CFBundleURLTypes'; then
+  fail "Axon Menu.app declares usage strings or document/URL types"
+fi
+
+expect_plist "$EDITOR" CFBundleIdentifier com.bleugreen.axon.editor
+expect_plist "$EDITOR" CFBundleExecutable AxonEditor
+expect_plist "$EDITOR" CFBundleShortVersionString "$VERSION"
+expect_plist "$EDITOR" CFBundleVersion "$VERSION"
+[[ -x "$EDITOR/Contents/MacOS/AxonEditor" ]] || fail "Axon Editor.app has no executable AxonEditor"
+
+# Nothing besides the daemon in Contents/MacOS: a second executable there would be a path-keyed
+# privacy subject inside Axon's own bundle.
+EXTRA="$(find "$APP/Contents/MacOS" -mindepth 1 ! -name Axon -print)"
+[[ -z "$EXTRA" ]] || fail "unexpected files in Contents/MacOS: $EXTRA"
+
+if [[ -n "$TEAM" ]]; then
+  REQUIREMENT="$(/usr/bin/codesign -d -r- "$APP" 2>&1 | sed -n 's/^designated => //p')"
+  if [[ "$REQUIREMENT" != identifier\ \"com.bleugreen.axon\"\ and\ anchor\ apple\ generic* ]] \
+    || [[ "$REQUIREMENT" != *"certificate leaf[subject.OU] = $TEAM"* && "$REQUIREMENT" != *"certificate leaf[subject.OU] = \"$TEAM\""* ]]; then
+    fail "designated requirement is '${REQUIREMENT:-<none>}', expected Axon's identifier anchored to team $TEAM"
+  fi
+fi
+
+"$(dirname "${BASH_SOURCE[0]}")/check-app-entitlements" "$APP" || failures=$((failures + 1))
+
+if [[ "$failures" -gt 0 ]]; then
+  exit 1
+fi
+printf '%s: layout ok at %s\n' "$APP" "$VERSION"
