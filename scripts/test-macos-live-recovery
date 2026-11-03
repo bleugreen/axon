@@ -4,13 +4,20 @@
 These three steps decide what happens to a shared desktop when a probe fails, and they are the one
 part of the live workflow that cannot be rehearsed before it runs: the lane has no `pull_request`
 trigger, and its failure branches only execute when something has already gone wrong on the runner.
-A mistake in them is therefore discovered by a developer machine losing its start-at-login daemon,
-which is exactly the failure the steps exist to prevent.
+A mistake in them is therefore discovered by a developer machine losing its start-at-login daemon
+or its menu, which is exactly the failure the steps exist to prevent.
 
 So the step bodies are extracted from `.github/workflows/live.yml` itself -- never copied -- and run
-with `launchctl`, `pgrep`, `pkill`, `open`, `ps`, `killall`, `sleep`, and the Axon CLI replaced by
-stubs on PATH. What is asserted is the branch each scenario lands on and the message it produces,
-because a restore that silently takes the wrong branch is the whole hazard.
+with `launchctl`, `pgrep`, `pkill`, `open`, `killall`, `sleep`, and the Axon CLI replaced by stubs on
+PATH. The job labels and bundle paths are read from the macOS job's own `env:` block for the same
+reason. `launchctl` is the stub that matters most: it keeps a file-backed set of loaded jobs and
+their pids, so a `bootout` one step issues is what a later `print` sees, and `bootstrap` loads a
+job from its plist's file name. The stub CLI's `shutdown` and `daemon restart` act on that same set
+the way `Supervision` does -- shutdown unloads the menu and the daemon, restart bounces each job
+whose plist exists and loads the menu only after the daemon -- so a scenario asserts the state the
+desktop is left in, not merely the calls made. What is asserted is the branch each scenario lands
+on, the message it produces, the order of the calls, and which jobs end up loaded, because a
+restore that silently takes the wrong branch is the whole hazard.
 
 Run it on macOS to also exercise the runner's own `/bin/bash` 3.2, whose treatment of empty arrays
 under `set -u` differs from every newer bash and has already shaped how these steps are written.
@@ -19,7 +26,10 @@ A constraint on every scenario added here, not merely a property that happens to
 system command these steps reach for must be shadowed on PATH. The `Test` workflow's macOS job runs
 on the same machine as the live lane and shares no concurrency group with it, so a scenario that
 reaches a real `launchctl`, `pkill`, or `open` would be doing so on somebody's desktop, possibly
-mid-live-run. If a step starts calling something new, stub it here in the same change.
+mid-live-run. If a step starts calling something new, stub it here in the same change. (`python3`,
+`jq`, and `id` are run for real: they write only into this harness's temporary directory or read.)
+The candidate's executables in the fake workspace are stubs that record being run, and every
+scenario fails if one was: the lane must only ever start them through launchd.
 
 And a warning for whoever extends this. The only way to know a scenario asserts anything is to break
 the step and watch it fail, which means editing the workflow and re-running -- but a mutation that
@@ -28,7 +38,8 @@ verified before its verdict means anything. That is not hypothetical: the orderi
 were nearly deleted as useless because a mutation meant to move a sweep after the command it
 protects had in fact moved it to just before that command, leaving the order correct and the harness
 rightly green. Print the positions, assert the edit landed, and only then read the result. It is the
-same failure this file exists to catch, one level up.
+same failure this file exists to catch, one level up. The two mutation scenarios below follow that
+rule: each asserts its replacement matched exactly once before running.
 
 Usage: scripts/test-macos-live-recovery [path/to/live.yml]
 """
@@ -36,6 +47,8 @@ from __future__ import annotations
 
 import json
 import os
+import plistlib
+import re
 import shutil
 import stat
 import subprocess
@@ -45,8 +58,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 WORKFLOW = Path(sys.argv[1]) if len(sys.argv) > 1 else REPO / ".github/workflows/live.yml"
-LABEL = "dev.axon.daemon"
 BASH = "/bin/bash" if Path("/bin/bash").exists() else shutil.which("bash")
+RUN_ID = "777"
 
 
 def job_lines(text: str, job_name: str) -> list[str]:
@@ -65,6 +78,27 @@ def job_lines(text: str, job_name: str) -> list[str]:
         if stripped.strip() and not stripped.startswith("   ") and stripped.startswith("  "):
             return lines[starts[0]:end]
     return lines[starts[0]:]
+
+
+def job_env(lines: list[str]) -> dict[str, str]:
+    """Returns the job-level `env:` block, so labels and paths come from the workflow alone."""
+    starts = [i for i, line in enumerate(lines) if line == "    env:"]
+    if len(starts) != 1:
+        raise SystemExit(f"expected exactly one job-level env block, found {len(starts)}")
+    env: dict[str, str] = {}
+    for line in lines[starts[0] + 1:]:
+        if line.strip().startswith("#"):
+            continue
+        match = re.fullmatch(r"      ([A-Z_]+): (.+)", line)
+        if not match:
+            break
+        env[match.group(1)] = match.group(2).strip()
+    required = ["AXON_LAUNCH_AGENT_LABEL", "AXON_MENU_AGENT_LABEL", "AXON_LIVE_DAEMON_LABEL",
+                "AXON_LIVE_MENU_LABEL", "AXON_DIST_MAIN", "AXON_DIST_MENU"]
+    missing = [key for key in required if key not in env]
+    if missing:
+        raise SystemExit(f"the macOS job's env block no longer names {', '.join(missing)}")
+    return env
 
 
 def run_block(lines: list[str], step_name: str) -> str:
@@ -93,20 +127,82 @@ def run_block(lines: list[str], step_name: str) -> str:
     return block
 
 
+def mutate(script: str, old: str, new: str) -> str:
+    """Applies a mutation that must land exactly once, or stops the harness."""
+    count = script.count(old)
+    if count != 1:
+        raise SystemExit(f"mutation anchor {old!r} matched {count} times, not once; the scenario "
+                         "built on it would test nothing")
+    mutated = script.replace(old, new)
+    assert mutated != script
+    return mutated
+
+
 STUBS = {
-    # Prints a launchd job's pid the way `launchctl print` does, or exits 113 like a label that is
-    # not loaded in the domain -- the exit code the park step reads as "start-at-login was not live".
+    # launchd, as far as these steps can see it: a directory with one file per loaded label holding
+    # its pid (empty for a job that is loaded but not running). `print` exits 113 for a label that
+    # is not loaded, which is what the steps read as "not loaded". `bootstrap` names the label by
+    # its plist's file name, which is how both the desktop's and the lane's plists are named, and
+    # takes the pid it reports from STUB_PID_<label with dots as underscores>. STUB_BOOTOUT_STICKY
+    # and STUB_BOOTSTRAP_FAILS name labels whose bootout or bootstrap fails and changes nothing.
     "launchctl": """
-        if [ "$1" = print ]; then
-          if [ "$STUB_AGENT_PID" = none ]; then exit 113; fi
-          printf '\\tstate = running\\n\\tpid = %s\\n' "$STUB_AGENT_PID"
-        fi
+        state="$STUB_STATE/launchd"
+        mkdir -p "$state"
+        label_of() {
+          case "$1" in
+            gui/*/*) printf '%s' "${1##*/}" ;;
+            *) base="${1##*/}"; printf '%s' "${base%.plist}" ;;
+          esac
+        }
+        listed() {
+          case " $2 " in *" $1 "*) return 0 ;; esac
+          return 1
+        }
+        case "$1" in
+          print)
+            label="$(label_of "$2")"
+            [ -f "$state/$label" ] || exit 113
+            pid="$(cat "$state/$label")"
+            if [ -n "$pid" ]; then
+              printf '\\tstate = running\\n\\tpid = %s\\n' "$pid"
+            else
+              printf '\\tstate = not running\\n'
+            fi
+            ;;
+          bootout)
+            label="$(label_of "$2")"
+            echo "launchctl bootout $label" >> "$STUB_LOG"
+            if listed "$label" "${STUB_BOOTOUT_STICKY:-}"; then exit 5; fi
+            [ -f "$state/$label" ] || exit 3
+            rm -f "$state/$label"
+            ;;
+          bootstrap)
+            label="$(label_of "$3")"
+            echo "launchctl bootstrap $label" >> "$STUB_LOG"
+            if listed "$label" "${STUB_BOOTSTRAP_FAILS:-}"; then exit 5; fi
+            [ -f "$state/$label" ] && exit 5
+            var="STUB_PID_$(printf '%s' "$label" | tr '.-' '__')"
+            printf '%s' "${!var:-}" > "$state/$label"
+            ;;
+          kickstart)
+            shift
+            [ "$1" = -k ] && shift
+            label="$(label_of "$1")"
+            echo "launchctl kickstart $label" >> "$STUB_LOG"
+            [ -f "$state/$label" ] || exit 113
+            ;;
+          *)
+            echo "launchctl $*" >> "$STUB_LOG"
+            exit 64
+            ;;
+        esac
     """,
     # Backed by files so `pkill` can actually change what a later `pgrep` sees, which is what
     # `scripts/stop-probe-app` loops on. `-x` is keyed by the process name it was asked about, so a
-    # scenario can say that Calculator is running without also claiming Axon is. Note that this
-    # cannot model BSD `pgrep`'s exclusion of its own ancestry, which `stop-probe-app` depends on --
-    # that dependency is verified by reading `man pgrep`, not by this harness.
+    # scenario can say that Calculator is running. `-f` answers the same leftovers for every
+    # pattern. Note that this cannot model BSD `pgrep`'s exclusion of its own ancestry, which
+    # `stop-probe-app` depends on -- that dependency is verified by reading `man pgrep`, not by
+    # this harness.
     "pgrep": """
         case "$1" in
           -f) file="$STUB_STATE/pgrep_f" ;;
@@ -124,37 +220,65 @@ STUBS = {
     """,
     "killall": 'echo "killall $*" >> "$STUB_LOG"',
     "open": 'echo "open $*" >> "$STUB_LOG"; exit ${STUB_OPEN_EXIT:-0}',
-    "ps": 'printf "%s\\n" "$STUB_APP_COMM"',
     # Stubbed so the bounded retry loops cost nothing; the loops' bounds are not what is under test.
     "sleep": "exit 0",
 }
 
+# The Axon CLI, acting on the stub launchd the way `Supervision` acts on the real one.
 CLI = """
     echo "axon $*" >> "$STUB_LOG"
+    state="$STUB_STATE/launchd"
+    agents="$HOME/Library/LaunchAgents"
+    mkdir -p "$state"
     case "$1" in
-      shutdown) exit ${STUB_SHUTDOWN_EXIT:-0} ;;
-      daemon)   printf 'restarted %s\\n' "$STUB_LABEL"; exit ${STUB_RESTART_EXIT:-0} ;;
-      status)   printf '%s' "$STUB_STATUS" ;;
-      version)  printf '%s' "${STUB_VERSION:-0.0.0}" ;;
+      shutdown)
+        if [ "${STUB_SHUTDOWN_EXIT:-0}" != 0 ]; then
+          echo 'a daemon is still answering' >&2
+          exit "$STUB_SHUTDOWN_EXIT"
+        fi
+        rm -f "$state/$AXON_MENU_AGENT_LABEL" "$state/$AXON_LAUNCH_AGENT_LABEL"
+        ;;
+      daemon)
+        [ "$2" = restart ] || exit 64
+        if [ ! -f "$agents/$AXON_LAUNCH_AGENT_LABEL.plist" ]; then
+          echo "$AXON_LAUNCH_AGENT_LABEL is not registered" >&2
+          exit 1
+        fi
+        bounce_menu=false
+        if [ -f "$agents/$AXON_MENU_AGENT_LABEL.plist" ]; then bounce_menu=true; fi
+        if [ "$bounce_menu" = true ]; then rm -f "$state/$AXON_MENU_AGENT_LABEL"; fi
+        rm -f "$state/$AXON_LAUNCH_AGENT_LABEL"
+        if [ "${STUB_RESTART_LOADS:-true}" = true ]; then
+          printf '%s' "${STUB_RESTORED_PID:-4242}" > "$state/$AXON_LAUNCH_AGENT_LABEL"
+          echo "restart: daemon in" >> "$STUB_LOG"
+        fi
+        if [ "${STUB_RESTART_EXIT:-0}" != 0 ]; then
+          echo 'the daemon did not become ready' >&2
+          exit "$STUB_RESTART_EXIT"
+        fi
+        if [ "$bounce_menu" = true ]; then
+          printf '%s' "${STUB_RESTORED_MENU_PID:-4343}" > "$state/$AXON_MENU_AGENT_LABEL"
+          echo "restart: menu in" >> "$STUB_LOG"
+        fi
+        echo "restarted $AXON_LAUNCH_AGENT_LABEL"
+        ;;
+      status)  printf '%s' "$STUB_STATUS" ;;
+      version) printf '%s' "${STUB_VERSION:-0.0.0}" ;;
+      *) exit 64 ;;
     esac
 """
 
-
-def status_doc(running=True, pid=4242, registered=True):
-    daemon = {"running": running, "ready": running, "endpoint": "/tmp/axon.sock"}
-    if pid is not None:
-        daemon["processId"] = pid
-    return json.dumps({
-        "schemaVersion": "health-v1",
-        "version": "0.0.0",
-        "platform": "macos",
-        "daemon": daemon,
-        "registration": {"registered": registered, "mechanism": "launchd"},
-    })
+# The candidate's executables. The lane starts them only through launchd; being run is a failure.
+CANDIDATE = 'echo "EXECUTED $0" >> "$STUB_LOG"; exit 1'
 
 
 class Harness:
-    def __init__(self):
+    def __init__(self, env: dict[str, str]):
+        self.env = env
+        self.daemon = env["AXON_LAUNCH_AGENT_LABEL"]
+        self.menu = env["AXON_MENU_AGENT_LABEL"]
+        self.live_daemon = env["AXON_LIVE_DAEMON_LABEL"]
+        self.live_menu = env["AXON_LIVE_MENU_LABEL"]
         self.root = Path(tempfile.mkdtemp(prefix="axon-live-recovery-"))
         self.bin = self.root / "stub-bin"
         self.bin.mkdir()
@@ -167,29 +291,45 @@ class Harness:
         cli_dir = self.workspace / "dist/Axon.app/Contents/Resources/bin"
         cli_dir.mkdir(parents=True)
         self._write_executable(cli_dir / "axon", CLI)
+        self.dist_main = self.workspace / env["AXON_DIST_MAIN"]
+        self.dist_menu = self.workspace / env["AXON_DIST_MENU"]
         (self.workspace / "scripts").symlink_to(REPO / "scripts")
-        self.probe_app = self.workspace / "dist/Axon.app/Contents/MacOS/Axon"
+        self.runner_temp = self.root / "runner-temp"
+        self.state = self.root / "state"
 
     @staticmethod
     def _write_executable(path: Path, body: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("#!/bin/bash\n" + "\n".join(l[8:] if l.startswith(" " * 8) else l
                                                     for l in body.strip("\n").splitlines()) + "\n")
         path.chmod(path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
 
-    def run(self, script: str, *, leftovers="", app_pids="", calculator_pids="",
-            home_has_plist=True, **stub_env):
-        state = self.root / "state"
-        shutil.rmtree(state, ignore_errors=True)
-        state.mkdir()
-        (state / "pgrep_f").write_text(leftovers)
-        (state / "pgrep_x_Axon").write_text(app_pids)
-        (state / "pgrep_x_Calculator").write_text(calculator_pids)
+    def loaded(self) -> dict[str, str]:
+        launchd = self.state / "launchd"
+        return {p.name: p.read_text() for p in launchd.iterdir()} if launchd.exists() else {}
+
+    def run(self, script: str, *, loaded=None, plists=None, leftovers="", calculator_pids="",
+            missing_menu=False, **stub_env):
+        shutil.rmtree(self.state, ignore_errors=True)
+        (self.state / "launchd").mkdir(parents=True)
+        for label, pid in (loaded or {}).items():
+            (self.state / "launchd" / label).write_text(str(pid))
+        (self.state / "pgrep_f").write_text(leftovers)
+        (self.state / "pgrep_x_Calculator").write_text(calculator_pids)
         home = self.root / "home"
         shutil.rmtree(home, ignore_errors=True)
         (home / "Library/LaunchAgents").mkdir(parents=True)
         (home / "Library/Logs/Axon").mkdir(parents=True)
-        if home_has_plist:
-            (home / f"Library/LaunchAgents/{LABEL}.plist").write_text("<plist/>")
+        for label in (self.daemon, self.menu) if plists is None else plists:
+            (home / f"Library/LaunchAgents/{label}.plist").write_text("<plist/>")
+        shutil.rmtree(self.runner_temp, ignore_errors=True)
+        self.runner_temp.mkdir()
+        for executable in (self.dist_main, self.dist_menu):
+            if executable.exists():
+                executable.unlink()
+        self._write_executable(self.dist_main, CANDIDATE)
+        if not missing_menu:
+            self._write_executable(self.dist_menu, CANDIDATE)
         log = self.root / "calls.log"
         log.write_text("")
         github_env = self.root / "github_env"
@@ -200,13 +340,12 @@ class Harness:
             "HOME": str(home),
             "GITHUB_WORKSPACE": str(self.workspace),
             "GITHUB_ENV": str(github_env),
-            "AXON_LAUNCH_AGENT_LABEL": LABEL,
+            "GITHUB_RUN_ID": RUN_ID,
+            "RUNNER_TEMP": str(self.runner_temp),
             "STUB_LOG": str(log),
-            "STUB_STATE": str(state),
-            "STUB_LABEL": LABEL,
-            "STUB_AGENT_PID": "none",
+            "STUB_STATE": str(self.state),
             "STUB_STATUS": status_doc(),
-            "STUB_APP_COMM": "/Applications/Axon.app/Contents/MacOS/Axon",
+            **self.env,
         }
         env.update({k: str(v) for k, v in stub_env.items()})
 
@@ -220,8 +359,23 @@ class Harness:
         shutil.rmtree(self.root, ignore_errors=True)
 
 
+def status_doc(running=True, pid=4242, registered=True, jobs=("dev.axon.daemon", "dev.axon.menu")):
+    daemon = {"running": running, "ready": running, "endpoint": "/tmp/axon.sock"}
+    if pid is not None:
+        daemon["processId"] = pid
+    return json.dumps({
+        "schemaVersion": "health-v1",
+        "version": "0.0.0",
+        "platform": "macos",
+        "daemon": daemon,
+        "registration": {"registered": registered, "mechanism": "launchd",
+                         "jobs": [{"label": label, "loaded": False} for label in jobs]},
+    })
+
+
 def main() -> int:
     macos = job_lines(WORKFLOW.read_text(), "macos")
+    env = job_env(macos)
     park = run_block(macos, "Park the installed Axon daemon")
     probe = run_block(macos, "Capture, resolve, act, and verify")
     restore = run_block(macos, "Restore the installed Axon daemon")
@@ -229,19 +383,26 @@ def main() -> int:
     anchor = "\nscripts/assert-daemon-under-test"
     if anchor not in probe:
         raise SystemExit("the probe step no longer calls scripts/assert-daemon-under-test")
-    # Only the part that decides which process the lane will call the daemon under test; everything
-    # after it needs a real desktop.
-    probe_pid_resolution = probe.split(anchor)[0] + '\necho "RESOLVED=[$app_pid]"\n'
+    # Only the part that launches the candidate and decides which process the lane will call the
+    # daemon under test; everything after it needs a real desktop.
+    probe_launch = (probe.split(anchor)[0]
+                    + '\necho "RESOLVED=[$daemon_pid]"\necho "SOCKET=[$AXON_SOCKET_PATH]"\n')
 
-    harness = Harness()
+    harness = Harness(env)
+    daemon, menu = harness.daemon, harness.menu
+    live_daemon, live_menu = harness.live_daemon, harness.live_menu
     failures: list[str] = []
+    passed = {"park": 0, "probe": 0, "restore": 0}
+    totals = {"park": 0, "probe": 0, "restore": 0}
 
-    def check(step, script, label, want_exit, expect=(), forbid=(), order=(), **kwargs):
+    def check(step, script, label, want_exit, expect=(), forbid=(), order=(),
+              want_loaded=(), want_unloaded=(), inspect=None, **kwargs):
         """Runs one scenario. `order` names calls that must appear in the log in that sequence.
 
         Sequence is asserted separately from presence because for several of these steps the order
         *is* the behaviour: a reap that happens after the stop it was meant to clear the way for
-        has happened, and has done nothing.
+        has happened, and has done nothing. `want_loaded` and `want_unloaded` are read from the
+        stub launchd after the step, because what the desktop is left running is the outcome.
         """
         result, calls, github_env = harness.run(script, **kwargs)
         combined = result.stdout + result.stderr
@@ -251,7 +412,7 @@ def main() -> int:
         for needle in expect:
             if needle not in combined and needle not in github_env and needle not in calls:
                 problems.append(f"missing {needle!r}")
-        for needle in forbid:
+        for needle in (*forbid, "EXECUTED"):
             if needle in combined or needle in calls:
                 problems.append(f"unexpected {needle!r}")
         placed = []
@@ -265,98 +426,204 @@ def main() -> int:
         for (earlier, first), (later, second) in zip(placed, placed[1:]):
             if first > second:
                 problems.append(f"{later!r} happened before {earlier!r}")
+        final = harness.loaded()
+        for job in want_loaded:
+            if job not in final:
+                problems.append(f"{job} is not loaded afterwards")
+        for job in want_unloaded:
+            if job in final:
+                problems.append(f"{job} is still loaded afterwards")
+        if inspect is not None:
+            problems.extend(inspect())
+        totals[step] += 1
         status = "ok  " if not problems else "FAIL"
         print(f"  [{status}] {step}: {label}")
+        if not problems:
+            passed[step] += 1
         for problem in problems:
             print(f"           {problem}")
             failures.append(f"{step}: {label}: {problem}")
+        if problems:
+            print("           --- output ---")
+            for line in combined.strip().splitlines()[-15:]:
+                print(f"           {line}")
         return calls
 
-    print("Park step")
-    check("park", park, "records a loaded agent and a running app", 0,
-          expect=["AXON_AGENT_WAS_LOADED=true", "AXON_APP_WAS_RUNNING=true",
-                  "AXON_APP_BUNDLE=/Applications/Axon.app"],
-          app_pids="600", STUB_AGENT_PID=4242)
-    check("park", park, "records a desktop with no daemon at all", 0,
-          expect=["AXON_AGENT_WAS_LOADED=false", "AXON_APP_WAS_RUNNING=false"],
-          STUB_AGENT_PID="none", STUB_STATUS=status_doc(registered=False))
-    check("park", park, "hands the restore its facts even when the stop fails", 1,
-          expect=["AXON_AGENT_WAS_LOADED=true"],
-          STUB_AGENT_PID=4242, STUB_SHUTDOWN_EXIT=1)
-    # Before the stop, not merely during the step: a leftover holding the socket lock answers no
-    # health request, so the untolerated `shutdown` would fail on it for a reason nobody names.
-    check("park", park, "reaps a probe app left by an earlier run, before stopping anything", 0,
-          expect=["stopping probe app processes"], order=["pkill", "axon shutdown"],
-          leftovers="901", STUB_AGENT_PID=4242)
-    check("park", park, "fails when a leftover probe app will not die", 1,
-          expect=["still running as pid(s) 901"],
-          leftovers="901", STUB_PKILL_STICKY="true", STUB_AGENT_PID=4242)
-    check("park", park, "fails when the agent label has drifted from the CLI's", 1,
-          expect=["has drifted from LaunchAgentConfiguration"],
-          forbid=["axon shutdown"],
-          home_has_plist=False, STUB_AGENT_PID="none", STUB_STATUS=status_doc(registered=True))
+    both = {daemon: 4242, menu: 4343}
 
-    print("Probe step (pid resolution)")
-    check("probe", probe_pid_resolution, "resolves the one process running the bundle", 0,
-          expect=["RESOLVED=[5150]"], leftovers="5150")
-    check("probe", probe_pid_resolution, "fails when the app never launched", 1,
-          expect=["never launched"])
-    check("probe", probe_pid_resolution, "fails when a leftover is also alive", 1,
-          expect=["5150 6161"], leftovers="5150 6161")
-    check("probe", probe_pid_resolution, "refuses a desktop already running Calculator", 1,
-          expect=["Calculator is already running"], leftovers="5150", calculator_pids="777")
+    print("Park step")
+    check("park", park, "records both jobs loaded, and parks the menu before the daemon", 0,
+          expect=["AXON_DAEMON_WAS_LOADED=true", "AXON_MENU_WAS_LOADED=true"],
+          order=[f"launchctl bootout {menu}", "axon shutdown"],
+          want_unloaded=[daemon, menu], loaded=both)
+    check("park", park, "records a registered menu that was not loaded", 0,
+          expect=["AXON_DAEMON_WAS_LOADED=true", "AXON_MENU_WAS_LOADED=false"],
+          want_unloaded=[daemon, menu], loaded={daemon: 4242})
+    check("park", park, "tolerates a desktop whose registration has no menu plist", 0,
+          expect=["AXON_DAEMON_WAS_LOADED=true", "AXON_MENU_WAS_LOADED=false"],
+          want_unloaded=[daemon], loaded={daemon: 4242}, plists=[daemon],
+          STUB_STATUS=status_doc(jobs=(daemon,)))
+    check("park", park, "records a desktop with no Axon at all", 0,
+          expect=["AXON_DAEMON_WAS_LOADED=false", "AXON_MENU_WAS_LOADED=false"],
+          plists=[], STUB_STATUS=status_doc(registered=False, jobs=()))
+    check("park", park, "hands the restore its facts even when the stop fails", 1,
+          expect=["AXON_DAEMON_WAS_LOADED=true", "AXON_MENU_WAS_LOADED=true"],
+          loaded=both, STUB_SHUTDOWN_EXIT=1)
+    # Before anything of the desktop's is stopped: the candidate's private jobs would make the
+    # probe's bootstrap fail as already loaded, and a process launchd no longer tracks would be a
+    # second candidate.
+    check("park", park, "reaps a candidate left by an earlier run, before stopping anything", 0,
+          expect=["stopping probe app processes"],
+          order=[f"launchctl bootout {live_daemon}", "pkill", f"launchctl bootout {menu}",
+                 "axon shutdown"],
+          want_unloaded=[live_daemon, live_menu],
+          loaded={**both, live_daemon: 901, live_menu: 902}, leftovers="903")
+    check("park", park, "fails when a leftover candidate will not die", 1,
+          expect=["still running as pid(s) 901"], forbid=["axon shutdown"],
+          leftovers="901", STUB_PKILL_STICKY="true", loaded=both)
+    check("park", park, "fails when the daemon label has drifted from the CLI's", 1,
+          expect=["has drifted from LaunchAgentConfiguration"],
+          forbid=["axon shutdown", f"launchctl bootout {menu}"],
+          plists=[], STUB_STATUS=status_doc(registered=True))
+    check("park", park, "fails when the CLI supervises a job label this workflow does not name", 1,
+          expect=["dev.axon.menubar", "does not name"],
+          forbid=["axon shutdown", f"launchctl bootout {menu}"],
+          loaded=both, STUB_STATUS=status_doc(jobs=(daemon, "dev.axon.menubar")))
+    check("park", park, "refuses to stop the daemon under a menu that will not unload", 1,
+          expect=["is still loaded after bootout"], forbid=["axon shutdown"],
+          want_loaded=[daemon, menu], loaded=both, STUB_BOOTOUT_STICKY=menu)
+
+    print("Probe step (candidate launch and pid resolution)")
+    socket = f"/tmp/axon-live-{RUN_ID}.sock"
+    pid_var = "STUB_PID_" + live_daemon.replace(".", "_")
+
+    def candidate_plists():
+        problems = []
+        daemon_plist = harness.runner_temp / f"{live_daemon}.plist"
+        menu_plist = harness.runner_temp / f"{live_menu}.plist"
+        for path in (daemon_plist, menu_plist):
+            if not path.exists():
+                return [f"{path.name} was never written"]
+        job = plistlib.loads(daemon_plist.read_bytes())
+        args = job.get("ProgramArguments", [])
+        if [Path(a).resolve() for a in args] != [harness.dist_main.resolve()]:
+            problems.append(f"daemon ProgramArguments is {args!r}")
+        want_env = {"AXON_SOCKET_PATH": socket, "AXON_DAEMON_MANAGED_BY_LAUNCHD": "1"}
+        if job.get("EnvironmentVariables") != want_env:
+            problems.append(f"daemon EnvironmentVariables is {job.get('EnvironmentVariables')!r}")
+        for key, value in (("Label", live_daemon), ("KeepAlive", False), ("RunAtLoad", True),
+                           ("LimitLoadToSessionType", "Aqua"), ("ProcessType", "Interactive")):
+            if job.get(key) != value:
+                problems.append(f"daemon {key} is {job.get(key)!r}, wanted {value!r}")
+        if not str(job.get("StandardErrorPath", "")).startswith(str(harness.runner_temp)):
+            problems.append(f"daemon log {job.get('StandardErrorPath')!r} is not under RUNNER_TEMP")
+        job = plistlib.loads(menu_plist.read_bytes())
+        args = job.get("ProgramArguments", [])
+        if [Path(a).resolve() for a in args] != [harness.dist_menu.resolve()]:
+            problems.append(f"menu ProgramArguments is {args!r}")
+        if job.get("EnvironmentVariables") != {"AXON_SOCKET_PATH": socket}:
+            problems.append(f"menu EnvironmentVariables is {job.get('EnvironmentVariables')!r}")
+        if job.get("Label") != live_menu or job.get("KeepAlive") is not False:
+            problems.append("menu Label or KeepAlive is wrong")
+        return problems
+
+    check("probe", probe_launch, "launches the candidate through launchd and takes launchd's pid", 0,
+          expect=["RESOLVED=[5150]", f"SOCKET=[{socket}]", f"launchctl bootstrap {live_daemon}"],
+          # The menu waits for a ready daemon, which this prefix never establishes.
+          forbid=["open -n", f"launchctl bootstrap {live_menu}", f"launchctl bootstrap {daemon}"],
+          want_loaded=[live_daemon], inspect=candidate_plists, **{pid_var: 5150})
+    check("probe", probe_launch, "fails when launchd loads the candidate but never runs it", 1,
+          expect=["never launched or exited before it could serve"])
+    check("probe", probe_launch, "fails when the candidate cannot be bootstrapped", 1,
+          expect=["could not bootstrap"], STUB_BOOTSTRAP_FAILS=live_daemon, **{pid_var: 5150})
+    check("probe", probe_launch, "refuses a desktop already running Calculator", 1,
+          expect=["Calculator is already running"], forbid=["launchctl bootstrap"],
+          calculator_pids="777", **{pid_var: 5150})
+    check("probe", probe_launch, "fails when the build has no menu executable", 1,
+          expect=["two-job layout"], forbid=["launchctl bootstrap"],
+          missing_menu=True, **{pid_var: 5150})
+    # Mutations of the plist writer, each verified to land, because the read-back is the only
+    # thing between the lane and the main executable's launcher path.
+    unmanaged = mutate(probe_launch, '"AXON_DAEMON_MANAGED_BY_LAUNCHD": "1"}',
+                       '"AXON_DAEMON_MANAGED_BY_LAUNCHD": "0"}')
+    check("probe", unmanaged, "refuses a candidate plist without the managed key", 1,
+          expect=["does not set AXON_DAEMON_MANAGED_BY_LAUNCHD=1"], forbid=["launchctl bootstrap"],
+          **{pid_var: 5150})
+    with_argument = mutate(probe_launch, '"ProgramArguments": [daemon_exe],',
+                           '"ProgramArguments": [daemon_exe, "start"],')
+    check("probe", with_argument, "refuses a candidate plist that passes the daemon an argument", 1,
+          expect=["ProgramArguments is"], forbid=["launchctl bootstrap"], **{pid_var: 5150})
 
     print("Restore step")
-    check("restore", restore, "leaves a desktop it never parked alone", 0,
-          expect=["never parked"], forbid=["axon daemon restart"])
-    check("restore", restore, "restores the agent and matches launchd's pid", 0,
+    candidate = {live_daemon: 5150, live_menu: 5151}
+    check("restore", restore, "leaves a desktop it never parked alone, but removes the candidate", 0,
+          expect=["never parked"], forbid=["axon daemon restart"],
+          want_unloaded=[live_daemon, live_menu], loaded=candidate)
+    check("restore", restore, "restores both jobs, candidate out first and the menu after the daemon", 0,
           expect=["answering again"],
-          AXON_AGENT_WAS_LOADED="true", STUB_AGENT_PID=4242, STUB_STATUS=status_doc(pid=4242))
-    check("restore", restore, "accepts a document too old to name its process", 0,
+          order=[f"launchctl bootout {live_menu}", f"launchctl bootout {live_daemon}",
+                 "axon daemon restart", "restart: daemon in", "restart: menu in"],
+          want_loaded=[daemon, menu], want_unloaded=[live_daemon, live_menu], loaded=candidate,
+          AXON_DAEMON_WAS_LOADED="true", AXON_MENU_WAS_LOADED="true")
+    check("restore", restore, "does not leave a menu running that was not loaded on arrival", 0,
           expect=["answering again"],
-          AXON_AGENT_WAS_LOADED="true", STUB_AGENT_PID=4242, STUB_STATUS=status_doc(pid=None))
-    check("restore", restore, "accepts a nonzero daemon restart when the daemon is in fact back", 0,
+          order=["restart: menu in", f"launchctl bootout {menu}"],
+          want_loaded=[daemon], want_unloaded=[menu],
+          AXON_DAEMON_WAS_LOADED="true", AXON_MENU_WAS_LOADED="false")
+    check("restore", restore, "restores only the daemon on a registration with no menu plist", 0,
+          expect=["answering again"], forbid=["restart: menu in", f"launchctl bootout {menu}"],
+          want_loaded=[daemon], want_unloaded=[menu], plists=[daemon],
+          AXON_DAEMON_WAS_LOADED="true", AXON_MENU_WAS_LOADED="false")
+    check("restore", restore, "loads the menu itself, after the daemon, when restart's wait failed", 0,
           expect=["answering again", "daemon restart exited 1"],
-          AXON_AGENT_WAS_LOADED="true", STUB_RESTART_EXIT=1,
-          STUB_AGENT_PID=4242, STUB_STATUS=status_doc(pid=4242))
+          order=["restart: daemon in", f"launchctl bootstrap {menu}"],
+          want_loaded=[daemon, menu], STUB_RESTART_EXIT=1,
+          AXON_DAEMON_WAS_LOADED="true", AXON_MENU_WAS_LOADED="true")
+    check("restore", restore, "accepts a document too old to name its process", 0,
+          expect=["answering again"], want_loaded=[daemon, menu],
+          AXON_DAEMON_WAS_LOADED="true", AXON_MENU_WAS_LOADED="true",
+          STUB_STATUS=status_doc(pid=None))
     check("restore", restore, "fails, with the restart output, when nothing answers", 1,
-          expect=["did not come back", "--- daemon restart ---"],
-          AXON_AGENT_WAS_LOADED="true", STUB_RESTART_EXIT=1,
-          STUB_AGENT_PID="none", STUB_STATUS=status_doc(running=False))
+          expect=["did not come back", "--- daemon restart ---", "did not become ready"],
+          AXON_DAEMON_WAS_LOADED="true", AXON_MENU_WAS_LOADED="true",
+          STUB_RESTART_EXIT=1, STUB_RESTART_LOADS="false", STUB_STATUS=status_doc(running=False))
     check("restore", restore, "fails when a daemon answers but the agent is still booted out", 1,
           expect=["start-at-login registration is still booted out"],
-          AXON_AGENT_WAS_LOADED="true", STUB_AGENT_PID="none", STUB_STATUS=status_doc(pid=4242))
-    check("restore", restore, "fails when an orphan answers in the agent's place", 1,
+          AXON_DAEMON_WAS_LOADED="true", AXON_MENU_WAS_LOADED="true",
+          STUB_RESTART_EXIT=1, STUB_RESTART_LOADS="false")
+    check("restore", restore, "fails when another process answers in the agent's place", 1,
           expect=["not the restored LaunchAgent (pid 4242)"],
-          AXON_AGENT_WAS_LOADED="true", STUB_AGENT_PID=4242, STUB_STATUS=status_doc(pid=9999))
-    check("restore", restore, "reopens the app on a desktop the agent never served", 0,
-          expect=["open -a /Applications/Axon.app"], forbid=["axon daemon restart"],
-          AXON_AGENT_WAS_LOADED="false", AXON_APP_WAS_RUNNING="true",
-          AXON_APP_BUNDLE="/Applications/Axon.app", STUB_STATUS=status_doc(pid=7))
-    check("restore", restore, "fails when that app will not reopen", 1,
-          expect=["could not reopen it"],
-          AXON_AGENT_WAS_LOADED="false", AXON_APP_WAS_RUNNING="true",
-          AXON_APP_BUNDLE="/Applications/Axon.app", STUB_OPEN_EXIT=1, STUB_STATUS=status_doc(pid=7))
-    check("restore", restore, "leaves a desktop that had no daemon stopped", 0,
-          expect=["leaving it stopped"], forbid=["axon daemon restart", "open -a"],
-          AXON_AGENT_WAS_LOADED="false", AXON_APP_WAS_RUNNING="false")
-    # Before the bootstrap, for the mirror-image reason: `daemon restart` would otherwise put an
-    # agent into an endpoint this step was about to free, and `KeepAlive` would crash-loop it.
-    check("restore", restore, "reaps a probe app that answers nothing, before bootstrapping", 0,
-          order=["axon shutdown", "pkill", "axon daemon restart"],
-          leftovers="902", AXON_AGENT_WAS_LOADED="true",
-          STUB_AGENT_PID=4242, STUB_STATUS=status_doc(pid=4242))
-
-    # An app reopened first could win the endpoint, and the pid check would then describe it rather
-    # than the restored agent -- failing a restore that in fact succeeded.
-    check("restore", restore, "restores both the agent and the app, agent first", 0,
-          order=["axon daemon restart", "open -a /Applications/Axon.app"],
-          AXON_AGENT_WAS_LOADED="true", AXON_APP_WAS_RUNNING="true",
-          AXON_APP_BUNDLE="/Applications/Axon.app",
-          STUB_AGENT_PID=4242, STUB_STATUS=status_doc(pid=4242))
+          AXON_DAEMON_WAS_LOADED="true", AXON_MENU_WAS_LOADED="true",
+          STUB_STATUS=status_doc(pid=9999))
+    check("restore", restore, "fails when the menu that was loaded on arrival does not come back", 1,
+          expect=[f"{menu} was loaded when this job arrived and is not loaded now"],
+          want_loaded=[daemon], want_unloaded=[menu],
+          AXON_DAEMON_WAS_LOADED="true", AXON_MENU_WAS_LOADED="true",
+          STUB_RESTART_EXIT=1, STUB_BOOTSTRAP_FAILS=menu)
+    check("restore", restore, "leaves a desktop that had no Axon job loaded stopped", 0,
+          expect=["leaving it stopped"], forbid=["axon daemon restart", "launchctl bootstrap"],
+          want_unloaded=[daemon, menu, live_daemon], loaded={live_daemon: 5150},
+          AXON_DAEMON_WAS_LOADED="false", AXON_MENU_WAS_LOADED="false")
+    check("restore", restore, "restores a menu that ran without a daemon, and adds no daemon", 0,
+          expect=[f"restored {menu}"], forbid=["axon daemon restart"],
+          want_loaded=[menu], want_unloaded=[daemon],
+          AXON_DAEMON_WAS_LOADED="false", AXON_MENU_WAS_LOADED="true")
+    # The candidate served a private endpoint, so a survivor no longer stands in the restore's
+    # way: the desktop gets its jobs back first, and the step still fails so someone looks.
+    check("restore", restore, "restores the desktop despite a candidate that will not die, then fails", 1,
+          expect=["still running as pid(s) 902", "answering again", "survived its jobs"],
+          order=["pkill", "axon daemon restart"], want_loaded=[daemon, menu],
+          leftovers="902", STUB_PKILL_STICKY="true",
+          AXON_DAEMON_WAS_LOADED="true", AXON_MENU_WAS_LOADED="true")
+    check("restore", restore, "restores the desktop despite a candidate job that will not unload, then fails", 1,
+          expect=[f"{live_daemon} is still loaded after launchctl bootout", "answering again"],
+          want_loaded=[daemon, menu], loaded=candidate, STUB_BOOTOUT_STICKY=live_daemon,
+          AXON_DAEMON_WAS_LOADED="true", AXON_MENU_WAS_LOADED="true")
 
     harness.cleanup()
     print()
+    for step in ("park", "probe", "restore"):
+        print(f"{step}: {passed[step]}/{totals[step]} scenarios passed")
     if failures:
         print(f"{len(failures)} failure(s)")
         return 1
