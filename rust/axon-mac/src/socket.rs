@@ -506,7 +506,8 @@ mod tests {
                 "0.4.0",
             );
             let menu = "/Applications/Axon.app/Contents/Library/Applications/Axon Menu.app/Contents/MacOS/AxonMenu";
-            let mut registration = RegistrationHealth::present(RegistrationMechanism::Launchd, main);
+            let mut registration =
+                RegistrationHealth::present(RegistrationMechanism::Launchd, main);
             registration.jobs = Some(vec![
                 JobState {
                     label: "dev.axon.daemon".into(),

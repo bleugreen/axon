@@ -116,6 +116,20 @@
   ],
   "platform": "macos",
   "registration": {
+    "jobs": [
+      {
+        "label": "dev.axon.daemon",
+        "loaded": true,
+        "path": "/Applications/Axon.app/Contents/MacOS/Axon",
+        "processId": 4210
+      },
+      {
+        "label": "dev.axon.menu",
+        "loaded": true,
+        "path": "/Applications/Axon.app/Contents/Library/Applications/Axon Menu.app/Contents/MacOS/AxonMenu",
+        "processId": 4211
+      }
+    ],
     "mechanism": "launchd",
     "path": "/Applications/Axon.app/Contents/MacOS/Axon",
     "registered": true
