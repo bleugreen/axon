@@ -12,9 +12,16 @@
 # was spawned is the exact check: it fails when the bind was lost to another daemon, when the
 # daemon died after binding, and when a stale daemon was left behind by an earlier run.
 #
-# The log is optional because not every daemon under test has one. A probe that backgrounds
-# `serve` itself owns the process's output and should pass the file it redirected to; the macOS
-# probe launches an app bundle through LaunchServices, which captures nothing a caller can name.
+# The expected pid is the caller's to establish, from whatever started the daemon: a probe that
+# backgrounds `serve` passes `$!`, and the macOS probe, which launches its candidate as a launchd
+# job under a label of its own, passes the pid `launchctl print` names for that label. Neither is a
+# process-table search, which could only guess between a candidate and a leftover.
+#
+# The log is optional because not every daemon under test has one: a probe passes the file it
+# redirected `serve` to, or the macOS probe the job's StandardErrorPath.
+#
+# `<daemon-binary>` is any Axon CLI that can ask for `status --json`; it reaches whichever endpoint
+# AXON_SOCKET_PATH names, so a probe serving a private socket exports that first.
 #
 # Usage: scripts/assert-daemon-under-test <daemon-binary> <pid> [daemon-log]
 set -euo pipefail
