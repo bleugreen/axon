@@ -19,6 +19,21 @@ public enum AxonEnvironment {
         environment[launchdManagedKey] == "1"
     }
 
+    public static func applicationSupportDirectory() -> URL {
+        FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Axon", isDirectory: true)
+    }
+
+    /// The 1Password active-credential index that releases before 0.4.0 wrote.
+    ///
+    /// It holds HMAC digests of secret values, keyed by a Keychain item, and nothing reads it any
+    /// more; `daemon install` deletes it. Kept as a location only so that deletion has one answer.
+    public static func retiredActiveCredentialIndexURL() -> URL {
+        applicationSupportDirectory()
+            .appendingPathComponent("active-credential-index.json", isDirectory: false)
+    }
+
     /// Whether this process must arrange its own replacement after an in-app update.
     ///
     /// A launchd-managed daemon already has `KeepAlive`; launching the app independently as well

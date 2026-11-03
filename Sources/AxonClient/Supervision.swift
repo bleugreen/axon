@@ -291,12 +291,12 @@ private struct RegistrationSnapshot {
 
 extension LaunchAgentManager {
     public var plistExists: Bool {
-        FileManager.default.fileExists(atPath: plistPath.path)
+        fileManager.fileExists(atPath: plistPath.path)
     }
 
     /// The plist on disk, decoded.
     func registeredPropertyList() -> [String: Any]? {
-        guard let data = FileManager.default.contents(atPath: plistPath.path) else { return nil }
+        guard let data = fileManager.contents(atPath: plistPath.path) else { return nil }
         return (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) as? [String: Any]
     }
 

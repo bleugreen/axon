@@ -12,10 +12,10 @@ import Foundation
 /// upgrades and moves alike. Code signing is not involved in this: the designated requirements were
 /// already stable across releases.
 ///
-/// The app is a complete daemon in its own right — the same `SocketServer` and `CommandRouter` on
-/// the same socket, plus the menu bar — so it needs no arguments. A CLI outside any bundle, which
-/// is what a dev build from `.build/` is, is registered as itself with `serve` and keeps the
-/// path-keyed identity that implies.
+/// The bundle's main executable is the Rust daemon (`axon-mac`), launched argument-less: with the
+/// launchd-managed key in its environment it serves. Only Axon's own bundle can be registered; a CLI
+/// outside one resolves to `.executablePath`, which `daemon install` refuses, because the CLI is a
+/// client and has no daemon to run.
 public struct DaemonProgram: Equatable, Sendable {
     /// Who macOS thinks is asking, when the registered program requests a privacy grant.
     public enum Identity: Equatable, Sendable {
@@ -34,18 +34,6 @@ public struct DaemonProgram: Equatable, Sendable {
     public init(executablePath: String, identity: Identity) {
         self.executablePath = executablePath
         self.identity = identity
-    }
-
-    /// The arguments launchd passes. Derived from the identity rather than stored, because the two
-    /// answers are the same fact: the app daemon is launched argument-less, and the CLI needs the
-    /// verb that turns it into one.
-    public var arguments: [String] {
-        switch identity {
-        case .appBundle:
-            return []
-        case .executablePath:
-            return ["serve"]
-        }
     }
 
     /// How `daemon install` names the identity it registered, so a consumer can see which of the
@@ -69,9 +57,9 @@ public struct DaemonProgram: Equatable, Sendable {
     /// identifier has to match. Nothing is lost by being strict, because the grants worth
     /// inheriting are recorded against Axon's identifier and no other.
     ///
-    /// Everything that is not Axon's app falls back to the invoking CLI, including a bundle whose
-    /// `Info.plist` is missing or names a main executable that is not there. A registration that
-    /// starts a daemon with a path-keyed identity is worth more than one that starts nothing.
+    /// Everything that is not Axon's app resolves to the invoking CLI with `.executablePath`,
+    /// including a bundle whose `Info.plist` is missing or names a main executable that is not
+    /// there; `daemon install` refuses that answer rather than registering a client.
     public static func resolved(
         invokedExecutable: String,
         fileManager: FileManager = .default
@@ -147,7 +135,7 @@ public struct LaunchAgentConfiguration: Equatable, Sendable {
         self.label = label
         self.program = program
         self.socketPath = socketPath
-        self.arguments = program.arguments
+        self.arguments = []
         self.keepAlive = .always
 
         var daemonEnvironment: [String: String] = [
@@ -219,8 +207,7 @@ public struct LaunchAgentConfiguration: Equatable, Sendable {
     ///
     /// Restarted only after a crash. Quit exits 0 and launchd leaves it stopped, which is the
     /// difference from the daemon: quitting a menu is a person's decision, while the daemon
-    /// exiting is always a failure. Defined here; registering it beside the daemon is the
-    /// packaging work that replaces the Swift daemon app.
+    /// exiting is always a failure. `Supervision` registers it beside the daemon.
     public static func menu(
         bundlePath: String,
         socketPath: String = AxonEnvironment.defaultSocketPath
@@ -269,8 +256,8 @@ public struct LaunchAgentManager {
     public let configuration: LaunchAgentConfiguration
     public let plistPath: URL
 
-    private let fileManager: FileManager
-    private let runProcess: ([String]) throws -> ProcessResult
+    let fileManager: FileManager
+    let runProcess: ([String]) throws -> ProcessResult
 
     public init(
         configuration: LaunchAgentConfiguration,
@@ -313,18 +300,49 @@ public struct LaunchAgentManager {
         try updateFinisher(cliPath: cliPath, socketPath: socketPath).start()
     }
 
-    /// Clears the finisher job, which the successor calls once it is serving.
+    /// Clears the finisher job, which the menu calls when it starts.
     ///
     /// Idempotent and harmless when nothing is registered: the scaffolding of an update is the
     /// successor's to tidy, and a job that never ran leaves nothing behind to find. It takes no
     /// program, because retiring a job needs only its label.
+    ///
+    /// A finisher that is still running is left alone. Its `daemon install` starts the menu before
+    /// it finishes, so the menu reaching here is the normal case rather than a leftover, and booting
+    /// the job out would kill the install part-way through. The finisher removes its own plist
+    /// when it is done (`retireUpdateFinisher(ownedBy:)`).
     public static func reapUpdateFinisher(
         plistPath: URL? = nil,
         fileManager: FileManager = .default,
         runProcess: ([String]) throws -> ProcessResult = LaunchAgentManager.runLaunchctl(arguments:)
     ) {
         let label = LaunchAgentConfiguration.updateFinisherLabel
+        if let printed = try? runProcess(["print", "\(launchctlDomain())/\(label)"]),
+           printed.exitCode == 0,
+           processIdentifier(inPrintOutput: printed.output) != nil {
+            return
+        }
         _ = try? runProcess(["bootout", "\(launchctlDomain())/\(label)"])
+        let path = plistPath ?? URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Library/LaunchAgents/\(label).plist")
+        try? fileManager.removeItem(at: path)
+    }
+
+    /// Removes the finisher's plist when this process is the finisher, so it never runs again at
+    /// the next login. The job itself stays loaded and exited until the menu next reaps it; a job
+    /// cannot boot itself out without being killed by it.
+    public static func retireUpdateFinisher(
+        ownedBy processIdentifier: Int32,
+        plistPath: URL? = nil,
+        fileManager: FileManager = .default,
+        runProcess: ([String]) throws -> ProcessResult = LaunchAgentManager.runLaunchctl(arguments:)
+    ) {
+        let label = LaunchAgentConfiguration.updateFinisherLabel
+        guard let printed = try? runProcess(["print", "\(launchctlDomain())/\(label)"]),
+              printed.exitCode == 0,
+              Self.processIdentifier(inPrintOutput: printed.output) == Int(processIdentifier)
+        else {
+            return
+        }
         let path = plistPath ?? URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Library/LaunchAgents/\(label).plist")
         try? fileManager.removeItem(at: path)
