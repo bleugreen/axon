@@ -119,6 +119,9 @@ PROMPT = re.compile(
 
 ARGS = None
 RUN = {"id": None, "dir": None, "transcript": None, "commands": None}
+# How each TCC dump this run read the system database: a carry verdict over a dump that could not
+# read it compares nothing that matters, because Accessibility and Screen Recording live there.
+TCC_ROUTES = {}
 verdicts = []
 gaps = []
 
@@ -541,8 +544,16 @@ def tcc_diff(before, after, identities):
     }
 
 
-def tcc_carried(diff):
-    return not (diff["axonAdded"] or diff["axonRemoved"] or diff["axonChanged"])
+def tcc_carried(diff, routes=None):
+    """No Axon row added, removed, or changed, measured over dumps that all read the system database."""
+    routes = TCC_ROUTES if routes is None else routes
+    readable = bool(routes) and all(route != "unreadable" for route in routes.values())
+    return readable and not (diff["axonAdded"] or diff["axonRemoved"] or diff["axonChanged"])
+
+
+def zero_first_grant(scan):
+    """No first-grant prompt, measured over a log that could be read: silence is not evidence."""
+    return bool(scan.get("readable")) and not scan["firstGrant"]
 
 
 def allowed_services(rows, identities, permissions):
@@ -719,6 +730,7 @@ def tcc_dump(name):
     (RUN["dir"] / name).write_text("\n".join(rows) + "\n")
     log("tcc-dump", file=name, rows=len(rows), systemRoute=route,
         userError=user.stderr.strip(), systemError=system.stderr.strip())
+    TCC_ROUTES[name] = route
     if route == "unreadable":
         gap("system-tcc-unreadable", "tcc-dump", file=name)
     return rows
@@ -974,7 +986,7 @@ def step5_carry_verdict(state):
             permissions=(report or {}).get("permissions"), capabilities=(report or {}).get("capabilities"))
     scan = tcc_log_scan("5", state["bootstrapAt"], state)
     windows = notification_windows("5-after-bootstrap")
-    verdict("5-zero-interaction", not scan["firstGrant"], logReadable=scan["readable"],
+    verdict("5-zero-interaction", zero_first_grant(scan), logReadable=scan["readable"],
             firstGrant=scan["firstGrant"], reminders=len(scan["reminders"]), notificationWindows=windows)
 
 
@@ -1202,12 +1214,12 @@ def step9_tcc_after(state):
     after = tcc_dump("tcc-after.tsv")
     diff = tcc_diff(state["tccBefore"], after, identities(state))
     decode_csreqs(after, identities(state), "tcc-after-csreq.json")
-    verdict("9-tcc-carried", tcc_carried(diff), **diff)
+    verdict("9-tcc-carried", tcc_carried(diff), systemRoutes=dict(TCC_ROUTES), **diff)
     if diff["foreignAdded"] or diff["foreignRemoved"]:
         gap("foreign-tcc-rows-moved", "9-tcc-foreign", added=diff["foreignAdded"], removed=diff["foreignRemoved"])
     scan = tcc_log_scan("9", state["windowStart"], state)
     windows = notification_windows("9-after")
-    verdict("9-zero-first-grant-prompts", not scan["firstGrant"], logReadable=scan["readable"],
+    verdict("9-zero-first-grant-prompts", zero_first_grant(scan), logReadable=scan["readable"],
             firstGrant=scan["firstGrant"], reminders=len(scan["reminders"]), notificationWindows=windows)
     before, now = state.get("production") or {}, production_state()
     verdict("9-production-untouched", now["plistSha256"] == before.get("plistSha256") and now["ready"] is True
@@ -1275,7 +1287,7 @@ def passing_carry(sha):
     index = EVIDENCE / "runs.jsonl"
     entries = [json.loads(line) for line in index.read_text().splitlines() if line.strip()] if index.exists() else []
     passing = [entry for entry in entries if entry.get("phase") == "carry" and entry.get("sha") == sha
-               and not entry.get("dryRun") and not entry.get("failed") and entry.get("exit") in (0, 3)
+               and not entry.get("dryRun") and not entry.get("failed") and entry.get("exit") == 0
                and "5-carry" in (entry.get("passed") or [])]
     return passing[-1] if passing else None
 
@@ -1283,6 +1295,11 @@ def passing_carry(sha):
 def stepB0_preconditions(state):
     phase_a = passing_carry(ARGS.sha)
     verdict("B0-phase-a-passed", bool(phase_a), run=phase_a)
+    # The --sha string names a commit; the hash names the bytes. Phase B upgrades to exactly the
+    # bundle Phase A qualified.
+    candidate_main = sha256_file(main_executable(ARGS.candidate))
+    verdict("B0-same-candidate", bool(phase_a) and phase_a.get("candidateMainSha256") == candidate_main,
+            phaseA=(phase_a or {}).get("candidateMainSha256"), now=candidate_main)
     production = adopt_production(state)
     log("B0-production", **production)
     verdict("B0-production-is-swift", production["ready"] is True and not production["provenance"]
@@ -1379,9 +1396,9 @@ def stepB4_gate(state):
     after = tcc_dump("tcc-after-upgrade.tsv")
     diff = tcc_diff(state["tccBefore"], after, identities(state))
     decode_csreqs(after, identities(state), "tcc-after-upgrade-csreq.json")
-    gates.append(verdict("B4-tcc-carried", tcc_carried(diff), **diff))
+    gates.append(verdict("B4-tcc-carried", tcc_carried(diff), systemRoutes=dict(TCC_ROUTES), **diff))
     scan = tcc_log_scan("B4", state["windowStart"], state)
-    gates.append(verdict("B4-zero-first-grant-prompts", not scan["firstGrant"], logReadable=scan["readable"],
+    gates.append(verdict("B4-zero-first-grant-prompts", zero_first_grant(scan), logReadable=scan["readable"],
                          firstGrant=scan["firstGrant"], reminders=len(scan["reminders"])))
     notification_windows("B4-after-upgrade")
     state["gatePassed"] = all(gates)
@@ -1523,10 +1540,25 @@ def teardown_upgrade(state):
     pass, including one interrupted by an exception before its gate."""
     if state.get("registrationTouched") and not state.get("gatePassed") and not state.get("rolledBack") and not ARGS.dry_run:
         rollback_production(state)
+    if state.get("gatePassed") and not ARGS.dry_run:
+        reload_production_jobs()
     if state.get("calculatorOpened"):
         sh("/usr/bin/pkill", "-x", CALCULATOR["process"])
     log("teardown", registrationTouched=bool(state.get("registrationTouched")), gatePassed=bool(state.get("gatePassed")),
         rolledBack=bool(state.get("rolledBack")), daemon=job(PROD_DAEMON), menu=job(PROD_MENU))
+
+
+def reload_production_jobs():
+    """After a passed upgrade, bring back any production job whose plist exists but is not loaded,
+    daemon first. Step B5 shuts both down, starts them, and kills the daemon; an interrupted or
+    failed step there must not leave the thread without its bridge."""
+    for label, plist in ((PROD_DAEMON, PROD_PLIST), (PROD_MENU, PROD_MENU_PLIST)):
+        if pathlib.Path(plist).exists() and not job(label):
+            result = sh("/bin/launchctl", "bootstrap", DOMAIN, str(plist))
+            log("teardown-reload", label=label, exit=result.returncode, error=result.stderr.strip())
+            if label == PROD_DAEMON:
+                ready = wait_for(lambda: (health(PROD_SOCKET) or {}).get("ready"), 30)
+                log("teardown-reload-ready", label=label, ready=bool(ready))
 
 
 PHASES = {
@@ -1547,6 +1579,15 @@ def self_test():
         print(f"{'ok  ' if condition else 'FAIL'} {name}")
         if not condition:
             failures.append(name)
+
+    clean = {"axonAdded": [], "axonRemoved": [], "axonChanged": []}
+    check("gate: carried needs every dump to have read the system database",
+          tcc_carried(clean, {"a": "direct", "b": "sudo"}) and not tcc_carried(clean, {"a": "direct", "b": "unreadable"})
+          and not tcc_carried(clean, {}))
+    check("gate: zero prompts needs a readable log",
+          zero_first_grant({"readable": True, "firstGrant": []})
+          and not zero_first_grant({"readable": False, "firstGrant": []})
+          and not zero_first_grant({"readable": True, "firstGrant": [{"at": "t"}]}))
 
     axon_ids = [AXON_ID, MENU_ID, "/Users/dev/AxonBench/axn125/abc123/Axon.app"]
     csreq_a, csreq_b = "FADE0C00000000AA", "FADE0C00000000BB"
@@ -1758,6 +1799,7 @@ def main(argv):
     with (EVIDENCE / "runs.jsonl").open("a") as index:
         index.write(json.dumps({"runId": RUN["id"], "phase": ARGS.phase, "sha": ARGS.sha, "dryRun": ARGS.dry_run,
                                 "runDir": str(RUN["dir"]), "candidate": str(ARGS.candidate) if ARGS.candidate else None,
+                                "candidateMainSha256": sha256_file(main_executable(ARGS.candidate)) if ARGS.candidate else None,
                                 "passed": passed, "failed": failed, "gaps": gaps, "exit": status}) + "\n")
     return status
 
