@@ -1,108 +1,82 @@
 {
-  "schemaVersion": "health-v1",
-  "version": "0.1.7",
-  "platform": "macos",
-  "daemon": {
-    "running": true,
-    "ready": true,
-    "endpoint": "/tmp/axon.sock",
-    "processId": 4210
-  },
-  "registration": {
-    "registered": true,
-    "mechanism": "launchd",
-    "path": "/Applications/Axon.app/Contents/MacOS/Axon"
-  },
-  "session": {
-    "interactive": true,
-    "graphical": true
-  },
-  "permissions": [
-    {
-      "name": "accessibility",
-      "granted": false,
-      "reason": "accessibility-not-granted",
-      "detail": "Approve Axon in System Settings > Privacy & Security > Accessibility"
-    },
-    {
-      "name": "screenRecording",
-      "granted": true
-    }
-  ],
   "capabilities": [
     {
       "capability": "enumerate",
-      "usable": true
+      "reason": "accessibility-not-granted",
+      "restriction": "Accessibility permission is not granted",
+      "usable": false
     },
     {
       "capability": "capture",
-      "usable": false,
       "reason": "accessibility-not-granted",
-      "restriction": "macOS has not granted Accessibility trust to the daemon identity"
+      "restriction": "Accessibility permission is not granted",
+      "usable": false
     },
     {
       "capability": "retainedHandles",
-      "usable": false,
       "reason": "accessibility-not-granted",
-      "restriction": "macOS has not granted Accessibility trust to the daemon identity"
+      "restriction": "Accessibility permission is not granted",
+      "usable": false
     },
     {
       "capability": "observeChanges",
-      "usable": false,
-      "reason": "accessibility-not-granted",
-      "restriction": "macOS has not granted Accessibility trust to the daemon identity"
+      "reason": "not-implemented",
+      "restriction": "not implemented by axon-mac",
+      "usable": false
     },
     {
       "capability": "invoke",
-      "usable": false,
       "reason": "accessibility-not-granted",
-      "restriction": "macOS has not granted Accessibility trust to the daemon identity"
+      "restriction": "Accessibility permission is not granted",
+      "usable": false
     },
     {
       "capability": "readValue",
-      "usable": false,
       "reason": "accessibility-not-granted",
-      "restriction": "macOS has not granted Accessibility trust to the daemon identity"
+      "restriction": "Accessibility permission is not granted",
+      "usable": false
     },
     {
       "capability": "setValue",
-      "usable": false,
       "reason": "accessibility-not-granted",
-      "restriction": "macOS has not granted Accessibility trust to the daemon identity"
+      "restriction": "Accessibility permission is not granted",
+      "usable": false
     },
     {
       "capability": "focus",
-      "usable": false,
       "reason": "accessibility-not-granted",
-      "restriction": "macOS has not granted Accessibility trust to the daemon identity"
+      "restriction": "Accessibility permission is not granted",
+      "usable": false
     },
     {
       "capability": "scroll",
-      "usable": false,
       "reason": "accessibility-not-granted",
-      "restriction": "macOS has not granted Accessibility trust to the daemon identity"
+      "restriction": "Accessibility permission is not granted",
+      "usable": false
     },
     {
       "capability": "pointerInput",
-      "usable": false,
       "reason": "accessibility-not-granted",
-      "restriction": "macOS has not granted Accessibility trust to the daemon identity"
+      "restriction": "Accessibility permission is not granted",
+      "usable": false
     },
     {
       "capability": "keyboardInput",
-      "usable": false,
       "reason": "accessibility-not-granted",
-      "restriction": "macOS has not granted Accessibility trust to the daemon identity"
+      "restriction": "Accessibility permission is not granted",
+      "usable": false
     },
     {
       "capability": "screenshot",
-      "usable": true
+      "reason": "accessibility-not-granted",
+      "restriction": "Accessibility permission is not granted",
+      "usable": false
     },
     {
       "capability": "hitTest",
-      "usable": false,
       "reason": "accessibility-not-granted",
-      "restriction": "macOS has not granted Accessibility trust to the daemon identity"
+      "restriction": "Accessibility permission is not granted",
+      "usable": false
     },
     {
       "capability": "serializeHistory",
@@ -110,9 +84,46 @@
     },
     {
       "capability": "observeGlobalInput",
-      "usable": false,
       "reason": "accessibility-not-granted",
-      "restriction": "macOS has not granted Accessibility trust to the daemon identity"
+      "restriction": "Accessibility permission is not granted",
+      "usable": false
     }
-  ]
+  ],
+  "daemon": {
+    "endpoint": "/tmp/axon.sock",
+    "processId": 4210,
+    "provenance": {
+      "backend": "rust-axon-mac",
+      "executablePath": "/Applications/Axon.app/Contents/MacOS/Axon",
+      "processId": 4210,
+      "version": "0.4.0"
+    },
+    "ready": false,
+    "reason": "daemon-not-ready",
+    "running": true,
+    "shellContract": 1
+  },
+  "permissions": [
+    {
+      "granted": false,
+      "name": "accessibility",
+      "reason": "accessibility-not-granted"
+    },
+    {
+      "granted": true,
+      "name": "screenRecording"
+    }
+  ],
+  "platform": "macos",
+  "registration": {
+    "mechanism": "launchd",
+    "path": "/Applications/Axon.app/Contents/MacOS/Axon",
+    "registered": true
+  },
+  "schemaVersion": "health-v1",
+  "session": {
+    "graphical": true,
+    "interactive": true
+  },
+  "version": "0.4.0"
 }
