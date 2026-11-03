@@ -334,11 +334,13 @@ private let readyReport = DaemonReport(
     try fixture.bundled().install(waitUntilReady: { readyReport })
     #expect(fixture.registered().startPlan(mainExecutable: fixture.mainExecutable) == .resume)
 
+    // Both out, as after `axon shutdown`: the menu is registered but not running.
     fixture.launchd.loaded.removeValue(forKey: "dev.axon.daemon")
+    fixture.launchd.loaded.removeValue(forKey: "dev.axon.menu")
     fixture.launchd.calls = []
     try fixture.bundled().resume()
 
-    #expect(fixture.launchd.calls == ["bootstrap dev.axon.daemon", "kickstart dev.axon.menu"])
+    #expect(fixture.launchd.calls == ["bootstrap dev.axon.daemon", "bootstrap dev.axon.menu"])
 }
 
 @Test func startLeavesAnotherCopysRegistrationAloneAndStartsItsMenu() throws {
@@ -371,6 +373,24 @@ private let readyReport = DaemonReport(
     report.provenance = DaemonProvenance(backend: "rust-axon-mac", processId: 501, executablePath: "/tmp/other/Axon", version: "0.4.0")
     #expect(!Supervision.report(report, isFrom: "/Applications/Axon.app/Contents/MacOS/Axon"))
     #expect(Supervision.report(report, isFrom: "/tmp/other/Axon"))
+}
+
+@Test func aDaemonAnsweringFromOutsideLaunchdIsTheOneInstallMustStop() {
+    #expect(Supervision.unsupervisedIncumbent(answering: nil, launchdPid: nil) == nil, "nothing answering")
+    #expect(Supervision.unsupervisedIncumbent(answering: readyReport, launchdPid: 501) == nil, "launchd's own daemon")
+    #expect(Supervision.unsupervisedIncumbent(answering: readyReport, launchdPid: nil) == readyReport, "opened, not registered")
+    #expect(Supervision.unsupervisedIncumbent(answering: readyReport, launchdPid: 900) == readyReport, "a stray beside the job")
+}
+
+@Test func resumeLeavesARunningMenuAlone() throws {
+    let fixture = try Fixture()
+    defer { fixture.cleanUp() }
+    try fixture.bundled().install(waitUntilReady: { readyReport })
+    fixture.launchd.calls = []
+
+    try fixture.bundled().resume()
+
+    #expect(fixture.launchd.calls.isEmpty)
 }
 
 // MARK: - Update finisher

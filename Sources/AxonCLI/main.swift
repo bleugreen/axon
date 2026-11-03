@@ -411,6 +411,7 @@ private func installDaemon() throws {
     let supervision = try bundledSupervision()
     let program = supervision.daemon.configuration.program
     warnAboutEphemeralInstall(program.executablePath)
+    try stopUnsupervisedDaemon(supervision)
     // Strict for install: the program being registered is this release's daemon, which always says
     // where it runs, and the answer must come from the process launchd just started. A daemon
     // nothing supervises that still holds the socket cannot pass for it.
@@ -430,6 +431,31 @@ private func installDaemon() throws {
     // its own cleanup.
     pruneSupersededInstalls(program: program, registrationPath: supervision.daemon.registration().path)
     LaunchAgentManager.retireUpdateFinisher(ownedBy: getpid())
+}
+
+/// Stops a daemon that answers the socket from outside launchd, before anything is written.
+///
+/// Such a daemon is an earlier Axon that was opened rather than registered, or the 0.3.x app that
+/// ran this install as its update finisher and never quit. It holds the socket lock, so the daemon
+/// about to be registered could never serve. A rollback cannot bring it back once stopped, which is
+/// acceptable: its bundle is the one being replaced.
+private func stopUnsupervisedDaemon(_ supervision: Supervision) throws {
+    let answering = try? SocketClient(path: socketPath, responseTimeoutSeconds: 2)
+        .send(JSONRPCRequest(id: .string("health"), method: "health"))
+    let report = answering?.result.flatMap { try? DaemonReport(jsonObject: $0) }
+    let launchdPid = Supervision.registered(socketPath: socketPath).daemon.jobState().processId
+    guard let incumbent = Supervision.unsupervisedIncumbent(answering: report, launchdPid: launchdPid) else {
+        return
+    }
+    _ = try? SocketClient(path: socketPath, responseTimeoutSeconds: 2)
+        .send(JSONRPCRequest(id: .string("shutdown"), method: "shutdown"))
+    guard waitUntilDaemonStops(timeoutSeconds: 10) else {
+        throw CLIError.operationFailed("""
+        Axon \(incumbent.version) (pid \(incumbent.processId)) is running outside launchd and did not stop. \
+        Quit it from its menu bar item, then run this again.
+        """)
+    }
+    print("stopped Axon \(incumbent.version) (pid \(incumbent.processId)), which was running outside launchd")
 }
 
 /// Deletes the 1Password active-credential index an earlier release left behind.

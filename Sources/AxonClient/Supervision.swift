@@ -141,6 +141,16 @@ public struct Supervision {
         )
     }
 
+    /// The daemon answering the socket when it is not launchd's `dev.axon.daemon` process, or nil.
+    ///
+    /// Before 0.4.0, `axon`, `axon setup`, `axon start`, and opening the app all ran Axon without
+    /// launchd, and 0.3.x's in-app updater never quit itself. Such a daemon holds the socket
+    /// lock, so a newly registered daemon can never serve; install has to stop it first.
+    public static func unsupervisedIncumbent(answering report: DaemonReport?, launchdPid: Int?) -> DaemonReport? {
+        guard let report, report.processId != launchdPid else { return nil }
+        return report
+    }
+
     /// Whether a health report comes from the daemon at `program`.
     ///
     /// A report without provenance comes from a release that published none, which is accepted:
@@ -294,7 +304,7 @@ public struct Supervision {
         for job in [daemon, menu] where job.plistExists && !job.jobState().loaded {
             try job.load()
         }
-        try menu.kickstart()
+        try startMenuIfStopped()
     }
 
     /// Starts the registered menu of another copy without changing its registration.
@@ -303,6 +313,13 @@ public struct Supervision {
         if !menu.jobState().loaded {
             try menu.load()
         }
+        try startMenuIfStopped()
+    }
+
+    /// A running menu is left alone, so opening Axon.app while it is up is a no-op rather than a
+    /// question about how `kickstart` treats a running job.
+    private func startMenuIfStopped() throws {
+        guard menu.jobState().processId == nil else { return }
         try menu.kickstart()
     }
 
