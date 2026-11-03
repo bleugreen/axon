@@ -35,7 +35,10 @@ fn main() {
                 launcher::AXON_BUNDLE_IDENTIFIER
             );
             log_open(&message);
-            Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, message))
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                message,
+            ))
         }
         Entry::Usage => Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,

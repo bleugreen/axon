@@ -30,7 +30,10 @@ pub enum Entry {
     Probe(Vec<String>),
     Version,
     /// Run `<cli> start` for the bundle that was opened, then exit with its status.
-    Launch { bundle: PathBuf, cli: PathBuf },
+    Launch {
+        bundle: PathBuf,
+        cli: PathBuf,
+    },
     /// Opened inside a bundle that is not Axon's: refuse rather than touch any registration.
     Refuse {
         bundle: PathBuf,
@@ -51,7 +54,9 @@ pub fn select(
     identifier_of: impl Fn(&Path) -> Option<String>,
 ) -> Entry {
     // LaunchServices on older systems appends a process serial number argument; it is not a verb.
-    let mut verbs = arguments.iter().filter(|argument| !argument.starts_with("-psn_"));
+    let mut verbs = arguments
+        .iter()
+        .filter(|argument| !argument.starts_with("-psn_"));
     match verbs.next().map(String::as_str) {
         Some("serve") => Entry::Serve,
         Some("mcp") => Entry::Mcp,
