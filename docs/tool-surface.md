@@ -108,10 +108,11 @@ tree. `none` means the app reported no focused UI element. `inaccessible` means
 the `AXFocusedUIElement` query itself failed and includes the Accessibility error;
 it is never collapsed into `none`.
 
-Secret arguments are redacted wherever a run's own `secret`-typed or `op://` and
-`env://` bound values would appear. The 1Password active-credential index that
-`axon refresh-secrets` built before 0.4.0 is retired, and `<redacted:
-active-credential>` no longer appears.
+During a `run`, the values bound to its `secret` arguments are redacted from every
+observation the run makes, appearing as `<redacted: active-credential>`; the
+secret value itself is never returned. Before 0.4.0 a 1Password-backed index built
+by `axon refresh-secrets` extended this to credentials outside any run; that
+index is retired.
 
 Deterministic rule redaction is always on for AX and OCR text. Role rules
 and curated patterns redact secure field values, secret-labeled values,
