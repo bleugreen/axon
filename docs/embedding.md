@@ -17,7 +17,7 @@ exact version and upgrade deliberately; nothing in the contract resolves a mutab
 
 | Target | Artifact | Contains |
 | --- | --- | --- |
-| macos/aarch64 | `Axon-<version>-macos-aarch64.zip` | a signed `Axon.app` at the archive root, containing the nested `Axon Editor.app` and the bundled `axon` CLI |
+| macos/aarch64 | `Axon-<version>-macos-aarch64.zip` | a signed `Axon.app` at the archive root: the daemon as its main executable, the nested `Axon Menu.app` and `Axon Editor.app`, and the bundled `axon` CLI |
 | windows/x86_64 | `axon-win-<version>-windows-x86_64.zip` | Authenticode-signed `axon-win.exe` |
 | linux/x86_64 | `axon-linux-<version>-linux-x86_64.tar.gz` | `axon-linux` and its systemd user unit template |
 
@@ -186,6 +186,38 @@ Install and uninstall are idempotent: installing over an existing registration r
 uninstalling an absent registration succeeds. A consumer can run `daemon install` on every deploy
 without checking first.
 
+### Two jobs on macOS
+
+On macOS an install is two launchd jobs managed as one unit by `Sources/AxonClient/Supervision.swift`:
+the daemon, and the menu bar app that presents it. They are separate jobs so that each is its own
+responsible process and neither inherits the other's privacy attribution, and every verb acts on
+both.
+
+| Label | Program | Environment | KeepAlive |
+| --- | --- | --- | --- |
+| `dev.axon.daemon` | `Axon.app/Contents/MacOS/Axon`, no arguments | `AXON_SOCKET_PATH`, `AXON_DAEMON_MANAGED_BY_LAUNCHD=1` | always |
+| `dev.axon.menu` | `Axon.app/Contents/Library/Applications/Axon Menu.app/Contents/MacOS/AxonMenu` | `AXON_SOCKET_PATH` | only after a crash |
+
+`daemon install` is a transaction. It checks that both executables exist, snapshots whatever plists
+are already there, writes both, stops the menu and then the daemon, starts the daemon, waits for a
+health answer from the program it just registered, and only then starts the menu, so the menu never
+comes up against the daemon being replaced. Any failure puts the previous plists back and reloads
+whatever was loaded before, so a failed install leaves the old registration working rather than
+half-replaced. After a successful install it deletes the retired 1Password index file (see
+[Redaction](#redaction)) and prunes superseded versioned installs.
+
+`daemon restart` bounces each job whose plist exists and rewrites neither. A registration written
+by a release that had no menu job has only the daemon's plist, and restarting it restarts the
+daemon alone; restart never adds a job, because that would make whichever CLI asked the registered
+one. `shutdown` stops both jobs, menu first, and leaves both plists in place. `daemon uninstall`
+stops and removes both.
+
+The menu's `KeepAlive` is the one deliberate asymmetry. **Quit Axon Menu** exits 0 and launchd
+leaves the menu stopped, because quitting a menu is a person's decision; a crash exits non-zero and
+launchd brings it back. Quitting the menu never stops the daemon, and nothing in the menu does:
+the daemon's exit is always a failure for launchd to recover from, and `shutdown` is the control
+that stops it.
+
 `shutdown` is idempotent only when nothing is listening. A daemon that accepts a connection and
 then fails to answer, or a platform stop command that fails, is reported as an operational failure
 rather than success; the command confirms the endpoint is gone before claiming it stopped
@@ -196,7 +228,7 @@ Registration is platform-native:
 
 | Platform | Mechanism | Where |
 | --- | --- | --- |
-| macOS | LaunchAgent | `dev.axon.daemon` at `~/Library/LaunchAgents/dev.axon.daemon.plist`, `LimitLoadToSessionType=Aqua` |
+| macOS | Two LaunchAgents | `dev.axon.daemon` and `dev.axon.menu` at `~/Library/LaunchAgents/<label>.plist`, `LimitLoadToSessionType=Aqua` |
 | Windows | Scheduled task | `Axon Windows Daemon`, `ONLOGON`, restricted to the current interactive user |
 | Linux | systemd user unit | `~/.config/systemd/user/axon.service`, bound to `graphical-session.target` |
 
@@ -206,28 +238,32 @@ Registration is platform-native:
 copies the binary anywhere. Which executable of that install it names depends on the platform, and
 on macOS the answer is decided by the operating system's privacy model rather than by convenience.
 
-On macOS the release ships one `Axon.app` holding two executables — the daemon app at
-`Contents/MacOS/Axon` and the CLI at `Contents/Resources/bin/axon` — plus the editor nested at
-`Contents/Library/Applications/Axon Editor.app`. **`daemon install` registers the app**,
-argument-less. macOS attributes a privacy grant — Accessibility, Screen Recording — to a
-bundle identity only for that bundle's *main* executable; anything else, including a helper binary
-under `Contents/Resources`, is recorded against its absolute path. Because every release installs
-at its own versioned path, registering the CLI made each upgrade a new subject in System Settings
-and demanded a fresh human approval, while grants held by the app carried across untouched.
-Registering the app makes every grant ride `CFBundleIdentifier`, so permissions survive upgrades
-and moves alike. Code signing plays no part in this; the designated requirements were already
-stable across releases.
+On macOS the release ships one `Axon.app`. Its main executable, `Contents/MacOS/Axon`, is the
+daemon, built from `rust/axon-mac`. The CLI at `Contents/Resources/bin/axon` is only a client of
+it, and the menu and the editor are nested at `Contents/Library/Applications`. **`daemon install`
+registers the main executable**, argument-less, beside the menu. macOS attributes a privacy grant —
+Accessibility, Screen Recording — to a bundle identity only for that bundle's *main* executable;
+anything else, including a helper binary under `Contents/Resources`, is recorded against its
+absolute path. Because every release installs at its own versioned path, a grant keyed by path
+would make each upgrade a new subject in System Settings and demand a fresh human approval, while
+grants held by the main executable ride `CFBundleIdentifier` and survive upgrades and moves alike.
+The nested menu is a TCC subject of its own that asks for nothing, so it holds no grant to lose.
+Code signing plays no part in this; the designated requirements are stable across releases.
 
-The app is a complete daemon in its own right — the same server and command router on the same
-socket, plus the menu bar and recorder — so it needs no arguments, and `axon serve` remains a
-development and probe entry point rather than a second thing to install.
+The main executable decides what to do from how it was started. Under launchd its job sets
+`AXON_DAEMON_MANAGED_BY_LAUNCHD=1`, and it serves. Opened by a person — Finder, Spotlight, `open` —
+it carries no verb and no managed key, so it runs the bundled `axon start` and exits with its
+status rather than serving; a hand-launched second daemon would only lose the socket lock to the one
+launchd owns. A bundle with any identifier other than `com.bleugreen.axon` refuses that launcher
+path and logs why to `~/Library/Logs/Axon/open.log`, so a bench or development bundle cannot reach
+the production registration by being opened. `serve` remains an explicit verb for development and
+benches.
 
-When the invoking CLI is not inside a bundle, which is what a development build is, it is
-registered as itself with `serve` and keeps the path-keyed identity that implies. A bundle that
-cannot name a usable main executable degrades the same way: a daemon that starts with a path-keyed
-identity is worth more than a registration that starts nothing. `daemon install` prints the
-identity it registered, because which of the two rules applies is not visible from the path alone
-and decides whether the next upgrade needs a human in System Settings.
+`daemon install` refuses rather than degrades when it cannot register a complete bundle. From a CLI
+outside `Axon.app` it exits 1 explaining that the macOS daemon ships only inside `Axon.app`, and
+pointing at `scripts/package-app`, or at `cargo run -p axon-mac -- serve` with `AXON_SOCKET_PATH`
+for development; a bundle missing the daemon or the menu executable is refused the same way. It
+prints the identity it registered, because the grants depend on it.
 
 Windows and Linux have no equivalent per-application grant, and register the invoking executable
 with `serve`.
@@ -244,12 +280,15 @@ exact string `launchctl bootout gui/$UID/<label>` wants.
 
 ### Finishing an update
 
-The in-app updater on macOS ends every non-Homebrew update the same way: it places the new bundle,
-then hands the re-registration to a second, one-shot LaunchAgent labelled `dev.axon.updater` that
-runs the new bundle's CLI with `daemon install`. A separate job is structurally necessary —
-re-registering means booting out `dev.axon.daemon`, and the running app *is* that job's process, so
-it cannot survive its own bootout to issue the follow-up bootstrap. The finisher is never kept
-alive, and the successor it starts removes it once it is serving.
+The in-app updater on macOS lives in the menu. It accepts a downloaded bundle only when it carries
+the daemon, the CLI, the nested menu (`com.bleugreen.axon.menu`), and the nested editor at the
+release's version, places it, then hands the re-registration to a one-shot LaunchAgent labelled
+`dev.axon.updater` that runs the new bundle's `Contents/Resources/bin/axon daemon install`. A
+separate job is structurally necessary: re-registering boots out `dev.axon.menu`, and the menu that
+started the update is that job's process, so it cannot survive its own bootout to see the install
+through. The finisher's `daemon install` re-registers both jobs. The finisher is never kept alive,
+and it removes its own plist when it is done; the menu leaves a finisher that is still running
+alone, because the install starts the new menu before it finishes.
 
 The release installers keep external client paths separate from that registration truth. Windows
 maintains `%LOCALAPPDATA%\Axon\current` as a junction to the active versioned directory and includes
@@ -291,7 +330,9 @@ registration against the install path it expects instead of assuming they agree.
 A socket file or a named pipe existing proves only that some process bound it, which is exactly
 what a half-started daemon leaves behind. Readiness is a successful authenticated health round
 trip and nothing weaker. `daemon install` and `daemon restart` wait for that round trip before
-returning.
+returning. On macOS the answer must also come from the program just registered, read from the
+report's `daemon.provenance.executablePath`, so a stray daemon still holding the socket cannot pass
+for it.
 
 ### Exclusive ownership
 
@@ -307,9 +348,10 @@ something a person has to notice: the registration stays correct, and the daemon
 moment the incumbent leaves. Note that `daemon install` still reports ready in this case, because
 the health round trip it waits for is answered by whoever owns the endpoint.
 
-Because launchd keeps the registered daemon alive, **Quit** in the app's menu bar restarts it
-rather than stopping it. `shutdown` stops the running daemon and `daemon uninstall` removes the
-registration; those are the controls that mean what they say once a registration exists.
+Because launchd keeps the registered daemon alive, killing it restarts it rather than stopping it,
+and **Quit Axon Menu** stops only the menu. `shutdown` stops the running daemon and `daemon
+uninstall` removes the registration; those are the controls that mean what they say once a
+registration exists.
 
 On macOS ownership is an exclusive advisory lock taken before the socket is bound, and the refusal
 names the process holding it. On Windows the pipe is created as a single instance and the operating
@@ -339,8 +381,9 @@ rather than treated as failures — see `session` below.
 ## The health-v1 status document
 
 `status --json` emits one document described by `schema/health-v1.schema.json`. The fixtures in
-`schema/fixtures/health/` are the shared examples, and both the Swift and Rust implementations are
-tested against those same files.
+`schema/fixtures/health/` are the shared examples. The Swift CLI that writes the document on macOS
+and the Rust implementations are tested against those same files, and the macOS daemon fixtures are
+generated from `axon-mac`'s own health code path.
 
 Degradation is data. A daemon that is not running, a host at a login greeter, and a denied
 Accessibility grant all produce schema-valid documents rather than transport errors, and all exit
@@ -358,10 +401,20 @@ that consumes `status --json` should read `health-v1`.
 ```json
 {
   "schemaVersion": "health-v1",
-  "version": "0.2.2",
+  "version": "0.4.0",
   "platform": "macos",
-  "daemon": { "running": true, "ready": true, "endpoint": "/tmp/axon.sock", "processId": 4210 },
-  "registration": { "registered": true, "mechanism": "launchd", "path": "/Applications/Axon.app/Contents/MacOS/Axon" },
+  "daemon": {
+    "running": true, "ready": true, "endpoint": "/tmp/axon.sock", "processId": 4210,
+    "provenance": { "backend": "rust-axon-mac", "executablePath": "/Applications/Axon.app/Contents/MacOS/Axon", "processId": 4210, "version": "0.4.0" },
+    "shellContract": 1
+  },
+  "registration": {
+    "registered": true, "mechanism": "launchd", "path": "/Applications/Axon.app/Contents/MacOS/Axon",
+    "jobs": [
+      { "label": "dev.axon.daemon", "loaded": true, "processId": 4210, "path": "/Applications/Axon.app/Contents/MacOS/Axon" },
+      { "label": "dev.axon.menu", "loaded": true, "processId": 4211, "path": "/Applications/Axon.app/Contents/Library/Applications/Axon Menu.app/Contents/MacOS/AxonMenu" }
+    ]
+  },
   "session": { "interactive": true, "graphical": true },
   "permissions": [{ "name": "accessibility", "granted": true }],
   "capabilities": [{ "capability": "enumerate", "usable": true }]
@@ -373,10 +426,18 @@ that consumes `status --json` should read `health-v1`.
 - **`schemaVersion`** is this contract's identity. **`version`** is the product SemVer. They are
   versioned independently: a product release never changes the schema major on its own.
 - **`daemon`** describes the process. `running` means a daemon answered on the local transport;
-  `ready` means it answered after its accessibility backend finished initializing. `endpoint` is
-  the local socket path or pipe name — always local.
+  `ready` means it answered after its accessibility backend finished initializing, and on macOS
+  also that it holds Accessibility in an interactive graphical session. `endpoint` is the local
+  socket path or pipe name — always local. `provenance`, from a daemon that publishes it, names
+  the implementation that answered (`backend`: `rust-axon-mac`, `rust-axon-win`, or
+  `rust-axon-linux`), the `executablePath` actually serving, its `processId`, and its `version`;
+  `executablePath` can differ from `registration.path` when something other than the registration
+  holds the endpoint. `shellContract` is macOS only: the version of the daemon-to-menu contract
+  the daemon serves, which the menu checks before it offers anything.
 - **`registration`** describes the start-at-login entry and is owned by the CLI, not the daemon.
-  `path` is what the platform will actually run.
+  `path` is what the platform will actually run. On macOS `jobs` lists both launchd jobs, each with
+  whether launchd has it `loaded`, its `processId` while it runs, and the `path` its plist names;
+  `registered` and `path` above describe the daemon job alone.
 - **`session`** describes the session the reported daemon occupies, or the session the reporting
   CLI occupies when no daemon is running. `interactive` is a logged-in user session rather than a
   service session; `graphical` is a usable desktop rather than a greeter.
@@ -446,6 +507,30 @@ events with the do-not-prompt flag, so an event whose consent the check did not 
 The list is published as `$defs/knownCapabilities` in the schema and grows additively. It is not
 closed; a consumer must tolerate a capability key it has never seen.
 
+On macOS `observeChanges` is unusable with reason `not-implemented` even when every grant is held.
+The daemon has no Accessibility event observer: `look(since:)` is answered by comparing a fresh
+capture with the retained one, and `wait_for_value` and `wait_for_stability` poll. Those tools work;
+the capability entry reports only that no event stream backs them.
+
+## Tools unavailable on macOS
+
+Two parts of the surface answer with a typed refusal on macOS rather than acting. `drag` stays in
+the CLI, the SDKs, and the MCP tool list, but the daemon refuses it with JSON-RPC `-32004` and
+capability `PointerDrag`, reason `not-implemented`. The editor's step debugger (`debug.*`) is
+refused the same way with capability `DebugSession`. Both are statically absent from the macOS
+daemon rather than gated on permissions, so no grant or session state changes the answer.
+
+## Redaction
+
+Observation output is redacted for secrets bound to a run's arguments and for values matching
+Axon's deterministic credential patterns. Before 0.4.0 Axon could also redact values found in a
+1Password-backed index that `axon refresh-secrets` built; that capability is retired.
+`refresh-secrets` exits non-zero saying so, and `daemon install` deletes the index file an earlier
+release left at `~/Library/Application Support/Axon/active-credential-index.json`. It leaves the
+HMAC key in the Keychain, because deleting another binary's Keychain item can raise a prompt during
+an otherwise silent upgrade; `security delete-generic-password -s
+com.bleugreen.axon.active-credential-index -a hmac-key-v1` removes it.
+
 ### Degraded examples
 
 Each of these is a fixture in `schema/fixtures/health/`, and each is a state a consumer should
@@ -454,9 +539,12 @@ expect to see in production.
 - **No daemon.** `daemon.running` and `daemon.ready` are false with reason `daemon-not-running`,
   every capability is unusable for the same reason, and permissions the CLI cannot confirm without
   the daemon are reported ungranted with that reason rather than guessed at.
-- **macOS Accessibility denied.** The daemon is ready, `accessibility` is ungranted, and every
-  capability that drives the Accessibility APIs is unusable. Listing applications and taking
-  screenshots survive, because neither answers to that grant.
+- **macOS Accessibility denied.** The daemon answers but is not ready, with reason
+  `daemon-not-ready`, and `accessibility` is ungranted. Every capability that drives the
+  Accessibility APIs is unusable, and that includes listing applications and screenshots, because
+  the macOS daemon names an application, and the window to capture, through the Accessibility API.
+  Serializing call history survives. Screen Recording is reported from its own TCC row and can read
+  granted at the same time.
 - **Windows service session.** `session.interactive` is false with reason
   `not-interactive-session`. This is what a remote-shell install looks like, and it is why
   registration alone is not evidence that automation will work.

@@ -225,8 +225,10 @@ Releases before 0.4.0 could redact values found in a 1Password-backed index that
 a run's arguments and values matching its deterministic credential patterns. `axon refresh-secrets`
 exits with an error that says so.
 
-`daemon install`, which an update, `axon start`, and opening `Axon.app` all run, deletes the old
-index at `~/Library/Application Support/Axon/active-credential-index.json` and prints that it did.
+The first `daemon install` of 0.4.0 deletes the old index at
+`~/Library/Application Support/Axon/active-credential-index.json` and prints that it did. An in-app
+update runs it, and so does opening `Axon.app` or running `axon start` after any other upgrade from
+0.3.x.
 The file held HMAC digests and is inert without its key. The key itself stays in your Keychain,
 because deleting another program's Keychain item can raise a prompt in the middle of an upgrade that
 is otherwise silent. Remove it yourself with:

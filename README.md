@@ -2,7 +2,7 @@
 
 Axon is a local accessibility service that gives agents a typed, composable path into running apps on macOS, Windows, and Linux. It is the connective layer between an agent's intent and an app's UI — semantic locators over coordinates, a flat set of primitive actions, honest results, and recordable sessions that replay as plain text files.
 
-On macOS it runs as a menu bar service. Windows installs the `axon-win` CLI beside a windowless `axon-win-daemon` process, while Linux uses the `axon-linux` daemon. Each exposes a small JSON-RPC command surface over local IPC and provides an MCP stdio facade for agent clients. What is proven to work where — separated into Supported, Supported with limits, and Experimental tiers — is recorded in the [cross-platform support matrix](docs/cross-platform.md#support-matrix). The core loop is:
+On macOS it runs as a background daemon inside `Axon.app`, with a menu bar app that shows its state. Windows installs the `axon-win` CLI beside a windowless `axon-win-daemon` process, while Linux uses the `axon-linux` daemon. Each exposes a small JSON-RPC command surface over local IPC and provides an MCP stdio facade for agent clients. What is proven to work where — separated into Supported, Supported with limits, and Experimental tiers — is recorded in the [cross-platform support matrix](docs/cross-platform.md#support-matrix). The core loop is:
 
 1. look at app state
 2. find an honest target
@@ -38,7 +38,7 @@ Then register the installed CLI with an MCP client:
 claude mcp add axon -- axon mcp   # or: codex mcp add axon -- axon mcp
 ```
 
-On macOS, `axon` with no arguments launches `Axon.app`, checks the socket, and requests Accessibility permission if it is missing. Approve `Axon.app` in **System Settings → Privacy & Security → Accessibility**. Once accessibility is trusted, the setup output prints the register-with-MCP commands shown above.
+On macOS, `axon` with no arguments (or opening `Axon.app`) registers the daemon and its menu bar app to start at login, starts them, checks the socket, and requests Accessibility permission if it is missing. Approve `Axon.app` in **System Settings → Privacy & Security → Accessibility**. Once accessibility is trusted, the setup output prints the register-with-MCP commands shown above.
 
 ## Why Axon
 
@@ -51,7 +51,7 @@ The four guarantees Axon tries to make:
 - **Semantic targets, not coordinates.** Locators use AX role, label, identifier, window scope, ancestry, nearby text, action support, value signals, and weak frame tie-breakers. Point targets are an escape hatch.
 - **Honest results.** Dispatch success and goal success are distinct. A click that posted but produced no UI change does not return "success."
 - **Stable contracts.** The JSON-RPC socket protocol and the `.axn` file format are intended as durable shapes that downstream tools can build on.
-- **Local and inspectable.** The service is a menu bar app you can see, quit, restart, and approve. `.axn` files are human-readable text.
+- **Local and inspectable.** The service is a local daemon with a menu bar app you can see, a status command that names what it is running, and permissions you approve. `.axn` files are human-readable text.
 
 ## Documentation
 
@@ -66,16 +66,16 @@ Contributor references, design rationale, and historical records remain in [`doc
 
 ## Current Shape
 
-- signed `Axon.app` menu bar service with bundled `axon` CLI, installed via Homebrew cask
+- signed `Axon.app` holding the Rust daemon, its menu bar app, the `.axn` editor, and the bundled `axon` CLI, installed directly or via Homebrew cask
 - compact app snapshots with per-snapshot handles
 - opt-in embedded screenshots returned as MCP image content
 - scored locator resolution over role, subrole, title, value, description, identifier, actions, window scope, nearby text, frame hints, and ancestors
 - primitive actions: `click`, `type`, `keyboard`, `scroll`, `drag`, `invoke`
-- coarse `look(since:)` checks backed by observer hints plus fresh app/window signatures
+- coarse `look(since:)` checks that compare fresh app/window signatures
 - `run` and `.axn` files: ordered tool-call sequences, replayable from CLI or MCP
 - `save`: turn recorded session history into an editable `.axn` file
 
-Scroll is intentionally AX-native: Axon resolves an offscreen descendant in the requested direction and requests `AXScrollToVisible`. Drag is still an escape-hatch pointer primitive; see [Drag Targeting and Verification](docs/issues/2026-05-12-drag-targeting-and-verification.md) for the next shape.
+Scroll with no delta is AX-native: Axon resolves an offscreen descendant in the requested direction and requests `AXScrollToVisible`. Drag is unavailable on macOS as of 0.4.0: the verb remains, and the daemon refuses it with a typed capability error. See [Drag Targeting and Verification](docs/issues/2026-05-12-drag-targeting-and-verification.md) for the shape it should come back in.
 
 ## Building from Source
 
@@ -85,7 +85,7 @@ make test
 make package-app
 ```
 
-See [Releasing Axon](docs/releasing.md) for signing, notarization, and the development socket workflow.
+Packaging the macOS app needs both Swift and a Rust toolchain, because the daemon inside `Axon.app` is built with cargo. See [Releasing Axon](docs/releasing.md) for signing, notarization, and the development socket workflow.
 
 ## Contributing
 
