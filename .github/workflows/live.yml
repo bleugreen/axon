@@ -484,7 +484,7 @@ jobs:
           for _ in {1..20}; do
             check="$(since_look "$since_token")"
             # A diff, or the full observation the daemon returns when the diff is too large to be
-          # worth sending. A baseline-expired fallback is not a change report: it means the token
+            # worth sending. A baseline-expired fallback is not a change report: it means the token
             # was forgotten.
             if printf '%s' "$check" | jq -e '
               .result.isError == false
@@ -677,7 +677,7 @@ jobs:
 
           if [ "$menu_was_loaded" = true ]; then
             # Loaded here only when the restart's own readiness wait failed before reaching it;
-          # the daemon is verified by now, so the order still holds.
+            # the daemon is verified by now, so the order still holds.
             if ! job_loaded "$AXON_MENU_AGENT_LABEL"; then
               launchctl bootstrap "gui/$uid" "$agents/$AXON_MENU_AGENT_LABEL.plist" || true
             fi
