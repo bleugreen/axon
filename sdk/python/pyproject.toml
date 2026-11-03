@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "axon-cmd"
-version = "0.3.6"
+version = "0.4.0"
 description = "Programmatic Python and TypeScript clients for sending commands to a local Axon daemon."
 readme = "README.md"
 requires-python = ">=3.11"
