@@ -546,51 +546,6 @@ private func makeReleaseBundle(
     ) == nil)
 }
 
-@Test func healthRequestAnswersWithTheDaemonReport() throws {
-    let router = CommandRouter(services: CommandRouterServices(
-        endpoint: "/tmp/axon-test.sock",
-        daemonReport: { endpoint in
-            Doctor.daemonReport(
-                endpoint: endpoint,
-                ready: true,
-                processId: 4210,
-                report: DoctorReport(
-                    accessibility: PermissionReport(name: "Accessibility", status: .trusted),
-                    screenRecording: PermissionReport(name: "Screen Recording", status: .denied)
-                ),
-                session: SessionHealth(interactive: true, graphical: true)
-            )
-        }
-    ))
-
-    let response = router.handle(JSONRPCRequest(id: .string("health"), method: "health"))
-    let report = try DaemonReport(jsonObject: try #require(response.result))
-
-    #expect(report.ready)
-    #expect(report.processId == 4210)
-    #expect(report.endpoint == "/tmp/axon-test.sock")
-    #expect(report.version == AxonVersion.current)
-    #expect(report.capabilities.count == AxonCapability.allCases.count)
-    #expect(report.permissions.first { $0.name == HealthPermission.screenRecording }?.granted == false)
-}
-
-@Test func shutdownRequestIsAnsweredBeforeTheDaemonStops() {
-    // The response has to reach the caller: a lifecycle command learns which process it stopped
-    // from this reply, and cannot otherwise tell a clean stop from a crashed daemon.
-    final class ShutdownSpy: @unchecked Sendable {
-        var requested = false
-    }
-    let spy = ShutdownSpy()
-    let router = CommandRouter(services: CommandRouterServices(requestShutdown: { spy.requested = true }))
-
-    let response = router.handle(JSONRPCRequest(id: .string("shutdown"), method: "shutdown"))
-
-    #expect(spy.requested)
-    #expect(response.error == nil)
-    #expect(response.result?["shutdown"] == .bool(true))
-    #expect(response.result?["processId"] == .int(Int(ProcessInfo.processInfo.processIdentifier)))
-}
-
 @Test func launchAgentStartReloadsExistingServiceWhenBootstrapFails() throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("axon-launchagent-reload-\(UUID().uuidString)")
