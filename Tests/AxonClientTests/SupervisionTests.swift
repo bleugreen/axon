@@ -110,7 +110,15 @@ private struct Fixture {
     }
 }
 
-private let readyReport = DaemonReport(endpoint: "/tmp/axon-test.sock", running: true, ready: true, processId: 501, version: "0.4.0")
+private let readyReport = DaemonReport(
+    version: "0.4.0",
+    ready: true,
+    processId: 501,
+    endpoint: "/tmp/axon-test.sock",
+    session: SessionHealth(interactive: true, graphical: true),
+    permissions: [],
+    capabilities: []
+)
 
 @Test func aFirstInstallWritesBothJobsAndStartsTheMenuOnlyAfterTheDaemonIsReady() throws {
     let fixture = try Fixture()
