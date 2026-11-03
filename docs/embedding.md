@@ -512,25 +512,6 @@ The daemon has no Accessibility event observer: `look(since:)` is answered by co
 capture with the retained one, and `wait_for_value` and `wait_for_stability` poll. Those tools work;
 the capability entry reports only that no event stream backs them.
 
-## Tools unavailable on macOS
-
-Two parts of the surface answer with a typed refusal on macOS rather than acting. `drag` stays in
-the CLI, the SDKs, and the MCP tool list, but the daemon refuses it with JSON-RPC `-32004` and
-capability `PointerDrag`, reason `not-implemented`. The editor's step debugger (`debug.*`) is
-refused the same way with capability `DebugSession`. Both are statically absent from the macOS
-daemon rather than gated on permissions, so no grant or session state changes the answer.
-
-## Redaction
-
-Observation output is redacted for secrets bound to a run's arguments and for values matching
-Axon's deterministic credential patterns. Before 0.4.0 Axon could also redact values found in a
-1Password-backed index that `axon refresh-secrets` built; that capability is retired.
-`refresh-secrets` exits non-zero saying so, and `daemon install` deletes the index file an earlier
-release left at `~/Library/Application Support/Axon/active-credential-index.json`. It leaves the
-HMAC key in the Keychain, because deleting another binary's Keychain item can raise a prompt during
-an otherwise silent upgrade; `security delete-generic-password -s
-com.bleugreen.axon.active-credential-index -a hmac-key-v1` removes it.
-
 ### Degraded examples
 
 Each of these is a fixture in `schema/fixtures/health/`, and each is a state a consumer should
@@ -572,6 +553,25 @@ Within `health-v1`:
 Product releases are versioned independently and may add fields within the same schema major. A
 consumer should validate `schemaVersion` and refuse a major it does not implement; both Axon
 implementations do exactly that and reject an unknown major rather than parsing it optimistically.
+
+## Tools unavailable on macOS
+
+Two parts of the surface answer with a typed refusal on macOS rather than acting. `drag` stays in
+the CLI, the SDKs, and the MCP tool list, but the daemon refuses it with JSON-RPC `-32004` and
+capability `PointerDrag`, reason `not-implemented`. The editor's step debugger (`debug.*`) is
+refused the same way with capability `DebugSession`. Both are statically absent from the macOS
+daemon rather than gated on permissions, so no grant or session state changes the answer.
+
+## Redaction
+
+Observation output is redacted for secrets bound to a run's arguments and for values matching
+Axon's deterministic credential patterns. Before 0.4.0 Axon could also redact values found in a
+1Password-backed index that `axon refresh-secrets` built; that capability is retired.
+`refresh-secrets` exits non-zero saying so, and `daemon install` deletes the index file an earlier
+release left at `~/Library/Application Support/Axon/active-credential-index.json`. It leaves the
+HMAC key in the Keychain, because deleting another binary's Keychain item can raise a prompt during
+an otherwise silent upgrade; `security delete-generic-password -s
+com.bleugreen.axon.active-credential-index -a hmac-key-v1` removes it.
 
 ## Non-goals
 
