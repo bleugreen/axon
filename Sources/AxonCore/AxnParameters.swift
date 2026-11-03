@@ -1,6 +1,18 @@
 import AxonClient
 import Foundation
 
+/// An `.axn` argument declaration or reference the document model rejects.
+public enum AxnRunError: Error, CustomStringConvertible {
+    case invalidParams(String)
+
+    public var description: String {
+        switch self {
+        case let .invalidParams(message):
+            return message
+        }
+    }
+}
+
 /// The editor's run request: each action without its own `deliveryPolicy` gets the editor's.
 public enum AxnRunParameters {
     public static func applyingDefaultDeliveryPolicy(

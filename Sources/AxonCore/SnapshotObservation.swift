@@ -708,13 +708,14 @@ public struct SnapshotObservationFormatter {
         return x != nil && x! < -1_000
     }
 
-    // Shares `ReadableTextAttribute` with `TextLocationResolver` so the two cannot disagree
-    // about which attributes carry text. The predicates still differ beyond that list: this
-    // one also rejects pointer descriptions, and opacity marking happens later and for
-    // reasons unrelated to text. See the constant's documentation.
+    /// The accessibility attributes that carry a node's readable text, in the order the daemon's
+    /// text-location matching consults them (`rust/axon-core`), so a rendered label and a text
+    /// match agree on which attribute is the text. This one also rejects pointer descriptions.
+    private static let readableTextAttributes = ["title", "value", "description", "identifier", "help"]
+
     private func label(in object: [String: JSONValue]) -> String? {
-        for attribute in ReadableTextAttribute.allCases {
-            if let value = string(attribute.rawValue, in: object), !value.isEmpty, !isAXPointerDescription(value) {
+        for attribute in Self.readableTextAttributes {
+            if let value = string(attribute, in: object), !value.isEmpty, !isAXPointerDescription(value) {
                 return value
             }
         }
