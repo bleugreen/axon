@@ -98,6 +98,9 @@ artifact it wants; see [Embedding Axon](embedding.md).
 It also prints the SHA-256. The Homebrew cask is written by the release workflow's publish job
 alone.
 
+Release notes for a version live at `docs/releases/<version>.md`. A release that changes what users
+see, retires a capability, or needs a rollback procedure says so there.
+
 For release signing, provide a Developer ID identity:
 
 ```sh
