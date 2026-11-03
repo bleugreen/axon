@@ -212,21 +212,6 @@ enum MenuModel {
         }
     }
 
-    /// The recording picker: each running application once, then every application.
-    ///
-    /// The daemon scopes a recording by name and bundle identifier and takes no pid, so two
-    /// instances of one application are one choice.
-    static func pickerScopes(for apps: [AppIdentity]) -> [RecordingScope] {
-        var seen = Set<String>()
-        var scopes: [RecordingScope] = []
-        for app in apps {
-            let key = app.bundleIdentifier ?? "name:\(app.name)"
-            guard seen.insert(key).inserted else { continue }
-            scopes.append(.application(RecordingApp(name: app.name, bundleIdentifier: app.bundleIdentifier)))
-        }
-        return scopes + [.allApplications]
-    }
-
     private static func isInside(_ path: String, bundle: String) -> Bool {
         let bundle = URL(fileURLWithPath: bundle).standardizedFileURL.path
         return URL(fileURLWithPath: path).standardizedFileURL.path.hasPrefix(bundle + "/")

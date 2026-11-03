@@ -276,7 +276,7 @@ final class MenuShell: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func startRecording() {
         let apps = AppResolver().recordableApps(recency: appRecency.snapshot())
             .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
-        let scopes = MenuModel.pickerScopes(for: apps)
+        let scopes = RecordingScope.pickerScopes(for: apps)
         let picker = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 320, height: 28), pullsDown: false)
         scopes.forEach { picker.addItem(withTitle: $0.displayName) }
         let alert = NSAlert()
@@ -606,6 +606,13 @@ private final class RecordingAppRecencyStore {
 @main
 enum AxonMenuMain {
     static func main() {
+        // One menu per user. launchd starts one, and Spotlight or Finder can open the nested
+        // bundle again; the later copy leaves, exiting 0 so launchd does not count it as a crash.
+        if let identifier = Bundle.main.bundleIdentifier,
+           NSRunningApplication.runningApplications(withBundleIdentifier: identifier)
+               .contains(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }) {
+            exit(0)
+        }
         MainActor.assumeIsolated {
             let app = NSApplication.shared
             let shell = MenuShell()

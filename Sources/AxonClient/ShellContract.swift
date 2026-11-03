@@ -86,6 +86,36 @@ public enum RecordingScope: Codable, Equatable, Sendable {
         case .allApplications: return "All Running Apps"
         }
     }
+
+    /// The recording picker the menu and the editor both show: each running application once,
+    /// then every application.
+    ///
+    /// The daemon scopes a recording by name and bundle identifier and takes no pid, so two
+    /// instances of one application are one choice.
+    public static func pickerScopes(for apps: [AppIdentity]) -> [RecordingScope] {
+        var seen = Set<String>()
+        var scopes: [RecordingScope] = []
+        for app in apps {
+            let key = app.bundleIdentifier ?? "name:\(app.name)"
+            guard seen.insert(key).inserted else { continue }
+            scopes.append(.application(RecordingApp(name: app.name, bundleIdentifier: app.bundleIdentifier)))
+        }
+        return scopes + [.allApplications]
+    }
+
+    /// This scope as the `scope` value of `recording.start` and `editor.recordFromHere`.
+    public var jsonValue: JSONValue {
+        switch self {
+        case let .application(app):
+            var fields: [String: JSONValue] = ["name": .string(app.name)]
+            if let bundleIdentifier = app.bundleIdentifier {
+                fields["bundleIdentifier"] = .string(bundleIdentifier)
+            }
+            return .object(["scope": .string("application"), "app": .object(fields)])
+        case .allApplications:
+            return .object(["scope": .string("allApplications")])
+        }
+    }
 }
 
 /// The editor document a recording started from the editor is inserted into.
@@ -234,16 +264,26 @@ public enum DaemonRefusal: Equatable, Sendable {
     case recordingInactive
     /// `-32005` `consent-in-progress`.
     case consentInProgress
+    /// `-32004` `capability-unavailable`: the daemon has no code path for this tool at all, such as
+    /// `DebugSession` for the `debug.*` methods or `PointerDrag` for `drag` on macOS.
+    case notImplemented(capability: String)
 
     public init?(_ error: JSONRPCError) {
         switch (error.code, error.data?["code"]?.stringValue, error.data?["reason"]?.stringValue) {
         case (-32004, "accessibility-denied", _): self = .accessibilityDenied
+        case (-32004, "capability-unavailable", _):
+            guard let capability = error.data?["capability"]?.stringValue else { return nil }
+            self = .notImplemented(capability: capability)
         case (-32005, _, "recording-active"): self = .recordingActive
         case (-32005, _, "recording-inactive"): self = .recordingInactive
         case (-32005, _, "consent-in-progress"): self = .consentInProgress
         default: return nil
         }
     }
+
+    /// The capability the editor's debugger needs; a daemon without it answers every `debug.*`
+    /// method with `.notImplemented(capability: debugSessionCapability)`.
+    public static let debugSessionCapability = "DebugSession"
 }
 
 /// Why a call to the daemon produced no result.
