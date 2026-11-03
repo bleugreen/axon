@@ -229,7 +229,9 @@ on the following step is what makes it worth writing. Do not press Return unless
 the field still holds what was typed.
 
 Supported replay tools are `click`, `type`, `keyboard`, `scroll`, `drag`, and
-`invoke`. Read tools such as `look` and `find` may be kept in history as context
+`invoke`. The format keeps `drag`, but no shipping daemon performs one: a `drag`
+step fails with a typed capability error on every platform, macOS included since
+0.4.0. Read tools such as `look` and `find` may be kept in history as context
 and can be included by `save(..., includeReads: true)`, but normal saved
 workflows omit them.
 
