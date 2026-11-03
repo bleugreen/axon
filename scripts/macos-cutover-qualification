@@ -1746,7 +1746,11 @@ def main(argv):
         log("aborted", error=repr(error))
         verdicts.append(("aborted", False))
     finally:
-        teardown(state)
+        try:
+            teardown(state)
+        except (Exception, KeyboardInterrupt) as error:  # a failed teardown is a failed run, still summarized
+            log("teardown-failed", error=repr(error))
+            verdicts.append(("teardown", False))
     failed = [step for step, ok in verdicts if not ok]
     status = 1 if failed else (3 if gaps else 0)
     passed = [step for step, ok in verdicts if ok]
