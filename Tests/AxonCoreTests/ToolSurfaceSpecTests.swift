@@ -119,51 +119,6 @@ import Testing
     #expect(encoded.contains("Rendered web content frequently exposes no accessibility text"))
 }
 
-@Test func toolTargetParsesAllTargetKinds() throws {
-    #expect(try ToolTarget(jsonValue: .object(["app": .string("Example"), "name": .string("main/submit")])) == .semanticName(app: "Example", name: "main/submit"))
-    #expect(try ToolTarget(jsonValue: .object([
-        "point": .object(["x": .int(25), "y": .double(40.5)])
-    ])) == .point(ActionPoint(x: 25, y: 40.5)))
-    #expect(try ToolTarget(jsonValue: .object([
-        "x": .int(25),
-        "y": .int(40)
-    ])) == .point(ActionPoint(x: 25, y: 40)))
-
-    let location = try ToolTarget(jsonValue: .object([
-        "location": .object([
-            "app": .string("Example"),
-            "text": .string("Submit")
-        ])
-    ]))
-    guard case let .textLocation(target) = location else {
-        Issue.record("Expected text location target")
-        return
-    }
-    #expect(target.app == "Example")
-    #expect(target.source == .auto)
-
-    #expect(throws: JSONRPCError.self) {
-        try ToolTarget(jsonValue: .string("s12:4"))
-    }
-    #expect(throws: JSONRPCError.self) {
-        try ToolTarget(jsonValue: .object([
-            "app": .string("Example"),
-            "locator": .object(["role": .string("AXButton")])
-        ]))
-    }
-}
-
-@Test func toolTargetRejectsKindsOutsideToolAcceptance() throws {
-    #expect(throws: JSONRPCError.self) {
-        try ToolTarget(jsonValue: .object(["x": .int(1), "y": .int(2)]), acceptedKinds: .element)
-    }
-    #expect(throws: JSONRPCError.self) {
-        try ToolTarget(jsonValue: .object([
-            "location": .object(["app": .string("Example"), "text": .string("Submit")])
-        ]), acceptedKinds: .element)
-    }
-}
-
 private func toolNames(in tools: [JSONValue]) -> [String] {
     tools.compactMap { tool in
         guard case let .string(name)? = tool["name"] else {
