@@ -1581,6 +1581,7 @@ def self_test():
             failures.append(name)
 
     clean = {"axonAdded": [], "axonRemoved": [], "axonChanged": []}
+    readable = {"tcc-before.tsv": "direct", "tcc-after.tsv": "direct"}
     check("gate: carried needs every dump to have read the system database",
           tcc_carried(clean, {"a": "direct", "b": "sudo"}) and not tcc_carried(clean, {"a": "direct", "b": "unreadable"})
           and not tcc_carried(clean, {}))
@@ -1598,7 +1599,7 @@ def self_test():
         "system\tkTCCServiceSystemPolicyAllFiles\t/usr/libexec/sshd-keygen-wrapper\t1\t2\t\t50\t",
     ]
     moved_only = [row.replace("\t100\t", "\t999\t") for row in before]
-    check("tcc: last_modified alone is not a change", tcc_carried(tcc_diff(before, moved_only, axon_ids))
+    check("tcc: last_modified alone is not a change", tcc_carried(tcc_diff(before, moved_only, axon_ids), readable)
           and not any(tcc_diff(before, moved_only, axon_ids).values()))
     rebound = [before[0].replace(csreq_a, csreq_b)] + before[1:]
     diff = tcc_diff(before, rebound, axon_ids)
@@ -1614,7 +1615,7 @@ def self_test():
     path_row = before + ["system\tkTCCServiceAccessibility\t/Users/dev/AxonBench/axn125/abc123/Axon.app/Contents/MacOS/Axon\t1\t2\t\t200\t"]
     check("tcc: a path-keyed row inside the candidate is Axon's", len(tcc_diff(before, path_row, axon_ids)["axonAdded"]) == 1)
     check("tcc: the sshd-keygen-wrapper row is pre-existing and ignored",
-          tcc_carried(tcc_diff(before, before, axon_ids)) and not tcc_diff(before, before, axon_ids)["foreignAdded"])
+          tcc_carried(tcc_diff(before, before, axon_ids), readable) and not tcc_diff(before, before, axon_ids)["foreignAdded"])
     allowed = allowed_services(before[:1], axon_ids, {"screenRecording": True})
     check("tcc: allowed services come from rows and from health", allowed == {"kTCCServiceAccessibility", SCREEN_CAPTURE})
 
