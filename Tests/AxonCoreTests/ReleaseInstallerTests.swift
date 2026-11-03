@@ -64,14 +64,15 @@ private func makeAxonBundle(at bundleURL: URL, version: String, identifier: Stri
     #expect(try installer.verifiedBundle(in: root, expectedVersion: "0.4.0") == bundle)
 
     let menuPlist = bundle.appendingPathComponent(AppBundle.nestedMenuRelativePath).appendingPathComponent("Contents/Info.plist")
-    try writePlist(
-        [
+    try PropertyListSerialization.data(
+        fromPropertyList: [
             "CFBundleIdentifier": AppBundle.axonMenuIdentifier,
             "CFBundleShortVersionString": "0.3.9",
             "CFBundleExecutable": "AxonMenu"
         ],
-        to: menuPlist
-    )
+        format: .xml,
+        options: 0
+    ).write(to: menuPlist)
     #expect(throws: ReleaseInstallError.self) {
         try installer.verifiedBundle(in: root, expectedVersion: "0.4.0")
     }
