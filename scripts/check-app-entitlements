@@ -21,9 +21,15 @@ APP="${1:-dist/Axon.app}"
 EXPECTED='{"com.apple.security.automation.apple-events":true}'
 
 entitlements_json() {
-  # An unsigned or entitlement-free bundle prints nothing here.
-  /usr/bin/codesign -d --entitlements - --xml "$1" 2>/dev/null \
-    | /usr/bin/plutil -convert json -o - - 2>/dev/null || true
+  # An unsigned or entitlement-free bundle prints nothing here. That is answered before plutil sees
+  # it: given empty input, plutil reports its parse error on stdout, which would read as an
+  # entitlement set.
+  local xml
+  xml="$(/usr/bin/codesign -d --entitlements - --xml "$1" 2>/dev/null || true)"
+  if [[ -z "$xml" ]]; then
+    return 0
+  fi
+  printf '%s' "$xml" | /usr/bin/plutil -convert json -o - - 2>/dev/null || true
 }
 
 ACTUAL="$(entitlements_json "$APP")"
