@@ -263,6 +263,35 @@ fn permission_states(permissions: MacPermissions) -> Vec<PermissionState> {
     ]
 }
 
+/// The `health` answer as a pure function of what the daemon observed, so the shared macOS health
+/// fixtures can be produced by this code path rather than written by hand.
+fn daemon_report(
+    permissions: MacPermissions,
+    session: SessionHealth,
+    process_id: u32,
+    endpoint: &str,
+    executable_path: &str,
+    version: &str,
+) -> DaemonReport {
+    DaemonReport {
+        version: version.to_owned(),
+        platform: HealthPlatform::Macos,
+        ready: permissions.accessibility && session.interactive && session.graphical,
+        process_id,
+        endpoint: endpoint.to_owned(),
+        provenance: Some(DaemonProvenance {
+            backend: "rust-axon-mac".into(),
+            process_id,
+            executable_path: executable_path.to_owned(),
+            version: version.to_owned(),
+        }),
+        shell_contract: Some(SHELL_CONTRACT_VERSION),
+        session,
+        permissions: permission_states(permissions),
+        capabilities: CapabilityState::complete(&capability_report(permissions)),
+    }
+}
+
 /// The menu shell's methods take no parameters; anything else is a caller bug worth naming.
 fn no_params(request: &JsonRpcRequest) -> Result<(), JsonRpcError> {
     match &request.params {
@@ -323,31 +352,16 @@ fn dispatch(
             // denied-Accessibility daemon report Screen Recording ungranted, and going through
             // `MacBackend::new()` here meant a construction failure would silently publish an
             // empty capability list.
-            let permissions = MacPermissions::read();
-            let reported = capability_report(permissions);
-            let version = env!("CARGO_PKG_VERSION").to_owned();
-            let process_id = std::process::id();
-            let executable_path = std::env::current_exe()
-                .map(|path| path.display().to_string())
-                .unwrap_or_default();
-            let session = session_health();
-            let report = DaemonReport {
-                version: version.clone(),
-                platform: HealthPlatform::Macos,
-                ready: permissions.accessibility && session.interactive && session.graphical,
-                process_id,
-                endpoint: endpoint.display().to_string(),
-                provenance: Some(DaemonProvenance {
-                    backend: "rust-axon-mac".into(),
-                    process_id,
-                    executable_path,
-                    version,
-                }),
-                shell_contract: Some(SHELL_CONTRACT_VERSION),
-                session,
-                permissions: permission_states(permissions),
-                capabilities: CapabilityState::complete(&reported),
-            };
+            let report = daemon_report(
+                MacPermissions::read(),
+                session_health(),
+                std::process::id(),
+                &endpoint.display().to_string(),
+                &std::env::current_exe()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_default(),
+                env!("CARGO_PKG_VERSION"),
+            );
             (
                 serde_json::to_value(JsonRpcResponse::success(
                     id,

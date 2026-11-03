@@ -167,6 +167,12 @@ pub struct DaemonHealth {
     pub endpoint: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process_id: Option<u32>,
+    /// Which implementation answered, from a daemon that says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<DaemonProvenance>,
+    /// The daemon-to-menu-shell contract version, from a daemon that serves the macOS menu.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell_contract: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -446,6 +452,8 @@ impl HealthReport {
                 ready: daemon.ready,
                 endpoint: daemon.endpoint,
                 process_id: Some(daemon.process_id),
+                provenance: daemon.provenance,
+                shell_contract: daemon.shell_contract,
                 reason: (!daemon.ready).then(|| reason::DAEMON_NOT_READY.into()),
                 detail: None,
             },
@@ -479,6 +487,8 @@ impl HealthReport {
                 ready: false,
                 endpoint: endpoint.into(),
                 process_id: None,
+                provenance: None,
+                shell_contract: None,
                 reason: Some(reason::VERSION_SKEW.into()),
                 detail,
             },
@@ -505,6 +515,8 @@ impl HealthReport {
                 ready: false,
                 endpoint: report.endpoint,
                 process_id: None,
+                provenance: None,
+                shell_contract: None,
                 reason: Some(report.code.into()),
                 detail: report.detail,
             },

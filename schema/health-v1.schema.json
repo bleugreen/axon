@@ -71,6 +71,21 @@
           "type": "string"
         },
         "processId": { "type": ["integer", "null"], "minimum": 1 },
+        "provenance": {
+          "description": "Which implementation answered, from a daemon that says: `backend` names it (`rust-axon-mac`, `rust-axon-win`, `rust-axon-linux`), and `executablePath` is the binary actually serving, which may differ from `registration.path` when something other than the registration holds the endpoint.",
+          "type": ["object", "null"],
+          "required": ["backend", "processId", "executablePath", "version"],
+          "properties": {
+            "backend": { "type": "string" },
+            "processId": { "type": "integer", "minimum": 1 },
+            "executablePath": { "type": "string" },
+            "version": { "type": "string" }
+          }
+        },
+        "shellContract": {
+          "description": "macOS only: the daemon-to-menu-shell contract version the daemon serves (shell-v1 is 1). Absent from a daemon that serves no menu shell.",
+          "type": ["integer", "null"]
+        },
         "reason": { "oneOf": [{ "$ref": "#/$defs/reason" }, { "type": "null" }] },
         "detail": { "$ref": "#/$defs/detail" }
       }
