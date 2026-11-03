@@ -39,7 +39,7 @@ Static availability is not a claim that every runtime environment works. Permiss
 | `drag` (`drag`) | **N/— M** an accepted degradation of the 0.4.0 flip: the CLI and SDKs keep the verb, and the daemon refuses it with `PointerDrag` [N-M] | **N/— W** [N-W] | **N/— L** [N-L] |
 | `invoke` (`invoke`) | **I/A M** named AX action | **P/A W** UIA InvokePattern only [P-W-INVOKE] | **I/A L** named AT-SPI action |
 
-Beyond the tool rows, health reports `observeChanges` unusable with `not-implemented` on macOS even with every grant held. That is by design rather than a gate: `axon-mac` has no Accessibility event observer, and the change check and both waits above are served by comparison and polling.
+Beyond the tool rows, health reports `observeChanges` unusable with `not-implemented` on every Rust backend, macOS included, even with every grant held. The capability names an Accessibility event observer: on the Swift daemon (0.3.x and earlier) it was the `AXObserver` stream the daemon used internally, and 0.3.6 reported it usable. No Rust backend has one, and nothing in Axon's own surface depends on it: `look(since:)` compares a fresh capture with the retained one, `wait_for_value` and `wait_for_stability` poll, and the recorder observes input natively. An embedder that gated a feature on `observeChanges` should gate on the tool it actually calls instead.
 
 ### Keyed refusal evidence
 
