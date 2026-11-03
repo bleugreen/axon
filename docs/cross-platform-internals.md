@@ -1155,7 +1155,9 @@ the message, the order of the calls, and which jobs each scenario leaves
 loaded. Its `launchctl` stub keeps a file-backed set of loaded jobs, and its
 `shutdown` and `daemon restart` act on that set the way `Supervision` does, so
 a scenario checks the state the desktop is left in rather than only the calls
-made. It runs on the macOS runner rather than a hosted
+made. The stub can also report a job running once and exited afterwards, which
+is how the evidence a dead candidate's failure prints is rehearsed. It runs on
+the macOS runner rather than a hosted
 one so that the shell interpreting it is the same `bash` 3.2 the live lane gets.
 
 The `Test` workflow's Windows job does the same for the Windows lane, whose
@@ -1250,6 +1252,22 @@ likewise required to be the only process running from it.
 `scripts/assert-daemon-under-test` carries the check for the two lanes that run
 under `bash`; the Windows stage carries its own, because the relay's environment
 is PowerShell in session 0 with no `jq`.
+
+On macOS the same script also takes the job's label, and liveness then comes from
+launchd: each wait iteration reads `launchctl print` again and requires it to
+still name the expected pid, instead of signalling a pid read once, possibly
+while launchd was still spawning the job. A candidate that dies that early has
+not yet opened its log, so the only account of the death is launchd's, and that
+is gone once the restore step boots the label out. So every failure between the
+candidate's bootstrap and its first answer runs `scripts/launchd-job-evidence`
+while the label is still loaded. It prints the job as launchd records it (state,
+last exit code or terminating signal, spawn errors), `launchctl error` for that
+code, whether each log exists, the unified log for the label and the believed
+pid over the last 30 seconds, and any crash report written in the last ten
+minutes. The candidate's logs sit in a directory of the run's own under `/tmp`,
+which the probe creates, not in the runner's temporary directory. The park step
+also waits for the desktop daemon's process to exit after `shutdown` stops it
+answering, so the candidate never starts beside one that is still tearing down.
 
 Two properties of the stop matter as much as making one. It has to be performed
 by the build under test rather than by the runner's installed CLI, which is
