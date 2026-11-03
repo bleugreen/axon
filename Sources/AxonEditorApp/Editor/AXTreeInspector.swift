@@ -15,7 +15,7 @@ struct AXTreeInspector: View {
     @State private var isLoading = false
     @State private var error: String?
     @State private var expandedIDs: Set<String> = []
-    @State private var overlay = AppKitTargetBadgeOverlay(waitsForDisplay: false)
+    @State private var overlay = AppKitTargetBadgeOverlay()
 
     var body: some View {
         VStack(spacing: 0) {
