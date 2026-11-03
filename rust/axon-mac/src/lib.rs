@@ -21,6 +21,8 @@ use std::{
 #[cfg(target_os = "macos")]
 pub mod socket;
 
+pub mod launcher;
+
 #[cfg(target_os = "macos")]
 pub mod probe;
 
