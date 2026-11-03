@@ -504,12 +504,3 @@ private func treeString(in observation: JSONValue) -> String {
     }
     return tree
 }
-
-private extension JSONValue {
-    var arrayValue: [JSONValue]? {
-        guard case let .array(values) = self else {
-            return nil
-        }
-        return values
-    }
-}

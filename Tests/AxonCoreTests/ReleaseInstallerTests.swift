@@ -337,9 +337,11 @@ private func temporaryDirectory(_ name: String) throws -> URL {
     let plistPath = directory.appendingPathComponent("dev.axon.updater.plist")
     try Data("placeholder".utf8).write(to: plistPath)
 
-    var bootouts: [[String]] = []
+    // A `print` that names no pid is a finisher that is not running, so each reap goes on to boot
+    // the job out.
+    var commands: [[String]] = []
     let record: ([String]) throws -> ProcessResult = { arguments in
-        bootouts.append(arguments)
+        commands.append(arguments)
         return ProcessResult(exitCode: 0)
     }
 
@@ -348,6 +350,6 @@ private func temporaryDirectory(_ name: String) throws -> URL {
 
     // Nothing left to reap, and nothing thrown for it.
     LaunchAgentManager.reapUpdateFinisher(plistPath: plistPath, runProcess: record)
-    #expect(bootouts.count == 2)
-    #expect(bootouts.allSatisfy { $0.first == "bootout" && $0.last?.hasSuffix("/dev.axon.updater") == true })
+    #expect(commands.map(\.first) == ["print", "bootout", "print", "bootout"])
+    #expect(commands.allSatisfy { $0.last?.hasSuffix("/dev.axon.updater") == true })
 }
