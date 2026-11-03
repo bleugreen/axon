@@ -34,6 +34,10 @@ SWIFT_VERSION_FILE="Sources/AxonClient/AxonVersion.swift"
 CARGO_WORKSPACE_FILE="rust/Cargo.toml"
 TYPESCRIPT_PACKAGE_FILE="sdk/ts/package.json"
 PYTHON_PACKAGE_FILE="sdk/python/pyproject.toml"
+# Generated from ToolSurfaceSpec.swift (which reads AxonVersion.current) by
+# scripts/check-tool-surface, and published to clients; checked here as a literal too, because the
+# version job runs where Swift does not.
+TOOL_SURFACE_FILE="schema/tool-surface-v1.json"
 
 read_swift_version() {
   sed -n 's/.*public static let current = "\([^"]*\)".*/\1/p' "$SWIFT_VERSION_FILE"
@@ -47,6 +51,10 @@ read_cargo_version() {
 
 read_typescript_package_version() {
   sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TYPESCRIPT_PACKAGE_FILE"
+}
+
+read_tool_surface_version() {
+  sed -n 's/^[[:space:]]*"productVersion"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TOOL_SURFACE_FILE" | head -n 1
 }
 
 read_python_package_version() {
@@ -64,9 +72,11 @@ if [[ "$WRITE" == "1" ]]; then
   rm -f "$TYPESCRIPT_PACKAGE_FILE.bak"
   /usr/bin/sed -i.bak "/^\[project\]/,/^\[/ s/^version = \".*\"/version = \"$VERSION\"/" "$PYTHON_PACKAGE_FILE"
   rm -f "$PYTHON_PACKAGE_FILE.bak"
-  printf 'wrote version %s into %s, %s, %s, and %s\n' \
+  /usr/bin/sed -i.bak "s/^\([[:space:]]*\"productVersion\"[[:space:]]*:[[:space:]]*\)\"[^\"]*\"/\1\"$VERSION\"/" "$TOOL_SURFACE_FILE"
+  rm -f "$TOOL_SURFACE_FILE.bak"
+  printf 'wrote version %s into %s, %s, %s, %s, and %s\n' \
     "$VERSION" "$SWIFT_VERSION_FILE" "$CARGO_WORKSPACE_FILE" \
-    "$TYPESCRIPT_PACKAGE_FILE" "$PYTHON_PACKAGE_FILE"
+    "$TYPESCRIPT_PACKAGE_FILE" "$PYTHON_PACKAGE_FILE" "$TOOL_SURFACE_FILE"
 fi
 
 failures=0
@@ -82,9 +92,11 @@ check "$SWIFT_VERSION_FILE" "$(read_swift_version)"
 check "$CARGO_WORKSPACE_FILE [workspace.package]" "$(read_cargo_version)"
 check "$TYPESCRIPT_PACKAGE_FILE" "$(read_typescript_package_version)"
 check "$PYTHON_PACKAGE_FILE [project]" "$(read_python_package_version)"
+check "$TOOL_SURFACE_FILE productVersion" "$(read_tool_surface_version)"
 
-# Every product crate must inherit the workspace version rather than pinning its own.
-for crate in axon-core axon-win axon-linux; do
+# Every product crate must inherit the workspace version rather than pinning its own. axon-mac is
+# the macOS daemon inside Axon.app, so its `version` is the bundle's.
+for crate in axon-core axon-mac axon-win axon-linux; do
   if ! grep -q '^version\.workspace = true$' "rust/$crate/Cargo.toml"; then
     printf 'version drift: rust/%s/Cargo.toml does not inherit version.workspace\n' "$crate" >&2
     failures=$((failures + 1))
