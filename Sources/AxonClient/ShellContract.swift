@@ -104,17 +104,8 @@ public enum RecordingScope: Codable, Equatable, Sendable {
     }
 
     /// This scope as the `scope` value of `recording.start` and `editor.recordFromHere`.
-    public var jsonValue: JSONValue {
-        switch self {
-        case let .application(app):
-            var fields: [String: JSONValue] = ["name": .string(app.name)]
-            if let bundleIdentifier = app.bundleIdentifier {
-                fields["bundleIdentifier"] = .string(bundleIdentifier)
-            }
-            return .object(["scope": .string("application"), "app": .object(fields)])
-        case .allApplications:
-            return .object(["scope": .string("allApplications")])
-        }
+    public func jsonValue() throws -> JSONValue {
+        try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(self))
     }
 }
 
@@ -341,8 +332,7 @@ public struct DaemonClient: Sendable {
     }
 
     public func startRecording(scope: RecordingScope) throws -> RecordingStatus {
-        let encoded = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(scope))
-        return try call("recording.start", params: .object(["scope": encoded]), timeout: ShellContract.Timeout.action)
+        try call("recording.start", params: .object(["scope": try scope.jsonValue()]), timeout: ShellContract.Timeout.action)
     }
 
     public func stopRecording() throws -> RecordingResult {

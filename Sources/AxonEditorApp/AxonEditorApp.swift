@@ -191,9 +191,31 @@ final class AxonEditorAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// Asks which application to record, then starts a recording whose actions the menu hands back
+    /// to this document. The picker is the menu's own (`RecordingScope.pickerScopes`), over the
+    /// running applications Launch Services lists, which needs no grant. Cancelling sends nothing.
     private func requestRecordFromHere(controller: AxnEditorWindowController, beforeBlockID: String?) {
+        let apps = AppResolver().recordableApps()
+            .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
+        let scopes = RecordingScope.pickerScopes(for: apps)
+        let picker = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 320, height: 28), pullsDown: false)
+        scopes.forEach { picker.addItem(withTitle: $0.displayName) }
+        let alert = NSAlert()
+        alert.messageText = "Record From Here"
+        alert.informativeText = "Choose the app whose actions Axon should record into this file."
+        alert.accessoryView = picker
+        alert.addButton(withTitle: "Record")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn,
+              let scope = try? scopes[picker.indexOfSelectedItem].jsonValue()
+        else {
+            return
+        }
+
         var params: [String: JSONValue] = [
-            "documentId": .string(controller.documentID)
+            "documentId": .string(controller.documentID),
+            "scope": scope
         ]
         if let beforeBlockID {
             params["beforeBlockId"] = .string(beforeBlockID)

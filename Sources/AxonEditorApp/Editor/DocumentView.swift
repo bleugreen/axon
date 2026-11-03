@@ -7,6 +7,23 @@ private enum DebugFollowUp: Sendable {
     case clearStopped
 }
 
+/// Whether the daemon has a step debugger, learned once per editor process from its first typed
+/// refusal, so every window disables the debugger controls together.
+@MainActor
+enum DebuggerAvailability {
+    static let unavailableMessage = "Step debugging isn't available with this Axon daemon yet"
+    private(set) static var isUnavailable = false
+
+    /// Records the refusal and returns true when `error` says the daemon has no debugger.
+    static func noteIfUnavailable(_ error: JSONRPCError) -> Bool {
+        guard DaemonRefusal(error) == .notImplemented(capability: DaemonRefusal.debugSessionCapability) else {
+            return false
+        }
+        isUnavailable = true
+        return true
+    }
+}
+
 struct DocumentView: View {
     @Binding var document: AxnEditorDocument
     let isReview: Bool
@@ -30,6 +47,7 @@ struct DocumentView: View {
     @State private var lastDebugActionID: String?
     @State private var pauseReason: String?
     @State private var repairActionID: String?
+    @State private var debuggerUnavailable = DebuggerAvailability.isUnavailable
 
     init(
         document: Binding<AxnEditorDocument>,
@@ -77,13 +95,15 @@ struct DocumentView: View {
                     detail: debugDetail,
                     isRunning: isRunning,
                     canRun: !document.axn.blocks.isEmpty && !isDebugActive,
-                    canDebug: !document.axn.blocks.isEmpty && !isDebugActive,
-                    canRunToSelection: selectedBlockID != nil && !document.axn.blocks.isEmpty,
+                    canDebug: !document.axn.blocks.isEmpty && !isDebugActive && !debuggerUnavailable,
+                    canRunToSelection: selectedBlockID != nil && !document.axn.blocks.isEmpty && !debuggerUnavailable,
                     canResume: isDebugPaused,
                     canStep: isDebugPaused,
                     canRetry: isDebugFailed,
-                    canRecordFromHere: (isDebugPaused || isDebugFailed) && recordFromHere != nil,
+                    canRecordFromHere: recordFromHere != nil
+                        && (debuggerUnavailable || isDebugPaused || isDebugFailed),
                     canReset: hasDebugState,
+                    debuggerUnavailableMessage: debuggerUnavailable ? DebuggerAvailability.unavailableMessage : nil,
                     run: runAxn,
                     debug: { startDebugSession(runTo: nil) },
                     runToSelection: runToSelection,
@@ -91,7 +111,9 @@ struct DocumentView: View {
                     step: stepDebugSession,
                     retry: retryDebugSession,
                     recordFromHere: {
-                        recordFromHere?(repairActionID ?? cursorBlockID)
+                        // Without a debugger there is no paused position, so the recording goes
+                        // before the selected step (or at the end when nothing is selected).
+                        recordFromHere?(debuggerUnavailable ? selectedBlockID : (repairActionID ?? cursorBlockID))
                     },
                     showInspector: showTreeInspector,
                     reset: resetDebugSession,
@@ -195,6 +217,9 @@ struct DocumentView: View {
     private var debugDetail: String? {
         if let lastError {
             return lastError
+        }
+        if debuggerUnavailable {
+            return DebuggerAvailability.unavailableMessage
         }
         if let pauseReason, pauseReason != "start" {
             return "Paused by \(pauseReason)"
@@ -400,6 +425,11 @@ struct DocumentView: View {
 
     private func handleDebugResponse(_ response: JSONRPCResponse) {
         if let error = response.error {
+            if DebuggerAvailability.noteIfUnavailable(error) {
+                debuggerUnavailable = true
+                clearDebugState(status: "Idle")
+                return
+            }
             runStatus = "Failed"
             lastError = error.message
             return
@@ -574,6 +604,7 @@ private struct DebugControlBar: View {
     let canRetry: Bool
     let canRecordFromHere: Bool
     let canReset: Bool
+    let debuggerUnavailableMessage: String?
     let run: () -> Void
     let debug: () -> Void
     let runToSelection: () -> Void
@@ -614,14 +645,14 @@ private struct DebugControlBar: View {
                     Label("Debug", systemImage: "ladybug")
                 }
                 .disabled(isRunning || !canDebug)
-                .help("Start debugger paused before the first step")
+                .help(debuggerUnavailableMessage ?? "Start debugger paused before the first step")
             }
 
             Button(action: runToSelection) {
                 Label("Run to Selected", systemImage: "arrow.right.to.line")
             }
             .disabled(isRunning || !canRunToSelection)
-            .help("Run until the selected step and pause before it")
+            .help(debuggerUnavailableMessage ?? "Run until the selected step and pause before it")
 
             if canResume || canStep || canRetry {
                 Divider()
@@ -657,7 +688,9 @@ private struct DebugControlBar: View {
                     Label("Record From Here", systemImage: "record.circle")
                 }
                 .disabled(isRunning)
-                .help("Record new steps at the current debug position")
+                .help(debuggerUnavailableMessage == nil
+                    ? "Record new steps at the current debug position"
+                    : "Record new steps before the selected step")
             }
 
             Spacer(minLength: 0)
