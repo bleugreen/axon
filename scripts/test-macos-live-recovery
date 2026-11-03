@@ -247,10 +247,14 @@ STUBS = {
     # scenario can assert what was asked; a real query here would be slow and read this machine.
     "log": 'echo "log $*" >> "$STUB_LOG"; echo "stub unified log entry"',
     # `ps -p PID` succeeds while PID is listed in $STUB_STATE/ps_alive, so a scenario can say a
-    # process outlived its job.
+    # process outlived its job. STUB_PS_EXITS_AFTER=N has those processes exit once they have been
+    # asked about N times, which is a process that takes a moment to finish tearing down.
     "ps": """
         echo "ps $*" >> "$STUB_LOG"
         [ "$1" = -p ] || exit 64
+        asked=$(( $(cat "$STUB_STATE/ps_asked" 2>/dev/null || echo 0) + 1 ))
+        echo "$asked" > "$STUB_STATE/ps_asked"
+        if [ -n "${STUB_PS_EXITS_AFTER:-}" ] && [ "$asked" -gt "$STUB_PS_EXITS_AFTER" ]; then exit 1; fi
         case " $(cat "$STUB_STATE/ps_alive" 2>/dev/null) " in *" $2 "*) exit 0 ;; esac
         exit 1
     """,
@@ -543,6 +547,9 @@ def main() -> int:
     check("park", park, "confirms the desktop's daemon process is gone after shutdown", 0,
           expect=["the desktop's daemon (pid 4242) has exited"],
           order=["axon shutdown", "ps -p 4242"], want_unloaded=[daemon, menu], loaded=both)
+    check("park", park, "waits for a desktop daemon that takes a moment to exit", 0,
+          expect=["the desktop's daemon (pid 4242) has exited"],
+          loaded=both, alive="4242", STUB_PS_EXITS_AFTER=3)
     check("park", park, "refuses to start the candidate beside a daemon that outlives shutdown", 1,
           expect=["is still running 10 s after shutdown"],
           order=["axon shutdown", "ps -p 4242"], loaded=both, alive="4242")
