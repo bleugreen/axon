@@ -106,6 +106,50 @@ public struct Supervision {
         )
     }
 
+    /// The two jobs as they are registered, whatever copy is asking.
+    ///
+    /// For the verbs that act on the installed registration and never write it — restart, stop,
+    /// uninstall, status — so running them from a build directory or another copy cannot repoint
+    /// anything. Each job's program is read back from its plist.
+    public static func registered(
+        socketPath: String = AxonEnvironment.defaultSocketPath,
+        launchAgentsDirectory: URL? = nil,
+        fileManager: FileManager = .default,
+        runProcess: @escaping ([String]) throws -> ProcessResult = LaunchAgentManager.runLaunchctl(arguments:)
+    ) -> Supervision {
+        let directory = launchAgentsDirectory
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/LaunchAgents")
+        func job(_ label: String) -> LaunchAgentManager {
+            let plist = directory.appendingPathComponent("\(label).plist")
+            let program = LaunchAgentManager.registration(atPlistPath: plist).path ?? ""
+            return LaunchAgentManager(
+                configuration: LaunchAgentConfiguration(
+                    label: label,
+                    program: DaemonProgram(executablePath: program, identity: .executablePath),
+                    socketPath: socketPath,
+                    environment: [:]
+                ),
+                plistPath: plist,
+                fileManager: fileManager,
+                runProcess: runProcess
+            )
+        }
+        return Supervision(
+            daemon: job(LaunchAgentConfiguration.daemonLabel),
+            menu: job(LaunchAgentConfiguration.menuLabel),
+            fileManager: fileManager
+        )
+    }
+
+    /// Whether a health report comes from the daemon at `program`.
+    ///
+    /// A report without provenance comes from a release that published none, which is accepted:
+    /// what it cannot say it cannot contradict.
+    public static func report(_ report: DaemonReport, isFrom program: String) -> Bool {
+        guard let provenance = report.provenance else { return true }
+        return samePath(provenance.executablePath, program)
+    }
+
     // MARK: - Install
 
     /// Registers both jobs as one transaction, returning the daemon's first health report.

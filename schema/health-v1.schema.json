@@ -84,7 +84,21 @@
         "mechanism": { "enum": ["launchd", "scheduledTask", "systemdUser"] },
         "path": { "type": ["string", "null"] },
         "reason": { "oneOf": [{ "$ref": "#/$defs/reason" }, { "type": "null" }] },
-        "detail": { "$ref": "#/$defs/detail" }
+        "detail": { "$ref": "#/$defs/detail" },
+        "jobs": {
+          "description": "macOS only: each launchd job of the install, the daemon (`dev.axon.daemon`) and the menu (`dev.axon.menu`). `registered` and `path` above describe the daemon job alone. `processId` is present only while the job's process runs; `path` is the program its plist names, or null when it has no plist.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["label", "loaded"],
+            "properties": {
+              "label": { "type": "string" },
+              "loaded": { "type": "boolean" },
+              "processId": { "type": ["integer", "null"] },
+              "path": { "type": ["string", "null"] }
+            }
+          }
+        }
       }
     },
     "session": {

@@ -167,6 +167,9 @@ public struct RegistrationHealth: Codable, Equatable, Sendable {
     public var path: String?
     public var reason: String?
     public var detail: String?
+    /// Each launchd job of a macOS install (the daemon and its menu), as launchd reports it.
+    /// `registered` and `path` describe the daemon job alone.
+    public var jobs: [JobState]?
 
     public init(
         registered: Bool,
