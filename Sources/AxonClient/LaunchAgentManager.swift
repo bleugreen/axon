@@ -180,12 +180,13 @@ public struct LaunchAgentConfiguration: Equatable, Sendable {
 
     /// The one-shot job that re-registers the daemon from a newly placed bundle.
     ///
-    /// Re-registration means booting out `dev.axon.daemon`, and the app performing the update *is*
-    /// that job's process: it cannot survive its own bootout to issue the follow-up bootstrap. A
-    /// separate launchd job is precisely the thing that outlives it. It runs the new bundle's CLI
-    /// with `daemon install`, which is the operation the field report proved carries both privacy
-    /// grants across with no prompt, and it is emphatically not kept alive — it runs once and is
-    /// reaped by the successor it started.
+    /// Re-registration means booting out `dev.axon.menu` and `dev.axon.daemon`, and the menu
+    /// performing the update *is* one of those jobs' processes: it cannot survive its own bootout to
+    /// issue the follow-up bootstraps. A separate launchd job is precisely the thing that outlives
+    /// it. It runs the new bundle's CLI with `daemon install`, which is the operation the field
+    /// report proved carries both privacy grants across with no prompt, and it is emphatically not
+    /// kept alive — it runs once, removes its own plist when done, and the next menu to start
+    /// clears the exited job.
     public static func updateFinisher(
         cliPath: String,
         socketPath: String = AxonEnvironment.defaultSocketPath

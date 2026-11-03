@@ -105,8 +105,8 @@ pub fn ansi_character(code: u16) -> Option<char> {
 /// The virtual key code of a named key.
 ///
 /// `Delete` is forward delete (117), which is what it means on Windows and Linux and what the
-/// recorder writes for that key; `Backspace` is 51. The Swift daemon aliases `delete` to 51, so a
-/// `delete` recorded by one daemon replays as the other key on the other.
+/// recorder writes for that key; `Backspace` is 51. The Swift daemon (until 0.4.0) aliased `delete`
+/// to 51, so a `delete` in a Swift-made recording replays here as forward delete.
 pub fn named_key_code(key: NamedKey) -> Result<u16, String> {
     Ok(match key {
         NamedKey::Return => 36,
@@ -142,7 +142,7 @@ pub fn named_key_code(key: NamedKey) -> Result<u16, String> {
 }
 
 /// The Core Graphics flag a modifier holds. Super and Command are the same key on a Mac, as they
-/// are in the Swift daemon.
+/// were in the Swift daemon.
 pub fn modifier_flag(modifier: Modifier) -> u64 {
     match modifier {
         Modifier::Shift => FLAG_SHIFT,
