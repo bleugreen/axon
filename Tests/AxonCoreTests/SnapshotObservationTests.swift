@@ -1,4 +1,3 @@
-import ApplicationServices
 @testable import AxonClient
 import Foundation
 import Testing
@@ -14,10 +13,9 @@ import Testing
     let missing = AppSnapshot(id: SnapshotID("none"), app: app, windows: [], screenshot: nil, focus: .none)
     let inaccessible = AppSnapshot(id: SnapshotID("error"), app: app, windows: [], screenshot: nil, focus: .inaccessible(error: "AX query failed"))
 
-    #expect(formatter.text(from: formatter.observation(from: focused.jsonValue, frames: false)).contains("focus: available focus:0 field \"Search\""))
-    #expect(formatter.observation(from: focused.jsonValue, frames: false)["focus"]?["target"]?["locator"]?["title"] == .string("Search"))
-    #expect(formatter.text(from: formatter.observation(from: missing.jsonValue, frames: false)).contains("focus: none"))
-    #expect(formatter.text(from: formatter.observation(from: inaccessible.jsonValue, frames: false)).contains("focus: inaccessible \"AX query failed\""))
+    #expect(formatter.text(from: formatter.observation(from: focused.wireFixture, frames: false)).contains("focus: available focus:0 field \"Search\""))
+    #expect(formatter.text(from: formatter.observation(from: missing.wireFixture, frames: false)).contains("focus: none"))
+    #expect(formatter.text(from: formatter.observation(from: inaccessible.wireFixture, frames: false)).contains("focus: inaccessible \"AX query failed\""))
 }
 
 @Test func observationStatesNoWindowsWhenOnlyApplicationChromeWasCaptured() {
@@ -42,9 +40,8 @@ import Testing
     )
 
     let formatter = SnapshotObservationFormatter()
-    let observation = formatter.observation(from: snapshot.jsonValue, frames: false)
+    let observation = formatter.observation(from: snapshot.wireFixture, frames: false)
 
-    #expect(snapshot.jsonValue["note"] == .string(ObservationNote.noWindows))
     #expect(observation["note"] == .string(ObservationNote.noWindows))
     #expect(formatter.text(from: observation).contains("note: no-windows"))
     #expect(treeString(in: observation).contains("\"New Window\""))
@@ -59,9 +56,8 @@ import Testing
     )
 
     let formatter = SnapshotObservationFormatter()
-    let observation = formatter.observation(from: snapshot.jsonValue, frames: false)
+    let observation = formatter.observation(from: snapshot.wireFixture, frames: false)
 
-    #expect(snapshot.jsonValue["note"] == nil)
     #expect(observation["note"] == nil)
     #expect(!formatter.text(from: observation).contains("note:"))
 }
@@ -79,20 +75,10 @@ import Testing
     )
 
     let formatter = SnapshotObservationFormatter()
-    let observation = formatter.observation(from: snapshot.jsonValue, frames: false)
+    let observation = formatter.observation(from: snapshot.wireFixture, frames: false)
 
-    #expect(snapshot.jsonValue["note"] == nil)
     #expect(observation["note"] == nil)
     #expect(!formatter.text(from: observation).contains("note:"))
-}
-
-@Test func aWindowQueryThatCannotBeAnsweredReportsInaccessibleRatherThanZero() {
-    // The one place a failed query could become a false fact is the query itself, so it is asked
-    // of an application element that cannot answer: no process owns this pid.
-    let unreachable = AXUIElementCreateApplication(-1)
-
-    #expect(WindowCountObservation.query(application: unreachable) == .inaccessible)
-    #expect(WindowCountObservation.query(application: unreachable).count == nil)
 }
 
 @Test func observationPagesBroadSiblingSetsWithoutDroppingFollowingContent() {
@@ -117,7 +103,7 @@ import Testing
         screenshot: nil
     )
 
-    let observation = SnapshotObservationFormatter().observation(from: snapshot.jsonValue, frames: false)
+    let observation = SnapshotObservationFormatter().observation(from: snapshot.wireFixture, frames: false)
     let tree = treeString(in: observation)
 
     #expect(tree.contains("obs:1: tabgroup \"Browser tabs\""))
@@ -147,7 +133,7 @@ import Testing
         screenshot: nil
     )
 
-    let observation = SnapshotObservationFormatter().observation(from: snapshot.jsonValue, frames: false)
+    let observation = SnapshotObservationFormatter().observation(from: snapshot.wireFixture, frames: false)
     let tree = treeString(in: observation)
 
     #expect(tree == "obs:0: window \"Main\"\n  obs:5: button \"Run\" [click]")
@@ -170,7 +156,7 @@ import Testing
         screenshot: nil
     )
 
-    let observation = SnapshotObservationFormatter().observation(from: snapshot.jsonValue, frames: false)
+    let observation = SnapshotObservationFormatter().observation(from: snapshot.wireFixture, frames: false)
     let tree = treeString(in: observation)
 
     #expect(tree == """
@@ -210,7 +196,7 @@ import Testing
         screenshot: nil
     )
 
-    let observation = SnapshotObservationFormatter().observation(from: snapshot.jsonValue, frames: false)
+    let observation = SnapshotObservationFormatter().observation(from: snapshot.wireFixture, frames: false)
     let text = SnapshotObservationFormatter().text(from: observation)
 
     #expect(text.contains("link \"Story title\" [click]"))
@@ -240,7 +226,7 @@ import Testing
         screenshot: nil
     )
 
-    let observation = SnapshotObservationFormatter().observation(from: snapshot.jsonValue, frames: false)
+    let observation = SnapshotObservationFormatter().observation(from: snapshot.wireFixture, frames: false)
     let tree = treeString(in: observation)
 
     #expect(tree.contains("obs:1: tabgroup <truncated: children limited to 24 of 92>"))
@@ -265,7 +251,7 @@ import Testing
         screenshot: nil
     )
 
-    let observation = SnapshotObservationFormatter().observation(from: snapshot.jsonValue, frames: false)
+    let observation = SnapshotObservationFormatter().observation(from: snapshot.wireFixture, frames: false)
     let tree = treeString(in: observation)
     let text = SnapshotObservationFormatter().text(from: observation)
 
@@ -299,7 +285,7 @@ import Testing
         screenshot: nil
     )
 
-    let observation = SnapshotObservationFormatter().observation(from: snapshot.jsonValue, frames: false)
+    let observation = SnapshotObservationFormatter().observation(from: snapshot.wireFixture, frames: false)
     let tree = treeString(in: observation)
     let text = SnapshotObservationFormatter().text(from: observation)
 
@@ -329,7 +315,7 @@ import Testing
         screenshot: nil
     )
 
-    let observation = SnapshotObservationFormatter().observation(from: snapshot.jsonValue, frames: false)
+    let observation = SnapshotObservationFormatter().observation(from: snapshot.wireFixture, frames: false)
     let tree = treeString(in: observation)
     let text = SnapshotObservationFormatter().text(from: observation)
 
@@ -351,47 +337,11 @@ import Testing
         screenshot: nil
     )
 
-    let observation = SnapshotObservationFormatter().observation(from: snapshot.jsonValue, frames: false)
+    let observation = SnapshotObservationFormatter().observation(from: snapshot.wireFixture, frames: false)
     let tree = treeString(in: observation)
 
     #expect(tree.contains("obs:1: heading \"Overview\""))
     #expect(!tree.contains("heading \"Overview\" [click]"))
-}
-
-@Test func observationPromotesAllNodeRedactionReferencesToEnvelope() throws {
-    let firstSecret = "first active credential"
-    let secondSecret = "second active credential"
-    let snapshot = AppSnapshot(
-        id: SnapshotID("obs-redaction"),
-        app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
-        windows: [
-            AXNode(role: "AXWindow", title: "Main", children: [
-                AXNode(role: "AXTextField", value: firstSecret),
-                AXNode(role: "AXTextField", value: secondSecret)
-            ])
-        ],
-        screenshot: nil
-    )
-    let redactor = ActiveSecretRedactor(
-        filter: try ActiveCredentialIndex(
-            secrets: [
-                ActiveCredentialSecret(value: firstSecret, provider: "test", reference: "op://Test/First/secret"),
-                ActiveCredentialSecret(value: secondSecret, provider: "test", reference: "op://Test/Second/secret")
-            ],
-            hmacKey: Data(repeating: 0xA5, count: 32),
-            provider: "test",
-            createdAt: Date(timeIntervalSince1970: 1_775_000_000)
-        )
-    )
-
-    let observation = SnapshotObservationFormatter().observation(
-        from: snapshot.jsonValue(includeTree: true, activeSecretRedactor: redactor),
-        frames: false
-    )
-    let references = observation["redaction"]?["references"]?["value"]?.arrayValue ?? []
-
-    #expect(references.contains(.string("op://Test/First/secret")))
-    #expect(references.contains(.string("op://Test/Second/secret")))
 }
 
 @Test func childListObservationContainsOnlyRequestedChildrenAndPagingCursor() {
@@ -408,7 +358,7 @@ import Testing
         ]
     )
 
-    let observation = SnapshotObservationFormatter().children(from: children.jsonValue, frames: false)
+    let observation = SnapshotObservationFormatter().children(from: children.wireFixture, frames: false)
     let text = SnapshotObservationFormatter().text(from: observation)
 
     #expect(observation["format"] == .string("children"))
@@ -434,7 +384,7 @@ import Testing
         screenshot: nil
     )
 
-    let observation = SnapshotObservationFormatter().observation(from: snapshot.jsonValue, frames: false)
+    let observation = SnapshotObservationFormatter().observation(from: snapshot.wireFixture, frames: false)
     let tree = treeString(in: observation)
     let text = SnapshotObservationFormatter().text(from: observation)
 
@@ -458,7 +408,7 @@ import Testing
         screenshot: nil
     )
 
-    let tree = treeString(in: SnapshotObservationFormatter().observation(from: snapshot.jsonValue, frames: false))
+    let tree = treeString(in: SnapshotObservationFormatter().observation(from: snapshot.wireFixture, frames: false))
 
     #expect(!tree.contains("unreadable"))
     #expect(tree.contains("window \"Empty\""))
@@ -476,7 +426,7 @@ import Testing
         children: [AXNode(role: "AXGroup", subrole: "AXHostingView")]
     )
 
-    let observation = SnapshotObservationFormatter().children(from: children.jsonValue, frames: false)
+    let observation = SnapshotObservationFormatter().children(from: children.wireFixture, frames: false)
     let text = SnapshotObservationFormatter().text(from: observation)
 
     #expect(observation["tree"] == .string("⟨1 unreadable node: group[AXHostingView]⟩"))
@@ -553,13 +503,4 @@ private func treeString(in observation: JSONValue) -> String {
         return ""
     }
     return tree
-}
-
-private extension JSONValue {
-    var arrayValue: [JSONValue]? {
-        guard case let .array(values) = self else {
-            return nil
-        }
-        return values
-    }
 }

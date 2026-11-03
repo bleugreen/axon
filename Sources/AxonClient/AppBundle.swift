@@ -2,9 +2,9 @@ import Foundation
 
 /// A macOS `.app` bundle on disk, found from a path inside it.
 ///
-/// Axon ships one bundle. It holds two executables — the daemon app at `Contents/MacOS/Axon` and
-/// the CLI at `Contents/Resources/bin/axon` — and the editor app nested at
-/// `Contents/Library/Applications/Axon Editor.app`. More than one decision depends on finding one
+/// Axon ships one bundle. It holds two executables — the Rust daemon at `Contents/MacOS/Axon` and
+/// the Swift CLI at `Contents/Resources/bin/axon` — and two nested apps under
+/// `Contents/Library/Applications`: `Axon Menu.app`, the menu bar shell, and `Axon Editor.app`. More than one decision depends on finding one
 /// of these from another — locating the editor from the daemon, the CLI from the editor, and the
 /// identity `daemon install` registers — so the walks live here rather than once per caller.
 public struct AppBundle: Equatable, Sendable {
@@ -67,21 +67,39 @@ public struct AppBundle: Equatable, Sendable {
         beside daemonBundleURL: URL,
         fileManager: FileManager = .default
     ) -> URL? {
-        let editorURL = daemonBundleURL.appendingPathComponent(nestedEditorRelativePath, isDirectory: true)
-        guard fileManager.fileExists(atPath: editorURL.path),
+        pairedNestedURL(nestedEditorRelativePath, identifier: axonEditorIdentifier, beside: daemonBundleURL, fileManager: fileManager)
+    }
+
+    /// The menu shell nested inside a daemon bundle, by the same rule as the editor: both halves
+    /// identify as Axon and declare the same version.
+    public static func pairedMenuURL(
+        beside daemonBundleURL: URL,
+        fileManager: FileManager = .default
+    ) -> URL? {
+        pairedNestedURL(nestedMenuRelativePath, identifier: axonMenuIdentifier, beside: daemonBundleURL, fileManager: fileManager)
+    }
+
+    private static func pairedNestedURL(
+        _ relativePath: String,
+        identifier: String,
+        beside daemonBundleURL: URL,
+        fileManager: FileManager
+    ) -> URL? {
+        let nestedURL = daemonBundleURL.appendingPathComponent(relativePath, isDirectory: true)
+        guard fileManager.fileExists(atPath: nestedURL.path),
               let daemonInfo = infoDictionary(at: daemonBundleURL.appendingPathComponent("Contents/Info.plist")),
-              let editorInfo = infoDictionary(at: editorURL.appendingPathComponent("Contents/Info.plist")),
+              let nestedInfo = infoDictionary(at: nestedURL.appendingPathComponent("Contents/Info.plist")),
               daemonInfo["CFBundleIdentifier"] as? String == axonDaemonIdentifier,
-              editorInfo["CFBundleIdentifier"] as? String == axonEditorIdentifier,
+              nestedInfo["CFBundleIdentifier"] as? String == identifier,
               let daemonVersion = daemonInfo["CFBundleShortVersionString"] as? String,
               !daemonVersion.isEmpty,
-              editorInfo["CFBundleShortVersionString"] as? String == daemonVersion,
-              let executable = editorInfo["CFBundleExecutable"] as? String,
-              fileManager.isExecutableFile(atPath: editorURL.appendingPathComponent("Contents/MacOS/\(executable)").path)
+              nestedInfo["CFBundleShortVersionString"] as? String == daemonVersion,
+              let executable = nestedInfo["CFBundleExecutable"] as? String,
+              fileManager.isExecutableFile(atPath: nestedURL.appendingPathComponent("Contents/MacOS/\(executable)").path)
         else {
             return nil
         }
-        return editorURL
+        return nestedURL
     }
 
     /// Returns the CLI of the daemon bundle that encloses a nested editor.

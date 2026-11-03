@@ -1,7 +1,7 @@
 //! Conformance between the browser verbs' Rust contract and `schema/fixtures/browser`.
 //!
-//! Those files are the Swift daemon's own output, written by
-//! `Tests/AxonCoreTests/BrowserContractConformanceTests.swift`. Here every success body decodes
+//! Those files are the Swift daemon's own output, a frozen corpus since that daemon was deleted
+//! (see `schema/fixtures/browser/README.md`). Here every success body decodes
 //! into the Rust types and re-encodes to the same value, every refusal's message and data are
 //! what `BrowserError` says, and every URL case gets Foundation's answer. The macOS router tests in
 //! `axon-mac` then produce the same bodies end to end from a scripted browser.

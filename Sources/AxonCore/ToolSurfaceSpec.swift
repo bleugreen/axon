@@ -626,18 +626,6 @@ public struct ToolParamDecoder {
         return try DeliveryPolicy.validated(rawValue)
     }
 
-    public func locator(_ name: String) throws -> AXLocator? {
-        guard let value = value(name) else { return nil }
-        return try AXLocator(jsonValue: value)
-    }
-
-    public func requiredLocator(_ name: String) throws -> AXLocator {
-        guard let locator = try locator(name) else {
-            throw JSONRPCError.invalidParams("Missing locator parameter")
-        }
-        return locator
-    }
-
     public func stringArray(_ name: String) throws -> [String] {
         guard let value = value(name) else { return [] }
         guard case let .array(values) = value else {

@@ -21,6 +21,8 @@ use std::{
 #[cfg(target_os = "macos")]
 pub mod socket;
 
+pub mod launcher;
+
 #[cfg(target_os = "macos")]
 pub mod probe;
 
@@ -2976,9 +2978,9 @@ mod tests {
         assert_eq!(error.data.unwrap()["capability"], "BrowserScripting");
     }
 
-    /// Every file in `schema/fixtures/browser` is the Swift router's answer to one request. The
-    /// Rust router, over the real service and settle against a scripted browser and consent
-    /// host, gives exactly the same answer to the same request.
+    /// Every fixture in `schema/fixtures/browser` is the (now deleted) Swift router's answer to one
+    /// request, a frozen corpus. The Rust router, over the real service and settle against a
+    /// scripted browser and consent host, gives exactly the same answer to the same request.
     #[test]
     fn the_router_answers_every_browser_fixture_exactly_as_swift_does() {
         use crate::apple_events::AeError;
@@ -2990,7 +2992,7 @@ mod tests {
         let mut names: Vec<String> = std::fs::read_dir(&directory)
             .unwrap()
             .map(|entry| entry.unwrap().file_name().into_string().unwrap())
-            .filter(|name| name != "url-cases.json")
+            .filter(|name| name.ends_with(".json") && name != "url-cases.json")
             .collect();
         names.sort();
         assert_eq!(

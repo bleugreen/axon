@@ -1,5 +1,5 @@
-import AppKit
 import AxonClient
+import Darwin
 import Foundation
 import AxonCore
 
@@ -13,21 +13,13 @@ let axonEditorBundleIdentifier = AppBundle.axonEditorIdentifier
 do {
     switch command {
     case "doctor":
-        let report = Doctor.run()
-        print("Accessibility: \(report.accessibility.status.rawValue)")
-        exit(report.isReady ? 0 : 1)
-
-    case "serve":
-        ScreenCaptureRuntime.bootstrapSynchronously()
-        Doctor.warmUp()
-        serveUntilTerminated(socketPath: socketPath)
+        try runDoctor()
 
     case "mcp":
         try MCPStdioServer().run()
 
     case "start":
-        try launchAxonApp()
-        print("started Axon.app")
+        try startAxon()
 
     case "edit":
         try openAxnEditor(arguments: arguments)
@@ -62,7 +54,11 @@ do {
         try printResponse(response)
 
     case "refresh-secrets":
-        try refreshSecrets(arguments: arguments)
+        throw CLIError.operationFailed("""
+        refresh-secrets was retired in 0.4.0. Axon now redacts only secrets bound to a run's \
+        arguments and deterministic credential patterns. To remove the old HMAC key: \
+        `security delete-generic-password -s com.bleugreen.axon.active-credential-index -a hmac-key-v1`.
+        """)
 
     case "look":
         let look = try CLICommandParser.look(arguments: arguments)
@@ -177,30 +173,27 @@ do {
         usage: axon [command]
 
         embedding lifecycle:
-          daemon install    register this executable to start at login, then wait for health
-          daemon uninstall  stop the daemon and remove the registration
-          daemon restart    restart the registered daemon and wait for health
-          shutdown          stop the running daemon, leaving the registration in place
+          daemon install    register this Axon.app's daemon and menu to start at login, then wait for health
+          daemon uninstall  stop the daemon and menu and remove both registrations
+          daemon restart    restart the registered daemon and menu and wait for health
+          shutdown          stop the daemon and menu, leaving both registrations in place
           status [--json]   describe daemon, registration, session, permissions, capabilities
           version           print the product version
 
-        `daemon install` registers this install's daemon: the enclosing Axon.app when the CLI is
-        inside one, so permissions ride the app bundle and survive upgrades, and otherwise the
-        invoking executable itself. Run it from a permanent location either way — installing from
-        a build directory registers a path that disappears.
+        `daemon install` registers the Axon.app this CLI is inside: its main executable as the
+        daemon (`dev.axon.daemon`), so permissions ride the app bundle and survive upgrades, and its
+        nested Axon Menu.app as the menu (`dev.axon.menu`). Run it from a permanent location. A CLI
+        outside Axon.app cannot install: the macOS daemon ships only inside the bundle.
 
         commands:
-          axon     launch Axon.app and request permissions when needed
-          doctor   check local permissions
-          serve    run the local daemon socket server
+          axon     start Axon and request permissions when needed
+          doctor   report the running daemon's permissions
           mcp      run an MCP stdio facade backed by the daemon socket
-          start    launch the installed Axon.app menu bar service
+          start    register this Axon.app if needed, then start the daemon and its menu
           edit <path.axn>
                   open an axn file in the visual editor
-          setup    launch Axon.app and request permissions when needed
+          setup    start Axon and request permissions when needed
           permit   ask macOS to approve the running daemon identity
-          refresh-secrets [--json]
-                   refresh the active credential redaction index from 1Password
           \(ToolSurfaceSpec.cliUsageBlock.replacingOccurrences(of: "\n", with: "\n          "))
         """)
 
@@ -221,34 +214,19 @@ private func sendAction(method: String, params: [String: JSONValue]) throws {
     try printResponse(response)
 }
 
-private func refreshSecrets(arguments: [String]) throws {
-    let json = arguments.dropFirst().contains("--json")
-    let unexpected = arguments.dropFirst().first { $0 != "--json" }
-    if let unexpected {
-        throw CLIError.missingArguments("unexpected refresh-secrets argument: \(unexpected)")
+/// Reports the running daemon's grants. The daemon is the TCC subject, so it is the one asked; this
+/// process's own trust says nothing about what the daemon may do.
+private func runDoctor() throws {
+    let status = currentStatus()
+    guard status.daemon.running else {
+        print("Daemon: not running (\(status.daemon.reason ?? HealthReason.unknown))")
+        exit(1)
     }
-
-    let result = try ActiveCredentialRefreshService().refresh()
-    let cachePath = ActiveCredentialIndexCacheStore().fileURL.path
-    let createdAt = ISO8601DateFormatter().string(from: result.cache.createdAt)
-    if json {
-        let response = JSONValue.object([
-            "provider": .string(result.cache.provider),
-            "secretCount": .int(result.cache.secretCount),
-            "entryCount": .int(result.cache.entries.count),
-            "createdAt": .string(createdAt),
-            "cachePath": .string(cachePath)
-        ])
-        let data = try jsonEncoder.encode(response)
-        print(String(decoding: data, as: UTF8.self))
-    } else {
-        print("refreshed active credential index")
-        print("Provider: \(result.cache.provider)")
-        print("Secrets indexed: \(result.cache.secretCount)")
-        print("Index entries: \(result.cache.entries.count)")
-        print("Created: \(createdAt)")
-        print("Cache: \(cachePath)")
+    for permission in status.permissions {
+        print("\(permission.name): \(permission.granted ? "granted" : "not granted")")
     }
+    let accessibility = status.permissions.first { $0.name == HealthPermission.accessibility }
+    exit(accessibility?.granted == true ? 0 : 1)
 }
 
 private func lookDepth(in params: [String: JSONValue]) -> Int? {
@@ -264,7 +242,7 @@ private func printResponse(_ response: JSONRPCResponse) throws {
 }
 
 private func runSetup() throws {
-    try launchAxonApp()
+    try startAxon()
     let report = try? waitForDaemonReport(timeoutSeconds: 5)
     if report?.permissions.first(where: { $0.name == HealthPermission.accessibility })?.granted != true {
         _ = try SocketClient(path: socketPath)
@@ -276,7 +254,7 @@ private func runSetup() throws {
 private func printSetupStatus() {
     let status = currentStatus()
     let accessibility = status.permissions.first { $0.name == HealthPermission.accessibility }
-    print("Axon.app: \(isAxonAppRunning() ? "running" : "not running")")
+    print("Daemon: \(status.daemon.running ? "running" : "not running")")
     print("Socket: \(socketPath)")
     print("Accessibility: \(accessibility?.granted == true ? "granted" : "not granted")")
     if accessibility?.granted == true {
@@ -287,22 +265,59 @@ private func printSetupStatus() {
     }
 }
 
-private func launchAxonApp() throws {
-    if isAxonAppRunning() {
-        return
+/// Brings this install up through launchd, registering it first when it has to.
+///
+/// This is what opening Axon.app runs: the bundle's main executable is the daemon, and an
+/// unsupervised open of it calls `start` here and exits. So `start` never opens the outer bundle,
+/// which would call back into itself. What it does depends on what is registered (`StartPlan`):
+/// nothing, or an incomplete or stale registration of this copy, installs both jobs; a complete one
+/// loads whatever is not loaded and starts the menu, which is how a quit menu comes back; another
+/// copy's registration is left alone, its menu started, and the way to switch printed.
+private func startAxon() throws {
+    let bundle = axonBundle()
+    let supervision = Supervision.registered(socketPath: socketPath)
+    // A bundled CLI decides against its own copy's programs, so a menu registered from another
+    // copy reads as incomplete; the registered view would compare that plist with itself.
+    let plan = bundle == nil
+        ? supervision.startPlan(mainExecutable: nil)
+        : try bundledSupervision().startPlan(mainExecutable: bundle?.mainExecutablePath)
+    switch plan {
+    case .install:
+        // Opening a quarantined copy runs it from an App Translocation mount under /var/folders,
+        // which disappears; registering that would leave a login item pointing at nothing.
+        if let main = bundle?.mainExecutablePath, DaemonRegistrationPath.ephemeralWarning(for: main) != nil {
+            throw CLIError.operationFailed(
+                "Axon is running from a temporary location (\(main)). Move Axon.app to Applications, then open it again."
+            )
+        }
+        try installDaemon()
+    case .resume:
+        try bundledSupervision().resume()
+        print("Axon is running from \(bundle?.path ?? "this install")")
+    case let .elsewhere(registeredPath):
+        try supervision.startRegisteredMenu()
+        print("Axon is registered from \(registeredPath), which keeps running.")
+        if let bundle {
+            print("This copy (\(bundle.path)) is not the registered one. To switch to it, choose Use This Copy in its menu, or run:")
+            print("  \(URL(fileURLWithPath: bundle.path).appendingPathComponent(AppBundle.bundledCLIRelativePath).path) daemon install")
+        }
+    case .nothingRegistered:
+        throw CLIError.operationFailed(
+            "No Axon is registered. Open Axon.app, or run its Contents/Resources/bin/axon daemon install."
+        )
     }
-    guard let appURL = axonAppURL() else {
-        throw CLIError.missingArguments("Could not find Axon.app. Install with Homebrew cask or run scripts/package-app first.")
-    }
+}
 
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-    process.arguments = [appURL.path]
-    try process.run()
-    process.waitUntilExit()
-    guard process.terminationStatus == 0 else {
-        throw CLIError.missingArguments("Could not open Axon.app at \(appURL.path)")
+/// The Axon.app this CLI is inside, when it is inside Axon's own bundle.
+private func axonBundle() -> AppBundle? {
+    guard let executable = try? resolvedExecutablePath(),
+          let bundle = AppBundle.enclosing(executable),
+          bundle.identifier == axonAppBundleIdentifier,
+          bundle.mainExecutablePath != nil
+    else {
+        return nil
     }
+    return bundle
 }
 
 private func openAxnEditor(arguments: [String]) throws {
@@ -331,21 +346,6 @@ private func openAxnEditor(arguments: [String]) throws {
     }
 }
 
-private func isAxonAppRunning() -> Bool {
-    !runningAxonApps().isEmpty
-}
-
-private func runningAxonApps() -> [NSRunningApplication] {
-    NSRunningApplication.runningApplications(withBundleIdentifier: axonAppBundleIdentifier)
-}
-
-private func axonAppURL() -> URL? {
-    if let bundled = bundledAxonAppURL() {
-        return bundled
-    }
-    return NSWorkspace.shared.urlForApplication(withBundleIdentifier: axonAppBundleIdentifier)
-}
-
 private func bundledAxonAppURL() -> URL? {
     guard
         let executable = try? resolvedExecutablePath(),
@@ -356,48 +356,122 @@ private func bundledAxonAppURL() -> URL? {
     return URL(fileURLWithPath: bundle.path, isDirectory: true)
 }
 
-/// The CLI-managed embedding lifecycle: a LaunchAgent whose program is this install's daemon.
+/// The CLI-managed embedding lifecycle: two LaunchAgents, the daemon and its menu, both pointing
+/// inside the invoking Axon.app.
 ///
 /// There is one registration truth. Earlier versions copied the binary into an Application Support
 /// bundle and registered the copy, which meant the path a consumer installed and the path macOS
-/// launched could drift apart, and an upgrade in place left the old copy running. The agent now
-/// points inside the invoking install, which is why callers must invoke it from a permanent path.
-/// `DaemonProgram` decides which executable of that install is registered.
+/// launched could drift apart, and an upgrade in place left the old copy running. The agents now
+/// point inside the invoking install, which is why callers must invoke it from a permanent path.
 private func handleDaemonCommand(arguments: [String]) throws {
     guard let subcommand = arguments.dropFirst().first else {
         throw CLIError.missingArguments("daemon requires install, uninstall, or restart")
     }
-    let manager = LaunchAgentManager(configuration: try launchAgentConfiguration())
     switch subcommand {
     case "install":
-        let program = manager.configuration.program
-        warnAboutEphemeralInstall(program.executablePath)
-        try manager.start()
-        let report = try waitForDaemonReport()
-        print("registered \(manager.configuration.label) -> \(program.executablePath)")
-        // Which of the two TCC rules this registration follows is the thing a consumer cannot see
-        // from the path alone, and it decides whether the next upgrade needs a human in
-        // System Settings.
-        print("identity: \(program.identityDescription)")
-        print("daemon ready (pid \(report.processId), version \(report.version))")
-        // Only once this install is proven to answer. Both entry points reach here — the installer
-        // script and the in-app update finisher both run `daemon install` — so neither has to carry
-        // its own cleanup.
-        pruneSupersededInstalls(program: program, registrationPath: manager.registration().path)
+        try installDaemon()
     case "restart":
-        // Restart deliberately does not re-register. It restarts the daemon that is installed,
+        // Restart deliberately does not re-register. It restarts the jobs that are installed,
         // whatever binary is asking, so restarting from a build directory cannot repoint a
         // working installation at a path that is about to disappear.
-        let registration = manager.registration()
-        try manager.restart()
-        let report = try waitForDaemonReport()
-        print("restarted \(manager.configuration.label) -> \(registration.path ?? manager.configuration.program.executablePath)")
+        let supervision = Supervision.registered(socketPath: socketPath)
+        let registered = supervision.daemon.configuration.program.executablePath
+        let report = try supervision.restart(waitUntilReady: { try waitForDaemonReport(from: registered) })
+        print("restarted \(LaunchAgentConfiguration.daemonLabel) -> \(registered)")
+        if supervision.menu.plistExists {
+            print("restarted \(LaunchAgentConfiguration.menuLabel) -> \(supervision.menu.configuration.program.executablePath)")
+        }
         print("daemon ready (pid \(report.processId), version \(report.version))")
     case "uninstall":
-        try manager.uninstall()
-        print("unregistered \(manager.configuration.label)")
+        try Supervision.registered(socketPath: socketPath).uninstall()
+        print("unregistered \(LaunchAgentConfiguration.menuLabel) and \(LaunchAgentConfiguration.daemonLabel)")
     default:
         throw CLIError.missingArguments("daemon requires install, uninstall, or restart")
+    }
+}
+
+/// The two jobs for the Axon.app this CLI is inside.
+private func bundledSupervision() throws -> Supervision {
+    let invoked = try resolvedExecutablePath()
+    let program = DaemonProgram.resolved(invokedExecutable: invoked)
+    guard case .appBundle = program.identity, let bundle = AppBundle.enclosing(program.executablePath) else {
+        throw SupervisionError.unbundled(cliPath: invoked)
+    }
+    return Supervision.bundled(
+        program: program,
+        bundlePath: bundle.path,
+        socketPath: socketPath,
+        environment: ProcessInfo.processInfo.environment
+    )
+}
+
+/// `daemon install`: the shell-v1 finisher, and what `start` runs when this copy is not
+/// registered completely.
+private func installDaemon() throws {
+    let supervision = try bundledSupervision()
+    let program = supervision.daemon.configuration.program
+    warnAboutEphemeralInstall(program.executablePath)
+    try stopUnsupervisedDaemon(supervision)
+    // Strict for install: the program being registered is this release's daemon, which always says
+    // where it runs, and the answer must come from the process launchd just started. A daemon
+    // nothing supervises that still holds the socket cannot pass for it.
+    let report = try supervision.install(waitUntilReady: {
+        try waitForDaemonReport(from: program.executablePath, launchdJob: supervision.daemon)
+    })
+    print("registered \(supervision.daemon.configuration.label) -> \(program.executablePath)")
+    // Which of the two TCC rules this registration follows is the thing a consumer cannot see
+    // from the path alone, and it decides whether the next upgrade needs a human in
+    // System Settings.
+    print("identity: \(program.identityDescription)")
+    print("registered \(supervision.menu.configuration.label) -> \(supervision.menu.configuration.program.executablePath)")
+    print("daemon ready (pid \(report.processId), version \(report.version))")
+    removeRetiredCredentialIndex()
+    // Only once this install is proven to answer. Both entry points reach here — the installer
+    // script and the in-app update finisher both run `daemon install` — so neither has to carry
+    // its own cleanup.
+    pruneSupersededInstalls(program: program, registrationPath: supervision.daemon.registration().path)
+    LaunchAgentManager.retireUpdateFinisher(ownedBy: getpid())
+}
+
+/// Stops a daemon that answers the socket from outside launchd, before anything is written.
+///
+/// Such a daemon is an earlier Axon that was opened rather than registered, or the 0.3.x app that
+/// ran this install as its update finisher and never quit. It holds the socket lock, so the daemon
+/// about to be registered could never serve. A rollback cannot bring it back once stopped, which is
+/// acceptable: its bundle is the one being replaced.
+private func stopUnsupervisedDaemon(_ supervision: Supervision) throws {
+    let answering = try? SocketClient(path: socketPath, responseTimeoutSeconds: 2)
+        .send(JSONRPCRequest(id: .string("health"), method: "health"))
+    let report = answering?.result.flatMap { try? DaemonReport(jsonObject: $0) }
+    let launchdPid = Supervision.registered(socketPath: socketPath).daemon.jobState().processId
+    guard let incumbent = Supervision.unsupervisedIncumbent(answering: report, launchdPid: launchdPid) else {
+        return
+    }
+    _ = try? SocketClient(path: socketPath, responseTimeoutSeconds: 2)
+        .send(JSONRPCRequest(id: .string("shutdown"), method: "shutdown"))
+    guard waitUntilDaemonStops(timeoutSeconds: 10) else {
+        throw CLIError.operationFailed("""
+        Axon \(incumbent.version) (pid \(incumbent.processId)) is running outside launchd and did not stop. \
+        Quit it from its menu bar item, then run this again.
+        """)
+    }
+    print("stopped Axon \(incumbent.version) (pid \(incumbent.processId)), which was running outside launchd")
+}
+
+/// Deletes the 1Password active-credential index an earlier release left behind.
+///
+/// It is HMAC digests of secret values and nothing reads it since 0.4.0. The Keychain key that made
+/// it meaningful is deliberately left alone: deleting another binary's Keychain item can raise a
+/// prompt, which would break a zero-prompt upgrade, so the `refresh-secrets` refusal and the
+/// release notes give the command instead.
+private func removeRetiredCredentialIndex() {
+    let index = AxonEnvironment.retiredActiveCredentialIndexURL()
+    guard FileManager.default.fileExists(atPath: index.path) else { return }
+    do {
+        try FileManager.default.removeItem(at: index)
+        print("removed the retired 1Password active-credential index at \(index.path)")
+    } catch {
+        print("could not remove the retired active-credential index at \(index.path): \(error)")
     }
 }
 
@@ -425,18 +499,17 @@ private func pruneSupersededInstalls(program: DaemonProgram, registrationPath: S
     }
 }
 
-/// Stops the running daemon while leaving start-at-login registration in place.
+/// Stops the running daemon and its menu while leaving start-at-login registration in place.
 ///
 /// Who is running is asked first, because unloading the agent terminates the daemon and there
-/// would be nothing left to ask afterwards. The agent is then unloaded before the shutdown
-/// request, since `KeepAlive` would otherwise relaunch the daemon in the gap between it
+/// would be nothing left to ask afterwards. The agents are then unloaded, menu first, before the
+/// shutdown request, since `KeepAlive` would otherwise relaunch the daemon in the gap between it
 /// acknowledging the request and actually exiting.
 private func shutdownDaemon() throws {
     let running = currentStatus().daemon
     let runningProcessID = running.running ? running.processId : nil
 
-    let manager = LaunchAgentManager(configuration: try launchAgentConfiguration())
-    try manager.stop()
+    try Supervision.registered(socketPath: socketPath).stop()
 
     // Anything still answering is a daemon launchd does not own, such as a running Axon.app.
     _ = try? SocketClient(path: socketPath, responseTimeoutSeconds: 2)
@@ -481,6 +554,12 @@ private func printStatus(arguments: [String]) throws {
         line("Registration:", status.registration.registered
             ? "\(LaunchAgentConfiguration.daemonLabel) -> \(status.registration.path ?? "registered")"
             : "not registered")
+        for job in status.registration.jobs ?? [] {
+            let state = job.loaded
+                ? (job.processId.map { "loaded, running (pid \($0))" } ?? "loaded, not running")
+                : (job.path == nil ? "not registered" : "registered, not loaded")
+            line("\(job.label):", job.path.map { "\(state) -> \($0)" } ?? state)
+        }
         line("Session:", status.session.graphical
             ? "graphical"
             : "\(status.session.interactive ? "interactive, no desktop" : "not interactive") (\(status.session.reason ?? HealthReason.unknown))")
@@ -512,8 +591,9 @@ private func printStatus(arguments: [String]) throws {
 /// here produces a schema-valid document. The daemon authors what only it knows; registration is
 /// read from disk here because the daemon process does not own that fact.
 private func currentStatus() -> HealthStatus {
-    let manager = try? LaunchAgentManager(configuration: launchAgentConfiguration())
-    let registration = manager?.registration() ?? .absent(mechanism: .launchd)
+    let supervision = Supervision.registered(socketPath: socketPath)
+    var registration = supervision.daemon.registration()
+    registration.jobs = supervision.jobStates()
 
     do {
         let response = try SocketClient(path: socketPath, responseTimeoutSeconds: StatusProbe.responseTimeoutSeconds)
@@ -529,7 +609,7 @@ private func currentStatus() -> HealthStatus {
             return .incompatible(
                 endpoint: socketPath,
                 registration: registration,
-                session: Doctor.currentSession(),
+                session: SessionDetection.current(),
                 detail: "\(error)"
             )
         }
@@ -573,7 +653,7 @@ private func unreachable(
     .notRunning(
         endpoint: socketPath,
         registration: registration,
-        session: Doctor.currentSession(),
+        session: SessionDetection.current(),
         reason: reason,
         detail: detail
     )
@@ -586,54 +666,6 @@ private func warnAboutEphemeralInstall(_ path: String) {
     fputs("axon: warning: \(warning)\n", stderr)
 }
 
-private func launchAgentConfiguration() throws -> LaunchAgentConfiguration {
-    LaunchAgentConfiguration(
-        program: DaemonProgram.resolved(invokedExecutable: try resolvedExecutablePath()),
-        socketPath: socketPath,
-        environment: ProcessInfo.processInfo.environment
-    )
-}
-
-/// Serves the socket with the accept loop off the main thread, leaving main to run AppKit.
-///
-/// Actions reach the main queue for AppKit work — the target badge overlay is drawn there, and it
-/// is enabled unless `AXON_VISUAL_OVERLAY` explicitly disables it. Accepting connections on the
-/// main thread parks it in `accept()`, so that hop never completes and every element action hangs
-/// until the caller times out, while `health` and `look` keep answering from worker threads.
-///
-/// `AxonDaemonApp` has always run the server this way; `serve` now matches it.
-@MainActor
-private func serveUntilTerminated(socketPath: String) -> Never {
-    let server = SocketServer(path: socketPath)
-    let accepting = Thread {
-        do {
-            try server.run {
-                // Announced from here rather than before the call, because ownership of the
-                // socket is exclusive and this process may not get it. Printing first would
-                // claim a role it is about to be refused.
-                print("axon serving on \(socketPath) (pid \(getpid()))")
-                fflush(stdout)
-            }
-            fail("socket server stopped accepting connections")
-        } catch {
-            fail("socket server failed: \(error)")
-        }
-    }
-    accepting.name = "dev.axon.socket-accept"
-    accepting.start()
-
-    // An accessory-policy NSApplication, not a bare run loop: the overlay draws NSPanels, which
-    // need a real AppKit event loop rather than only a draining main queue.
-    let application = NSApplication.shared
-    application.setActivationPolicy(.accessory)
-    application.run()
-    fail("AppKit event loop exited")
-}
-
-private func fail(_ message: String) -> Never {
-    FileHandle.standardError.write(Data("axon: \(message)\n".utf8))
-    exit(1)
-}
 
 /// The real path of the running executable, with every symlink resolved.
 ///
@@ -669,8 +701,16 @@ private func executablePathFromPATH(_ executableName: String) -> String? {
 /// Waits until the daemon answers a health request.
 ///
 /// A successful round trip is the readiness contract: the socket existing proves only that some
-/// process bound it, which is exactly the state a half-started daemon leaves behind.
-private func waitForDaemonReport(timeoutSeconds: TimeInterval = 30) throws -> DaemonReport {
+/// process bound it, which is exactly the state a half-started daemon leaves behind. With a
+/// `program`, the answer must also come from it, so a daemon nothing supervises that still holds
+/// the socket cannot pass for the one just registered.
+///
+/// With a `launchdJob`, the answer must also carry provenance and come from that job's process.
+private func waitForDaemonReport(
+    from program: String? = nil,
+    launchdJob: LaunchAgentManager? = nil,
+    timeoutSeconds: TimeInterval = 30
+) throws -> DaemonReport {
     let deadline = Date().addingTimeInterval(timeoutSeconds)
     var lastError: Error = SocketError.connectionClosed
 
@@ -681,7 +721,21 @@ private func waitForDaemonReport(timeoutSeconds: TimeInterval = 30) throws -> Da
             if let error = response.error {
                 throw CLIError.operationFailed(error.message)
             }
-            return try DaemonReport(jsonObject: response.result ?? [:])
+            let report = try DaemonReport(jsonObject: response.result ?? [:])
+            if let program, !Supervision.report(report, isFrom: program) {
+                throw CLIError.operationFailed(
+                    "the daemon answering is \(report.provenance?.executablePath ?? "unknown") (pid \(report.processId)), not \(program)"
+                )
+            }
+            if let launchdJob {
+                let launchdPid = launchdJob.jobState().processId
+                guard report.provenance != nil, launchdPid == report.processId else {
+                    throw CLIError.operationFailed(
+                        "the daemon answering (pid \(report.processId)) is not \(launchdJob.configuration.label) (pid \(launchdPid.map(String.init) ?? "none"))"
+                    )
+                }
+            }
+            return report
         } catch {
             lastError = error
             Thread.sleep(forTimeInterval: 0.05)

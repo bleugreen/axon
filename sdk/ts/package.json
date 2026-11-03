@@ -1,6 +1,6 @@
 {
   "name": "axon-cmd",
-  "version": "0.3.6",
+  "version": "0.4.0",
   "description": "Programmatic Python and TypeScript clients for sending commands to a local Axon daemon.",
   "keywords": ["accessibility", "automation", "axon", "desktop", "gui", "rpc", "ui"],
   "homepage": "https://axn.dev",

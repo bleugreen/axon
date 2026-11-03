@@ -50,20 +50,11 @@ struct PreferencesView: View {
             let status: String
             let trusted: Bool
             do {
-                let response = try SocketClient(path: AxonEnvironment.socketPath(), responseTimeoutSeconds: 2)
-                    .send(JSONRPCRequest(id: .string("preferences.health"), method: "health"))
-                if let error = response.error {
-                    status = "Error: \(error.message)"
-                    trusted = false
-                } else if case let .string(accessibility)? = response.result?["accessibility"] {
-                    status = "Running (\(accessibility))"
-                    trusted = accessibility == PermissionStatus.trusted.rawValue
-                } else {
-                    status = "Running"
-                    trusted = false
-                }
+                let report = try DaemonClient(socketPath: AxonEnvironment.socketPath()).health()
+                trusted = report.permissions.first { $0.name == HealthPermission.accessibility }?.granted == true
+                status = "Running (pid \(report.processId), version \(report.version))"
             } catch {
-                status = "Unavailable"
+                status = "Unavailable: \(error)"
                 trusted = false
             }
             await MainActor.run {
@@ -80,18 +71,9 @@ struct PreferencesView: View {
             let trusted: Bool
             do {
                 try Self.ensureDaemonAvailable()
-                let response = try SocketClient(path: AxonEnvironment.socketPath(), responseTimeoutSeconds: 5)
-                    .send(JSONRPCRequest(id: .string("preferences.permit"), method: "permit"))
-                if let error = response.error {
-                    status = "Error: \(error.message)"
-                    trusted = false
-                } else if case let .string(accessibility)? = response.result?["accessibility"] {
-                    status = "Running (\(accessibility))"
-                    trusted = accessibility == PermissionStatus.trusted.rawValue
-                } else {
-                    status = "Running"
-                    trusted = false
-                }
+                let result = try DaemonClient(socketPath: AxonEnvironment.socketPath()).permit()
+                trusted = result.accessibility == .trusted
+                status = "Running (Accessibility \(result.accessibility.rawValue))"
             } catch {
                 status = "Unavailable: \(error)"
                 trusted = false
@@ -112,7 +94,7 @@ struct PreferencesView: View {
         Task.detached(priority: .utility) {
             let process = Process()
             process.executableURL = cliURL
-            process.arguments = ["restart"]
+            process.arguments = ["daemon", "restart"]
             do {
                 try process.run()
                 process.waitUntilExit()

@@ -41,6 +41,46 @@ private func makeAxonBundle(at bundleURL: URL, version: String, identifier: Stri
         to: editorURL.appendingPathComponent("Contents/Info.plist")
     )
     try writeExecutable(at: editorURL.appendingPathComponent("Contents/MacOS/AxonEditor"))
+
+    let menuURL = bundleURL.appendingPathComponent(AppBundle.nestedMenuRelativePath)
+    try writePlist(
+        [
+            "CFBundleIdentifier": AppBundle.axonMenuIdentifier,
+            "CFBundleShortVersionString": version,
+            "CFBundleExecutable": "AxonMenu"
+        ],
+        to: menuURL.appendingPathComponent("Contents/Info.plist")
+    )
+    try writeExecutable(at: menuURL.appendingPathComponent("Contents/MacOS/AxonMenu"))
+}
+
+@Test func aReleaseBundleMustCarryItsNestedMenuAtTheSameVersion() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("axon-menu-verify-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let bundle = root.appendingPathComponent("Axon.app", isDirectory: true)
+    try makeAxonBundle(at: bundle, version: "0.4.0")
+    let installer = ReleaseInstaller()
+    #expect(try installer.verifiedBundle(in: root, expectedVersion: "0.4.0") == bundle)
+
+    let menuPlist = bundle.appendingPathComponent(AppBundle.nestedMenuRelativePath).appendingPathComponent("Contents/Info.plist")
+    try PropertyListSerialization.data(
+        fromPropertyList: [
+            "CFBundleIdentifier": AppBundle.axonMenuIdentifier,
+            "CFBundleShortVersionString": "0.3.9",
+            "CFBundleExecutable": "AxonMenu"
+        ],
+        format: .xml,
+        options: 0
+    ).write(to: menuPlist)
+    #expect(throws: ReleaseInstallError.self) {
+        try installer.verifiedBundle(in: root, expectedVersion: "0.4.0")
+    }
+
+    try FileManager.default.removeItem(at: bundle.appendingPathComponent(AppBundle.nestedMenuRelativePath))
+    #expect(throws: ReleaseInstallError.self) {
+        try installer.verifiedBundle(in: root, expectedVersion: "0.4.0")
+    }
 }
 
 /// Packs an Axon.app into a release archive the way `scripts/package-app` does, and returns the
@@ -337,9 +377,11 @@ private func temporaryDirectory(_ name: String) throws -> URL {
     let plistPath = directory.appendingPathComponent("dev.axon.updater.plist")
     try Data("placeholder".utf8).write(to: plistPath)
 
-    var bootouts: [[String]] = []
+    // A `print` that names no pid is a finisher that is not running, so each reap goes on to boot
+    // the job out.
+    var commands: [[String]] = []
     let record: ([String]) throws -> ProcessResult = { arguments in
-        bootouts.append(arguments)
+        commands.append(arguments)
         return ProcessResult(exitCode: 0)
     }
 
@@ -348,6 +390,6 @@ private func temporaryDirectory(_ name: String) throws -> URL {
 
     // Nothing left to reap, and nothing thrown for it.
     LaunchAgentManager.reapUpdateFinisher(plistPath: plistPath, runProcess: record)
-    #expect(bootouts.count == 2)
-    #expect(bootouts.allSatisfy { $0.first == "bootout" && $0.last?.hasSuffix("/dev.axon.updater") == true })
+    #expect(commands.map(\.first) == ["print", "bootout", "print", "bootout"])
+    #expect(commands.allSatisfy { $0.last?.hasSuffix("/dev.axon.updater") == true })
 }

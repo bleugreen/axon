@@ -18,11 +18,20 @@ jobs:
       cancel-in-progress: false
     timeout-minutes: 30
     env:
-      # The label `LaunchAgentConfiguration` registers by, in
-      # `Sources/AxonClient/LaunchAgentManager.swift`. Named once here because the parking and restore
-      # steps address the agent through `launchctl` directly, which the CLI cannot do for them: the
-      # question they ask is whether the agent is loaded, and no Axon subcommand reports that.
+      # The two labels `LaunchAgentConfiguration` registers an installed Axon by, in
+      # `Sources/AxonClient/LaunchAgentManager.swift`: the Rust daemon (the bundle's main
+      # executable) and the menu-bar shell. Named here because the parking and restore steps ask
+      # launchd directly whether each is loaded, which is the one fact they need and no Axon
+      # subcommand reports for a job that is booted out.
       AXON_LAUNCH_AGENT_LABEL: dev.axon.daemon
+      AXON_MENU_AGENT_LABEL: dev.axon.menu
+      # The candidate's own jobs. Private labels, so nothing this job bootstraps can be mistaken
+      # for, or collide with, the desktop's registration, and so a leftover from a killed run is
+      # addressable by name.
+      AXON_LIVE_DAEMON_LABEL: dev.axon.live.daemon
+      AXON_LIVE_MENU_LABEL: dev.axon.live.menu
+      AXON_DIST_MAIN: dist/Axon.app/Contents/MacOS/Axon
+      AXON_DIST_MENU: dist/Axon.app/Contents/Library/Applications/Axon Menu.app/Contents/MacOS/AxonMenu
     steps:
       - name: Check out Axon
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -46,63 +55,77 @@ jobs:
           AXON_CODESIGN_IDENTITY: 2A1FE6185D48E55E22FA9DB390B452D2E06AD665
         run: ./scripts/package-app
 
-      # A live runner is also somebody's desktop, so an Axon daemon already serving the endpoint is
-      # the normal case rather than a reason to refuse. It is stopped once for the whole job rather
-      # than from inside the probe, because the probe launches its own daemon and can only be
-      # evidence about this build if that daemon is the one answering. The last step puts it back.
+      # A live runner is also somebody's desktop, so an installed Axon serving the endpoint is the
+      # normal case rather than a reason to refuse. It is parked once for the whole job rather than
+      # from inside the probe, and the last step puts it back. The probe's candidate serves a
+      # private socket of its own, so parking is not what keeps the candidate's answers honest --
+      # the pid and provenance checks do that -- it is what keeps two daemons from driving one
+      # desktop's Accessibility tree and two menus from sitting in one menu bar.
       - name: Park the installed Axon daemon
         run: |
           set -euo pipefail
           cli="$PWD/dist/Axon.app/Contents/Resources/bin/axon"
+          uid="$(id -u)"
 
-          # A probe app that outlived an earlier job, which `if: always()` cannot prevent because a
-          # killed runner runs nothing. It goes first: a leftover holds the socket lock if it bound
-          # and then wedged, and answers nothing if it never bound, so `shutdown` below can neither
-          # see it nor stop it, and every step after that would fail on an obstacle nobody names.
-          scripts/stop-probe-app "$PWD/dist/Axon.app/Contents/MacOS/Axon"
+          # A candidate that outlived an earlier job, which `if: always()` cannot prevent because a
+          # killed runner runs nothing. Its private jobs would make the probe's bootstrap fail as
+          # already loaded, and a process launchd no longer tracks would be a second candidate the
+          # pid check could only guess between.
+          scripts/stop-probe-app \
+            --launchd-label "$AXON_LIVE_MENU_LABEL" --launchd-label "$AXON_LIVE_DAEMON_LABEL" \
+            "$PWD/$AXON_DIST_MAIN" "$PWD/$AXON_DIST_MENU"
 
-          # Whether start-at-login was live when the job arrived, which is the only fact that says
-          # whether the restore owes this machine a daemon. The plist cannot answer it: `shutdown`
-          # boots the agent out and deliberately leaves the registration on disk, so a machine this
-          # job unloaded still reads as registered. `launchctl print` exits non-zero for a label
-          # that is not loaded in the domain.
-          agent_was_loaded=false
-          if launchctl print "gui/$(id -u)/$AXON_LAUNCH_AGENT_LABEL" >/dev/null 2>&1; then
-            agent_was_loaded=true
+          # Whether each job was live when the job arrived, which is the only fact that says what
+          # the restore owes this machine. The plists cannot answer it: `shutdown` boots both jobs
+          # out and deliberately leaves the registration on disk, so a machine this job unloaded
+          # still reads as registered. `launchctl print` exits non-zero for a label that is not
+          # loaded in the domain. The two are recorded separately because either can be loaded
+          # without the other, and the restore must not add a job the desktop was not running.
+          daemon_was_loaded=false
+          if launchctl print "gui/$uid/$AXON_LAUNCH_AGENT_LABEL" >/dev/null 2>&1; then
+            daemon_was_loaded=true
           fi
-          # A daemon can also come from a running Axon.app. On a machine whose agent registers the
-          # app, launchd does own it and both flags go true together; a hand-launched app it does
-          # not own, and `daemon restart` would not bring that one back. Recorded separately
-          # because both can be true at once and each is put back differently — the agent branch
-          # wins, and restoring the agent restores the app it registers. The bundle that is
-          # actually running is recorded rather than assumed to be the one in /Applications,
-          # because reopening a different copy would be reopening a different program.
-          app_was_running=false
-          app_bundle=""
-          running_app_pid="$(pgrep -x Axon | head -1 || true)"
-          if [ -n "$running_app_pid" ]; then
-            app_was_running=true
-            app_bundle="$(ps -p "$running_app_pid" -o comm= | sed 's|/Contents/MacOS/Axon$||')"
+          menu_was_loaded=false
+          if launchctl print "gui/$uid/$AXON_MENU_AGENT_LABEL" >/dev/null 2>&1; then
+            menu_was_loaded=true
           fi
           # Handed to the restore step before anything is stopped, so a machine the stop below
-          # fails on still gets its daemon back.
+          # fails on still gets its jobs back.
           {
-            echo "AXON_AGENT_WAS_LOADED=$agent_was_loaded"
-            echo "AXON_APP_WAS_RUNNING=$app_was_running"
-            echo "AXON_APP_BUNDLE=$app_bundle"
+            echo "AXON_DAEMON_WAS_LOADED=$daemon_was_loaded"
+            echo "AXON_MENU_WAS_LOADED=$menu_was_loaded"
           } >> "$GITHUB_ENV"
-          echo "found this desktop as: LaunchAgent loaded=$agent_was_loaded, Axon.app running=$app_was_running${app_bundle:+ ($app_bundle)}"
+          echo "found this desktop as: $AXON_LAUNCH_AGENT_LABEL loaded=$daemon_was_loaded, $AXON_MENU_AGENT_LABEL loaded=$menu_was_loaded"
 
-          # The label above is this workflow's copy of `LaunchAgentConfiguration`'s default, and
-          # nothing makes the two agree. Drift would fail in the worst way available: `launchctl
-          # print` would report the desktop's agent as not loaded, `shutdown` would boot it out
-          # under the CLI's own label regardless, and the restore would then leave the machine
-          # stopped on purpose. `registration.registered` is computed by the CLI from its own
-          # label's plist path, so a registration it can see where this job cannot name one is
-          # exactly that disagreement, caught before anything is stopped.
-          if "$cli" status --json | jq -e '.registration.registered' >/dev/null \
+          # The labels above are this workflow's copy of `LaunchAgentConfiguration`'s, and nothing
+          # makes the two agree. Drift would fail in the worst way available: `launchctl print`
+          # would report the desktop's job as not loaded, `shutdown` would boot it out under the
+          # CLI's own label regardless, and the restore would then leave the machine stopped on
+          # purpose. The CLI computes `registration.registered` from its own daemon label's plist
+          # path and names every job it supervises in `registration.jobs`, so a registration it can
+          # see where this job cannot name one, or a job label this job does not know, is exactly
+          # that disagreement, caught before anything is stopped.
+          registration="$("$cli" status --json)"
+          if printf '%s' "$registration" | jq -e '.registration.registered' >/dev/null \
             && [ ! -e "$HOME/Library/LaunchAgents/$AXON_LAUNCH_AGENT_LABEL.plist" ]; then
             echo "::error::the CLI reports a LaunchAgent registration, but none exists at ~/Library/LaunchAgents/$AXON_LAUNCH_AGENT_LABEL.plist; AXON_LAUNCH_AGENT_LABEL has drifted from LaunchAgentConfiguration and this job cannot address this desktop's agent"
+            exit 1
+          fi
+          unknown_jobs="$(printf '%s' "$registration" | jq -r --arg daemon "$AXON_LAUNCH_AGENT_LABEL" --arg menu "$AXON_MENU_AGENT_LABEL" \
+            '[.registration.jobs[]?.label | select(. != $daemon and . != $menu)] | join(" ")')"
+          if [ -n "$unknown_jobs" ]; then
+            echo "::error::the CLI supervises job(s) $unknown_jobs that this workflow does not name; AXON_LAUNCH_AGENT_LABEL or AXON_MENU_AGENT_LABEL has drifted from LaunchAgentConfiguration and this job cannot record or restore them"
+            exit 1
+          fi
+
+          # The menu goes first, and by name, so that it is never left running against an endpoint
+          # nobody serves -- its KeepAlive relaunches it on a crash, and a menu whose daemon
+          # vanished is what such a crash looks like. A label that is not loaded is the expected
+          # answer on a desktop without a menu, so the bootout is tolerated and its outcome is
+          # checked instead.
+          launchctl bootout "gui/$uid/$AXON_MENU_AGENT_LABEL" >/dev/null 2>&1 || true
+          if launchctl print "gui/$uid/$AXON_MENU_AGENT_LABEL" >/dev/null 2>&1; then
+            echo "::error::$AXON_MENU_AGENT_LABEL is still loaded after bootout; refusing to stop the daemon underneath a menu this job could not park"
             exit 1
           fi
 
@@ -112,82 +135,198 @@ jobs:
           # is not hypothetical -- the macOS runner's installed binary had no `shutdown` at all,
           # which made this whole protection a no-op that nothing reported.
           #
-          # Untolerated for the same reason. `shutdown` boots the agent out before asking the
-          # daemon to exit, so `KeepAlive` cannot relaunch it in the gap, and it exits non-zero
-          # while anything is still answering -- which makes its success the endpoint-is-free
-          # guarantee the probe depends on. A daemon left holding the endpoint would answer every
-          # assertion below.
+          # Untolerated for the same reason. `shutdown` boots the jobs out before asking the daemon
+          # to exit, so `KeepAlive` cannot relaunch it in the gap, and it exits non-zero while
+          # anything is still answering.
           "$cli" shutdown
 
       - name: Capture, resolve, act, and verify
         run: |
           set -euo pipefail
           cli="$PWD/dist/Axon.app/Contents/Resources/bin/axon"
-          app_executable="$PWD/dist/Axon.app/Contents/MacOS/Axon"
+          dist_main="$PWD/$AXON_DIST_MAIN"
+          dist_menu="$PWD/$AXON_DIST_MENU"
+          uid="$(id -u)"
+          daemon_plist="$RUNNER_TEMP/$AXON_LIVE_DAEMON_LABEL.plist"
+          menu_plist="$RUNNER_TEMP/$AXON_LIVE_MENU_LABEL.plist"
+          daemon_log="$RUNNER_TEMP/$AXON_LIVE_DAEMON_LABEL.log"
+          menu_log="$RUNNER_TEMP/$AXON_LIVE_MENU_LABEL.log"
+          # The candidate's own endpoint, exported so that every client below -- `status`, `mcp`,
+          # `run`, and the assertion script -- talks to it and to nothing else. Per run, because a
+          # re-run attempt of a cancelled run shares its id and the restore removes the file.
+          export AXON_SOCKET_PATH="/tmp/axon-live-${GITHUB_RUN_ID}.sock"
 
           if pgrep -x Calculator >/dev/null; then
             echo '::error::Calculator is already running; refusing to alter an existing desktop session.'
             exit 1
           fi
-          # Calculator alone, because it is the only desktop state this step owns. The daemon it
-          # launches and the desktop's own belong to the restore step instead: a trap cannot run
-          # when the runner cancels the job, and putting a machine's start-at-login daemon back is
-          # not something to leave to a handler that a cancellation skips.
+          # Calculator alone, because it is the only desktop state this step owns. The candidate's
+          # jobs and the desktop's own belong to the restore step instead: a trap cannot run when
+          # the runner cancels the job, and putting a machine's start-at-login daemon back is not
+          # something to leave to a handler that a cancellation skips.
           trap 'killall Calculator >/dev/null 2>&1 || true' EXIT
 
-          # `open -n` launches the bundle, and the app serves the endpoint from inside its own
-          # process -- there is no `serve` child to wait on -- so the app process is the daemon
-          # under test and its pid is what ties the document below to this build. `open` reports no
-          # pid, so it is found by the bundle executable's path, which no other install on the
-          # machine shares -- `pgrep -f` reads that path as a regular expression, which is harmless
-          # for a workspace path but would need quoting for one carrying metacharacters. Exactly
-          # one match is required: a second would be a leftover from an earlier run, and choosing
-          # between them would be a guess.
-          open -n "$PWD/dist/Axon.app"
-          app_pid=""
+          for executable in "$dist_main" "$dist_menu"; do
+            if [[ ! -x "$executable" ]]; then
+              echo "::error::$executable is not in the built bundle; scripts/package-app did not produce the two-job layout this lane launches"
+              exit 1
+            fi
+          done
+
+          # The candidate runs as launchd gui-domain jobs, the way an installed Axon runs, because
+          # that is the only launch whose privacy grants are its own: a process started from this
+          # runner's shell is attributed to whatever the runner was launched by, and `open -n`
+          # would take the main executable's launcher path -- with no argument and no managed key
+          # it runs the bundle's `axon start`, which acts on the desktop's production registration
+          # and never serves. Written with plistlib so a workspace path is escaped, not pasted.
+          python3 - "$daemon_plist" "$AXON_LIVE_DAEMON_LABEL" "$dist_main" "$daemon_log" \
+            "$menu_plist" "$AXON_LIVE_MENU_LABEL" "$dist_menu" "$menu_log" "$AXON_SOCKET_PATH" <<'PY'
+          import plistlib, sys
+          (daemon_plist, daemon_label, daemon_exe, daemon_log,
+           menu_plist, menu_label, menu_exe, menu_log, socket) = sys.argv[1:]
+          def write(path, job):
+              with open(path, "wb") as handle:
+                  plistlib.dump(job, handle)
+          # RunAtLoad because KeepAlive is false: without it a bootstrap loads the job and starts
+          # nothing. KeepAlive is false so a candidate that crashes stays crashed and is reported,
+          # instead of being relaunched under a new pid the assertions would chase.
+          write(daemon_plist, {
+              "Label": daemon_label,
+              "ProgramArguments": [daemon_exe],
+              "EnvironmentVariables": {"AXON_SOCKET_PATH": socket, "AXON_DAEMON_MANAGED_BY_LAUNCHD": "1"},
+              "RunAtLoad": True,
+              "KeepAlive": False,
+              "LimitLoadToSessionType": "Aqua",
+              "ProcessType": "Interactive",
+              "StandardOutPath": daemon_log,
+              "StandardErrorPath": daemon_log,
+          })
+          write(menu_plist, {
+              "Label": menu_label,
+              "ProgramArguments": [menu_exe],
+              "EnvironmentVariables": {"AXON_SOCKET_PATH": socket},
+              "RunAtLoad": True,
+              "KeepAlive": False,
+              "LimitLoadToSessionType": "Aqua",
+              "StandardOutPath": menu_log,
+              "StandardErrorPath": menu_log,
+          })
+          PY
+          # Read back from disk rather than trusted from the writer, because this is the check that
+          # stands between a lane and the desktop's production registration: a daemon plist without
+          # the managed key launches the main executable down its launcher path.
+          python3 - "$daemon_plist" "$dist_main" <<'PY'
+          import plistlib, sys
+          path, executable = sys.argv[1:]
+          with open(path, "rb") as handle:
+              job = plistlib.load(handle)
+          problems = []
+          if job.get("ProgramArguments") != [executable]:
+              problems.append(f"ProgramArguments is {job.get('ProgramArguments')!r}, not exactly [{executable!r}]")
+          if job.get("EnvironmentVariables", {}).get("AXON_DAEMON_MANAGED_BY_LAUNCHD") != "1":
+              problems.append("it does not set AXON_DAEMON_MANAGED_BY_LAUNCHD=1, so the main executable would take its launcher path and run this bundle's `axon start` against the desktop's production registration")
+          for problem in problems:
+              print(f"::error::refusing to bootstrap {path}: {problem}")
+          sys.exit(1 if problems else 0)
+          PY
+
+          if ! launchctl bootstrap "gui/$uid" "$daemon_plist"; then
+            echo "::error::launchctl could not bootstrap $AXON_LIVE_DAEMON_LABEL from $daemon_plist"
+            tail -40 "$daemon_log" 2>/dev/null || true
+            exit 1
+          fi
+          # launchd's own answer for which process it started, never a process-table search: the
+          # label is this job's alone, so the pid it names is the candidate by construction.
+          job_pid() {
+            launchctl print "gui/$uid/$1" 2>/dev/null | awk '/^[[:space:]]*pid = / { print $3; exit }' || true
+          }
+          daemon_pid=""
           for _ in {1..40}; do
-            app_pid="$(pgrep -f "$app_executable" || true)"
-            if [[ -n "$app_pid" ]]; then
+            daemon_pid="$(job_pid "$AXON_LIVE_DAEMON_LABEL")"
+            if [[ -n "$daemon_pid" ]]; then
               break
             fi
             sleep 0.25
           done
-          if [[ -z "$app_pid" ]]; then
-            echo "::error::nothing is running $app_executable; the app under test never launched"
-            exit 1
-          fi
-          if [[ "$(printf '%s\n' "$app_pid" | wc -l | tr -d '[:space:]')" != 1 ]]; then
-            echo "::error::$app_executable is running as pids $(printf '%s' "$app_pid" | tr '\n' ' '); an earlier run left one behind, and which of them answers the endpoint is a guess"
+          if [[ -z "$daemon_pid" ]]; then
+            echo "::error::launchd loaded $AXON_LIVE_DAEMON_LABEL but is not running it; the candidate daemon never launched or exited before it could serve"
+            launchctl print "gui/$uid/$AXON_LIVE_DAEMON_LABEL" 2>&1 | head -40 || true
+            tail -40 "$daemon_log" 2>/dev/null || true
             exit 1
           fi
 
           # Everything below is a client of the endpoint, so this is what makes the document
-          # evidence about the app this step launched rather than about whichever daemon is
-          # listening. Parking the installed one narrows that window but cannot close it: the
-          # version comparison below cannot tell this build from an installed daemon reporting the
-          # same version, and this runner's install is built from this repository.
-          scripts/assert-daemon-under-test "$cli" "$app_pid"
+          # evidence about the process launchd started from this build rather than about whichever
+          # daemon is listening.
+          scripts/assert-daemon-under-test "$cli" "$daemon_pid" "$daemon_log"
 
           # The published contract, checked against a real logged-in Mac.
           expected_version="$(cat VERSION)"
           # A local binary invocation, so a statement about the checkout rather than about the
-          # daemon. The document's own `.version` below is the daemon's claim, and the pid
+          # daemon. The document's own versions below are the daemon's claim, and the pid
           # assertion is what makes that claim about this build.
           test "$("$cli" version)" = "$expected_version"
           status="$("$cli" status --json)"
-          printf '%s' "$status" | jq -e '.schemaVersion == "health-v1"' >/dev/null
-          # Re-asserted on this document rather than inherited from the check above, so that every
-          # claim read out of it describes the one process the pid names.
-          printf '%s' "$status" | jq -e --argjson pid "$app_pid" '.daemon.processId == $pid' >/dev/null
-          printf '%s' "$status" | jq -e --arg v "$expected_version" '.version == $v' >/dev/null
-          printf '%s' "$status" | jq -e '.platform == "macos"' >/dev/null
-          printf '%s' "$status" | jq -e '.daemon.running and .daemon.ready' >/dev/null
-          printf '%s' "$status" | jq -e '.session.interactive and .session.graphical' >/dev/null
-          # The complete vocabulary, every unusable entry explained.
-          printf '%s' "$status" | jq -e '.capabilities | length == 15' >/dev/null
-          printf '%s' "$status" | jq -e '[.capabilities[] | select(.usable == false and (.reason // "") == "")] | length == 0' >/dev/null
-          printf '%s' "$status" | jq -e '[.permissions[] | select(.name == "accessibility")][0].granted == true' >/dev/null
-          echo 'Axon daemon is ready and Accessibility is granted'
+          # Every claim is read out of this one document, so each describes the one process the
+          # pid names.
+          require() {
+            if ! printf '%s' "$status" | jq -e --argjson pid "$daemon_pid" --arg version "$expected_version" "$1" >/dev/null; then
+              echo "::error::the candidate's health-v1 document does not hold: $2"
+              printf '%s\n' "$status" | jq '{version, platform, daemon, registration}'
+              exit 1
+            fi
+          }
+          require '.schemaVersion == "health-v1"' 'schemaVersion is health-v1'
+          require '.daemon.processId == $pid' "the endpoint is served by launchd's $AXON_LIVE_DAEMON_LABEL (pid $daemon_pid)"
+          require '.version == $version' 'the document reports VERSION'
+          require '.platform == "macos"' 'platform is macos'
+          require '.daemon.running and .daemon.ready' 'the daemon is running and ready'
+          require '.session.interactive and .session.graphical' 'the session is interactive and graphical'
+          # Which runtime answered, by its own account. The backend name is what tells the Rust
+          # daemon from a Swift one reporting the same version, and the executable is what ties it
+          # to this workspace's bundle rather than to an installed copy.
+          require '.daemon.provenance.backend == "rust-axon-mac"' 'provenance names the Rust axon-mac backend'
+          require '.daemon.provenance.processId == $pid' 'provenance names the launchd-started pid'
+          require '.daemon.provenance.version == $version' 'provenance reports VERSION'
+          require '.daemon.shellContract == 1' 'the daemon publishes shell contract 1 to the menu'
+          # The complete vocabulary, every unusable entry explained. Not all usable: axon-mac
+          # honestly reports observeChanges as not-implemented.
+          require '.capabilities | length == 15' 'all 15 capabilities are reported'
+          require '[.capabilities[] | select(.usable == false and (.reason // "") == "")] | length == 0' 'every unusable capability carries a reason'
+          require '[.permissions[] | select(.name == "accessibility")][0].granted == true' 'Accessibility is granted to the candidate'
+          # Compared physically, because the runner's workspace may sit behind a symlink and the
+          # daemon reports the path it was executed by.
+          physical_path() {
+            ( cd -P "$(dirname "$1")" 2>/dev/null && printf '%s/%s\n' "$(pwd -P)" "$(basename "$1")" ) || true
+          }
+          served_executable="$(printf '%s' "$status" | jq -r '.daemon.provenance.executablePath // ""')"
+          if [[ -z "$served_executable" || "$(physical_path "$served_executable")" != "$(physical_path "$dist_main")" ]]; then
+            echo "::error::the serving daemon reports executable ${served_executable:-<none>}, not this build's $dist_main"
+            exit 1
+          fi
+          echo "the Rust daemon from this build (pid $daemon_pid) is serving $AXON_SOCKET_PATH and Accessibility is granted"
+
+          # The menu half of the registration, started only once its daemon is ready -- the order
+          # an installed Axon's own restart uses.
+          if ! launchctl bootstrap "gui/$uid" "$menu_plist"; then
+            echo "::error::launchctl could not bootstrap $AXON_LIVE_MENU_LABEL from $menu_plist"
+            tail -40 "$menu_log" 2>/dev/null || true
+            exit 1
+          fi
+          menu_pid=""
+          for _ in {1..40}; do
+            menu_pid="$(job_pid "$AXON_LIVE_MENU_LABEL")"
+            if [[ -n "$menu_pid" ]]; then
+              break
+            fi
+            sleep 0.25
+          done
+          if [[ -z "$menu_pid" ]]; then
+            echo "::error::launchd loaded $AXON_LIVE_MENU_LABEL but is not running it; the candidate menu never launched"
+            tail -40 "$menu_log" 2>/dev/null || true
+            exit 1
+          fi
+          echo "the candidate menu is running as pid $menu_pid"
 
           open -a Calculator
           look=""
@@ -300,86 +439,207 @@ jobs:
           fi
           echo 'Calculator display verified'
 
+          # `look(since:)`. A change check is only evidence if it can also say "unchanged", so the
+          # window is first observed until a check against the previous token reports nothing new
+          # -- which is also what lets the display settle after the press above -- and only then
+          # is a button pressed and the same baseline asked again. A daemon that answered
+          # "changed" to everything would pass the second half alone.
+          since_look() {
+            jq -cn --arg since "$1" '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"look","arguments":{"app":"Calculator","since":$since}}}' | "$cli" mcp
+          }
+          baseline="$(printf '%s\n' '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"look","arguments":{"app":"Calculator","screenshot":false}}}' | "$cli" mcp)"
+          since_token="$(printf '%s' "$baseline" | jq -r '.result.structuredContent.since // empty')"
+          if [[ -z "$since_token" ]]; then
+            echo '::error::a full look at Calculator returned no since token'
+            printf '%s\n' "$baseline" | jq '{isError: .result.isError, keys: (.result.structuredContent | keys?)}'
+            exit 1
+          fi
+          settled=false
+          check=""
+          for _ in {1..20}; do
+            check="$(since_look "$since_token")"
+            if printf '%s' "$check" | jq -e '.result.isError == false and .result.structuredContent.unchanged == true' >/dev/null; then
+              settled=true
+              break
+            fi
+            since_token="$(printf '%s' "$check" | jq -r '.result.structuredContent.since // empty')"
+            if [[ -z "$since_token" ]]; then
+              break
+            fi
+            sleep 0.1
+          done
+          if [[ "$settled" != true ]]; then
+            echo '::error::look(since:) never reported an untouched Calculator as unchanged'
+            printf '%s\n' "$check" | jq '{isError: .result.isError, result: (.result.structuredContent | del(.observation))}'
+            exit 1
+          fi
+          # Pressed after the settle; the token checked against is the settled one, which the
+          # unchanged answer itself carries.
+          if ! jq -cn --arg app "$retained_app" --arg name "$clear_name" '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"invoke","arguments":{"target":{"app":$app,"name":$name},"name":"AXPress"}}}' | "$cli" mcp \
+            | jq -e '.result.isError == false and .result.structuredContent.action.success == true' >/dev/null; then
+            echo '::error::Calculator All Clear did not dispatch for the change check'
+            exit 1
+          fi
+          changed=false
+          for _ in {1..20}; do
+            check="$(since_look "$since_token")"
+            # A diff, or the full observation the daemon returns when the diff is too large to be
+            # worth sending. A baseline-expired fallback is not a change report: it means the token
+            # was forgotten.
+            if printf '%s' "$check" | jq -e '
+              .result.isError == false
+              and (.result.structuredContent.unchanged // false) == false
+              and (.result.structuredContent.diff != null or .result.structuredContent.note == "diff-exceeded-threshold")
+            ' >/dev/null; then
+              changed=true
+              break
+            fi
+            sleep 0.1
+          done
+          if [[ "$changed" != true ]]; then
+            echo '::error::look(since:) did not report the change All Clear made to Calculator'
+            printf '%s\n' "$check" | jq '{isError: .result.isError, result: (.result.structuredContent | del(.observation))}'
+            exit 1
+          fi
+          echo 'look(since:) reported unchanged before the press and a change after it'
+
+          # OCR over the window's own pixels. Calculator always shows digits -- the display and
+          # the keypad -- so a recognizer that returns none has not read this window.
+          screen="$(printf '%s\n' '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"look","arguments":{"app":"Calculator","screenshot":false,"screenText":true}}}' | "$cli" mcp)"
+          if ! printf '%s' "$screen" | jq -e '
+            .result.isError == false
+            and ([.result.structuredContent.screenText[]?.text | strings | select(test("[0-9]"))] | length > 0)
+          ' >/dev/null; then
+            echo '::error::look with screenText did not recognize any Calculator digit'
+            printf '%s\n' "$screen" | jq '{isError: .result.isError, screenText: .result.structuredContent.screenText, screenTextUnavailable: .result.structuredContent.screenTextUnavailable, error: .result.structuredContent.error}'
+            exit 1
+          fi
+          echo "screenText recognized: $(printf '%s' "$screen" | jq -c '[.result.structuredContent.screenText[]?.text] | .[0:12]')"
+
+          # A recording the production Swift daemon made, replayed by this build: the compatibility
+          # promise the flip from Swift to Rust rests on. Skipped until the qualification commits
+          # the recording, and loud about it, so a green lane cannot be read as having replayed it.
+          replay="$PWD/scripts/macos-toolkit-acceptance/live/axn125/calculator-swift-0.3.6.axn"
+          if [[ ! -f "$replay" ]]; then
+            echo "::notice::$replay is not committed yet; skipping the Swift-recorded replay probe"
+          else
+            replay_status=0
+            replay_output="$("$cli" run "$replay" 2>&1)" || replay_status=$?
+            if [[ "$replay_status" != 0 ]] || ! printf '%s' "$replay_output" | jq -e '.error == null and .result.success == true' >/dev/null 2>&1; then
+              echo "::error::replaying $replay failed (exit $replay_status)"
+              printf '%s\n' "$replay_output" | jq '{error, success: .result.success, failed: [.result.trace[]? | select(.success != true) | {index, tool, error}]}' 2>/dev/null \
+                || printf '%.2000s\n' "$replay_output"
+              exit 1
+            fi
+            echo "replayed $replay successfully"
+          fi
+
+          # The menu has been talking to the candidate for the whole probe; one that died on any
+          # of it would otherwise pass unnoticed, because nothing above is its client.
+          if [[ -z "$(job_pid "$AXON_LIVE_MENU_LABEL")" ]]; then
+            echo "::error::the candidate menu ($AXON_LIVE_MENU_LABEL, pid $menu_pid) is no longer running after the probes"
+            launchctl print "gui/$uid/$AXON_LIVE_MENU_LABEL" 2>&1 | head -40 || true
+            tail -40 "$menu_log" 2>/dev/null || true
+            exit 1
+          fi
+          echo 'the candidate menu survived the probes'
+
       # The counterpart to the parking step, and the reason the probe above may leave the machine
       # in whatever state it failed in. `always()` because a failed probe is exactly when the
       # desktop most needs its own daemon back.
       #
       # It needs a step of its own rather than a trap because `shutdown` is not a pause: it boots
-      # the LaunchAgent out so `KeepAlive` cannot relaunch the daemon mid-request, and the agent
-      # then stays unloaded for the rest of the login session. A job that calls it owes this
-      # machine a bootstrap, and a trap inside a step that the runner cancels never runs.
+      # both jobs out so `KeepAlive` cannot relaunch them mid-request, and they then stay unloaded
+      # for the rest of the login session. A job that calls it owes this machine a bootstrap, and
+      # a trap inside a step that the runner cancels never runs.
       - name: Restore the installed Axon daemon
         if: always()
         run: |
           set -euo pipefail
+          # Only the probe exports the candidate's socket, but this step must address the
+          # desktop's endpoint, and a value inherited from anywhere would aim `daemon restart`'s
+          # readiness wait and every status read below at the candidate instead.
+          unset AXON_SOCKET_PATH
           cli="$GITHUB_WORKSPACE/dist/Axon.app/Contents/Resources/bin/axon"
+          uid="$(id -u)"
+          agents="$HOME/Library/LaunchAgents"
 
-          # Set only by the parking step, and the reason this step may stop a daemon at all:
-          # without it the job never touched this desktop, and anything serving here is its own.
-          if [ -z "${AXON_AGENT_WAS_LOADED:-}" ]; then
-            echo 'the installed daemon was never parked; leaving the desktop alone'
-            exit 0
-          fi
-
-          # Anything still serving is the probe's, because the desktop's own was stopped at the top
-          # of the job. It has to go before the agent is bootstrapped back, or the restored daemon
-          # starts into an endpoint that is already taken. Best-effort here alone: the probe's app
-          # may have exited already, and `shutdown` finding nothing to stop looks the same.
-          "$cli" shutdown >/dev/null 2>&1 || true
+          # The candidate goes first, and unconditionally: its labels are this job's alone, so
+          # there is nothing of the desktop's here to leave alone. A survivor no longer holds the
+          # desktop's endpoint -- it served a private one -- so it does not stand in the way of the
+          # restore; it is recorded and fails the step after the desktop has its daemon back.
           killall Calculator >/dev/null 2>&1 || true
-          # `shutdown` stops a daemon by asking it to, so it cannot reach a probe app that never
-          # bound the endpoint and therefore answers nothing. That process is this job's own, and
-          # if it bound and then wedged it holds the socket lock -- which would make the bootstrap
-          # below fail on an obstacle this step had left in its own way.
-          scripts/stop-probe-app "$GITHUB_WORKSPACE/dist/Axon.app/Contents/MacOS/Axon"
-
-          if [ "$AXON_AGENT_WAS_LOADED" != true ] && [ "${AXON_APP_WAS_RUNNING:-false}" != true ]; then
-            echo 'this desktop had no Axon daemon when the job arrived; leaving it stopped'
-            exit 0
-          fi
-
-          restart_output=""
-          if [ "$AXON_AGENT_WAS_LOADED" = true ]; then
-            # `daemon restart`, never `daemon install`: restart bootstraps the plist that is on
-            # disk without rewriting it, while install would repoint the desktop's registration at
-            # the invoking binary -- here a `dist` directory the next run overwrites. The build
-            # under test asks, because the installed CLI is whichever release this desktop last
-            # installed and need not carry the verb at all.
-            #
-            # Its status is recorded rather than acted on. `daemon restart` is `launchctl
-            # bootstrap` plus a readiness wait that parses the answer with *this* build's decoder,
-            # so the release skew this step already expects elsewhere -- the pid comparison below
-            # tolerates a document too old to name a process -- would fail here for a daemon that
-            # came back perfectly. The verdict is the pair below; this output is for the diagnosis
-            # when that pair fails.
-            restart_status=0
-            restart_output="$("$cli" daemon restart 2>&1)" || restart_status=$?
-            printf '%s\n' "$restart_output"
-            echo "daemon restart exited $restart_status"
-          elif [ "${AXON_APP_WAS_RUNNING:-false}" = true ]; then
-            # The app was this desktop's daemon, so it has to be back before the health round trip
-            # below can mean anything. When the agent is being restored too, the app is reopened
-            # after that instead, so the agent wins the endpoint and the pid check describes it.
-            if ! open -a "${AXON_APP_BUNDLE:-/Applications/Axon.app}"; then
-              echo "::error::this job stopped the desktop's ${AXON_APP_BUNDLE:-/Applications/Axon.app} and could not reopen it; this machine has no Axon daemon until someone starts it by hand"
+          sweep_failed=false
+          scripts/stop-probe-app \
+            --launchd-label "$AXON_LIVE_MENU_LABEL" --launchd-label "$AXON_LIVE_DAEMON_LABEL" \
+            "$GITHUB_WORKSPACE/$AXON_DIST_MAIN" "$GITHUB_WORKSPACE/$AXON_DIST_MENU" || sweep_failed=true
+          rm -f "$RUNNER_TEMP/$AXON_LIVE_DAEMON_LABEL.plist" "$RUNNER_TEMP/$AXON_LIVE_MENU_LABEL.plist" \
+            "/tmp/axon-live-${GITHUB_RUN_ID}.sock"
+          finish() {
+            if [ "$sweep_failed" = true ]; then
+              echo '::error::a candidate process survived its jobs being booted out; this runner needs attention before the next live run'
               exit 1
             fi
+            exit 0
+          }
+          job_pid() {
+            launchctl print "gui/$uid/$1" 2>/dev/null | awk '/^[[:space:]]*pid = / { print $3; exit }' || true
+          }
+          job_loaded() {
+            launchctl print "gui/$uid/$1" >/dev/null 2>&1
+          }
+
+          # Set only by the parking step, and the reason this step may start anything at all:
+          # without it the job never touched this desktop.
+          if [ -z "${AXON_DAEMON_WAS_LOADED:-}" ]; then
+            echo 'the installed daemon was never parked; leaving the desktop alone'
+            finish
+          fi
+          menu_was_loaded="${AXON_MENU_WAS_LOADED:-false}"
+
+          if [ "$AXON_DAEMON_WAS_LOADED" != true ]; then
+            if [ "$menu_was_loaded" = true ]; then
+              # A menu with no daemon is an odd desktop, but it is the one this job found, and
+              # `daemon restart` would add the daemon it did not have.
+              launchctl bootstrap "gui/$uid" "$agents/$AXON_MENU_AGENT_LABEL.plist" || true
+              if ! job_loaded "$AXON_MENU_AGENT_LABEL"; then
+                echo "::error::this job parked $AXON_MENU_AGENT_LABEL and could not load it again"
+                tail -20 "$HOME/Library/Logs/Axon/menu.err.log" 2>/dev/null || true
+                exit 1
+              fi
+              echo "restored $AXON_MENU_AGENT_LABEL; no daemon was loaded when the job arrived"
+            else
+              echo 'this desktop had no Axon job loaded when the job arrived; leaving it stopped'
+            fi
+            finish
           fi
 
-          # Neither `daemon restart` nor `open` is trusted on its exit code: both report on
-          # starting a daemon, not on one serving, and `launchctl bootstrap` returning zero is a
-          # claim about loading a job. Read together on purpose, so the pair below describes one
-          # moment rather than two.
+          # `daemon restart`, never `daemon install`: restart bootstraps the plists that are on
+          # disk without rewriting them, while install would repoint the desktop's registration at
+          # the invoking binary -- here a `dist` directory the next run overwrites. The build under
+          # test asks, because the installed CLI is whichever release this desktop last installed
+          # and need not carry the verb at all. It loads the daemon, waits for it to be ready, and
+          # only then loads the menu, which is the order this step needs.
+          #
+          # Its status is recorded rather than acted on. Its readiness wait parses the answer with
+          # *this* build's decoder, so release skew -- the pid comparison below tolerates a
+          # document too old to name a process -- would fail it for a daemon that came back
+          # perfectly, and a wait that fails never reaches the menu. The verdict is the checks
+          # below; this output is for the diagnosis when they fail.
+          restart_status=0
+          restart_output="$("$cli" daemon restart 2>&1)" || restart_status=$?
+          printf '%s\n' "$restart_output"
+          echo "daemon restart exited $restart_status"
+
+          # Not trusted on its exit code either way: `launchctl bootstrap` returning zero is a
+          # claim about loading a job, not about one serving. Read together on purpose, so the
+          # pair below describes one moment rather than two.
           answering=false
           status=""
           agent_pid=""
           for _ in {1..40}; do
             status="$("$cli" status --json)"
-            # Tolerated deliberately, and the only place in this step where that is right: an
-            # unloaded label is one of the answers being asked for, and `launchctl print` reports
-            # it by exiting non-zero, which `pipefail` would otherwise turn into the step dying
-            # with a bare exit code instead of the diagnosis below.
-            agent_pid="$(launchctl print "gui/$(id -u)/$AXON_LAUNCH_AGENT_LABEL" 2>/dev/null | awk '/^[[:space:]]*pid = / { print $3; exit }' || true)"
+            agent_pid="$(job_pid "$AXON_LAUNCH_AGENT_LABEL")"
             if printf '%s' "$status" | jq -e '.daemon.running' >/dev/null; then
               answering=true
               break
@@ -388,49 +648,57 @@ jobs:
           done
           if [[ "$answering" != true ]]; then
             echo "::error::the desktop Axon daemon did not come back at $(printf '%s' "$status" | jq -r '.daemon.endpoint'); this runner needs attention before the next live run"
-            if [ -n "$restart_output" ]; then
-              printf -- '--- daemon restart ---\n%s\n' "$restart_output"
-            fi
-            launchctl print "gui/$(id -u)/$AXON_LAUNCH_AGENT_LABEL" 2>&1 | head -20 || true
+            printf -- '--- daemon restart ---\n%s\n' "$restart_output"
+            launchctl print "gui/$uid/$AXON_LAUNCH_AGENT_LABEL" 2>&1 | head -20 || true
             tail -20 "$HOME/Library/Logs/Axon/daemon.err.log" 2>/dev/null || true
             exit 1
           fi
 
-          if [ "$AXON_AGENT_WAS_LOADED" = true ]; then
-            # A daemon answering is not the agent running. Both halves are required, because the
-            # two failures look nothing alike to whoever reads this next: an agent that never came
-            # back, or an agent that is unloaded while something else answers on its endpoint --
-            # which is the case that leaves the next bootstrap dead on an address already in use.
-            if [ -z "$agent_pid" ]; then
-              echo "::error::a daemon is answering at $(printf '%s' "$status" | jq -r '.daemon.endpoint') but launchd is not running $AXON_LAUNCH_AGENT_LABEL; this desktop's start-at-login registration is still booted out"
-              printf -- '--- daemon restart ---\n%s\n' "$restart_output"
-              exit 1
-            fi
-            # Exact whenever the document allows it. A daemon this build can parse names its own
-            # process, so requiring that to be launchd's is what rules out one of the probe's
-            # orphans answering in the restored daemon's place. A missing pid is tolerated rather
-            # than required: this desktop runs whichever release it installed, and a payload this
-            # build is too new to parse reports a daemon that is up with no process id at all.
-            if printf '%s' "$status" | jq -e '.daemon.processId != null' >/dev/null \
-              && ! printf '%s' "$status" | jq -e --argjson pid "$agent_pid" '.daemon.processId == $pid' >/dev/null; then
-              echo "::error::$(printf '%s' "$status" | jq -r '.daemon.endpoint') is answered by pid $(printf '%s' "$status" | jq -r '.daemon.processId'), not the restored LaunchAgent (pid $agent_pid)"
-              printf -- '--- daemon restart ---\n%s\n' "$restart_output"
-              exit 1
-            fi
+          # A daemon answering is not the agent running. Both halves are required, because the two
+          # failures look nothing alike to whoever reads this next: an agent that never came back,
+          # or an agent that is unloaded while something else answers on its endpoint -- which is
+          # the case that leaves the next bootstrap dead on an address already in use.
+          if [ -z "$agent_pid" ]; then
+            echo "::error::a daemon is answering at $(printf '%s' "$status" | jq -r '.daemon.endpoint') but launchd is not running $AXON_LAUNCH_AGENT_LABEL; this desktop's start-at-login registration is still booted out"
+            printf -- '--- daemon restart ---\n%s\n' "$restart_output"
+            exit 1
+          fi
+          # Exact whenever the document allows it. A daemon this build can parse names its own
+          # process, so requiring that to be launchd's is what rules out a stray answering in the
+          # restored daemon's place. A missing pid is tolerated rather than required: this desktop
+          # runs whichever release it installed, and a payload this build is too new to parse
+          # reports a daemon that is up with no process id at all.
+          if printf '%s' "$status" | jq -e '.daemon.processId != null' >/dev/null \
+            && ! printf '%s' "$status" | jq -e --argjson pid "$agent_pid" '.daemon.processId == $pid' >/dev/null; then
+            echo "::error::$(printf '%s' "$status" | jq -r '.daemon.endpoint') is answered by pid $(printf '%s' "$status" | jq -r '.daemon.processId'), not the restored LaunchAgent (pid $agent_pid)"
+            printf -- '--- daemon restart ---\n%s\n' "$restart_output"
+            exit 1
           fi
 
-          # Reopened last, and only now. A desktop can run the menu-bar app on a machine whose
-          # LaunchAgent is registered too -- whichever binds first holds the endpoint -- which is
-          # why the two facts were recorded separately rather than as alternatives. Bringing the
-          # app back before the agent had settled would let it win the endpoint, and the check
-          # above would then be describing the wrong process.
-          if [ "$AXON_AGENT_WAS_LOADED" = true ] && [ "${AXON_APP_WAS_RUNNING:-false}" = true ]; then
-            if ! open -a "${AXON_APP_BUNDLE:-/Applications/Axon.app}"; then
-              echo "::error::the desktop's Axon daemon is answering again, but ${AXON_APP_BUNDLE:-/Applications/Axon.app} was also running when this job arrived and could not be reopened"
+          if [ "$menu_was_loaded" = true ]; then
+            # Loaded here only when the restart's own readiness wait failed before reaching it;
+            # the daemon is verified by now, so the order still holds.
+            if ! job_loaded "$AXON_MENU_AGENT_LABEL"; then
+              launchctl bootstrap "gui/$uid" "$agents/$AXON_MENU_AGENT_LABEL.plist" || true
+            fi
+            if ! job_loaded "$AXON_MENU_AGENT_LABEL"; then
+              echo "::error::the desktop's daemon is answering again, but $AXON_MENU_AGENT_LABEL was loaded when this job arrived and is not loaded now"
+              printf -- '--- daemon restart ---\n%s\n' "$restart_output"
+              launchctl print "gui/$uid/$AXON_MENU_AGENT_LABEL" 2>&1 | head -20 || true
+              tail -20 "$HOME/Library/Logs/Axon/menu.err.log" 2>/dev/null || true
+              exit 1
+            fi
+          elif job_loaded "$AXON_MENU_AGENT_LABEL"; then
+            # `daemon restart` bounces every job whose plist exists, so a menu that was registered
+            # but not running when the job arrived has just been started. Put back as found.
+            launchctl bootout "gui/$uid/$AXON_MENU_AGENT_LABEL" >/dev/null 2>&1 || true
+            if job_loaded "$AXON_MENU_AGENT_LABEL"; then
+              echo "::error::$AXON_MENU_AGENT_LABEL was not loaded when this job arrived, daemon restart loaded it, and it could not be booted out again"
               exit 1
             fi
           fi
           echo 'the desktop Axon daemon is answering again'
+          finish
 
   linux:
     name: Linux live loop

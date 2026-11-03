@@ -5,9 +5,9 @@
 //! Accessibility, so its truth is whatever that dictionary reads back. Everything here is
 //! platform-neutral: the wire types, URL equality as an address bar means it, the bounded settle
 //! that decides when a navigated tab's read-back can be believed, and the Accessibility cross-check
-//! for windows. Sending the Apple events lives in the macOS backend. The Swift daemon
-//! (`Sources/AxonCore/BrowserAutomation.swift`) is the reference, and `schema/fixtures/browser` is
-//! its output; `tests/browser_contract.rs` holds this module to those bytes.
+//! for windows. Sending the Apple events lives in the macOS backend. The Swift daemon was the
+//! reference until 0.4.0 deleted it, and `schema/fixtures/browser` is its frozen output;
+//! `tests/browser_contract.rs` holds this module to those bytes.
 
 use crate::{AutomationAuthorization, AutomationLeg, JsonRpcError};
 use serde::{Deserialize, Serialize};

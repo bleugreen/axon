@@ -3,13 +3,12 @@ import Foundation
 import Testing
 @testable import AxonCore
 
-// These pin what the command line packs onto the wire against what the router accepts.
+// These pin what the command line packs onto the wire for the daemon.
 //
 // The semantic-names cutover changed the shape of a `look` positional and of every element target,
-// and the CLI kept sending the pre-cutover shape while every MCP-side and router-side test stayed
+// and the CLI kept sending the pre-cutover shape while every MCP-side and daemon-side test stayed
 // green, because none of them go through argument parsing. Asserting the exact params object each
-// command line builds — and handing the packed target back to `ToolTarget`, the same type the
-// router validates with — is the only place that divergence is visible.
+// command line builds is the only place that divergence is visible.
 
 private let semanticTargetJSON = #"{"app":"Notes","name":"main/submit"}"#
 
@@ -27,8 +26,6 @@ private let semanticTargetJSON = #"{"app":"Notes","name":"main/submit"}"#
 @Test func lookWithASemanticObjectPagesThatElement() throws {
     let params = try CLICommandParser.look(arguments: ["look", semanticTargetJSON]).params
     #expect(params == ["target": .object(["app": .string("Notes"), "name": .string("main/submit")])])
-    #expect(try ToolTarget(jsonValue: try #require(params["target"]), acceptedKinds: .element)
-        == .semanticName(app: "Notes", name: "main/submit"))
     #expect(params["app"] == nil)
 }
 
@@ -123,7 +120,7 @@ private let semanticTargetJSON = #"{"app":"Notes","name":"main/submit"}"#
     }
 }
 
-@Test func everyPackedElementTargetSatisfiesTheRouterContract() throws {
+@Test func everyPackedElementTargetIsTheSemanticObject() throws {
     let packed = [
         try CLICommandParser.click(arguments: ["click", semanticTargetJSON]),
         try CLICommandParser.invoke(arguments: ["invoke", semanticTargetJSON, "AXPress"]),
@@ -132,8 +129,7 @@ private let semanticTargetJSON = #"{"app":"Notes","name":"main/submit"}"#
         try CLICommandParser.look(arguments: ["look", semanticTargetJSON]).params
     ]
     for params in packed {
-        #expect(try ToolTarget(jsonValue: try #require(params["target"]), acceptedKinds: .element)
-            == .semanticName(app: "Notes", name: "main/submit"))
+        #expect(params["target"] == .object(["app": .string("Notes"), "name": .string("main/submit")]))
     }
 }
 

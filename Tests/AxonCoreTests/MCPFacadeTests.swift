@@ -4,7 +4,8 @@ import Testing
 @testable import AxonCore
 
 @Test func mcpInitializeReturnsServerCapabilities() {
-    let response = MCPRouter(commandRouter: CommandRouter()).handle(JSONRPCRequest(
+    let handler = MCPRecordingCommandHandler()
+    let response = MCPRouter(commandHandler: handler).handle(JSONRPCRequest(
         id: .int(1),
         method: "initialize",
         params: .object([
@@ -18,10 +19,12 @@ import Testing
     #expect(response?.result?["protocolVersion"] == .string("2025-11-25"))
     #expect(response?.result?["capabilities"]?["tools"] != nil)
     #expect(response?.result?["serverInfo"]?["name"] == .string("axon"))
+    #expect(handler.requests.isEmpty)
 }
 
 @Test func mcpToolsListUsesPlainOperationNames() {
-    let response = MCPRouter(commandRouter: CommandRouter()).handle(JSONRPCRequest(
+    let handler = MCPRecordingCommandHandler()
+    let response = MCPRouter(commandHandler: handler).handle(JSONRPCRequest(
         id: .string("tools"),
         method: "tools/list"
     ))
@@ -56,6 +59,7 @@ import Testing
     #expect(tool(named: "wait_for_value", in: tools)?["inputSchema"]?["required"] == .array([.string("target")]))
     #expect(tool(named: "wait_for_value", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[0]?["type"] == .string("object"))
     #expect(tool(named: "wait_for_value", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[0]?["additionalProperties"] == .bool(false))
+    #expect(handler.requests.isEmpty)
 }
 
 @Test func mcpLookChildrenReturnsOnlyRequestedChildListObservation() {
@@ -112,17 +116,15 @@ import Testing
     #expect(textContent(in: response?.result)?.contains("s12:42: button \"Tab 25\" [click]") == true)
 }
 
-@Test func mcpToolsCallReturnsStructuredContentFromCommandRouter() {
-    let commandRouter = CommandRouter(
-        listApps: {
-            [
-                AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
-                AppIdentity(bundleIdentifier: "com.example.Helper", name: "Example Helper", processIdentifier: 8),
-                AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 9)
-            ]
-        }
-    )
-    let response = MCPRouter(commandRouter: commandRouter).handle(JSONRPCRequest(
+@Test func mcpLookWithoutATargetCompactsTheDaemonAppList() {
+    let handler = MCPRecordingCommandHandler(result: [
+        "apps": .array([
+            AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7).wireFixture,
+            AppIdentity(bundleIdentifier: "com.example.Helper", name: "Example Helper", processIdentifier: 8).wireFixture,
+            AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 9).wireFixture
+        ])
+    ])
+    let response = MCPRouter(commandHandler: handler).handle(JSONRPCRequest(
         id: .string("call"),
         method: "tools/call",
         params: .object([
@@ -131,6 +133,7 @@ import Testing
         ])
     ))
 
+    #expect(handler.requests == [JSONRPCRequest(id: .string("call"), method: "look", params: .object([:]))])
     #expect(response?.error == nil)
     #expect(response?.result?["isError"] == .bool(false))
     #expect(response?.result?["structuredContent"]?["apps"]?["format"] == .string("app_list"))
@@ -144,29 +147,14 @@ import Testing
     #expect(textContent(in: response?.result)?.contains("bundleIdentifier") == false)
 }
 
-@Test func mcpLookNoTargetUsesRegularUIAppsUnlessAllIsRequested() {
-    let commandRouter = CommandRouter(
-        listApps: {
-            [AppIdentity(bundleIdentifier: "com.example.Editor", name: "Editor", processIdentifier: 7)]
-        },
-        listAllApps: {
-            [
-                AppIdentity(bundleIdentifier: "com.example.Editor", name: "Editor", processIdentifier: 7),
-                AppIdentity(bundleIdentifier: "com.example.Helper", name: "Editor Helper", processIdentifier: 8)
-            ]
-        }
-    )
-    let router = MCPRouter(commandRouter: commandRouter)
-
-    let regular = router.handle(JSONRPCRequest(
-        id: .string("regular-apps"),
-        method: "tools/call",
-        params: .object([
-            "name": .string("look"),
-            "arguments": .object([:])
+@Test func mcpLookAllReturnsTheDaemonAppListUncompacted() {
+    let handler = MCPRecordingCommandHandler(result: [
+        "apps": .array([
+            AppIdentity(bundleIdentifier: "com.example.Editor", name: "Editor", processIdentifier: 7).wireFixture,
+            AppIdentity(bundleIdentifier: "com.example.Helper", name: "Editor Helper", processIdentifier: 8).wireFixture
         ])
-    ))
-    let all = router.handle(JSONRPCRequest(
+    ])
+    let response = MCPRouter(commandHandler: handler).handle(JSONRPCRequest(
         id: .string("all-apps"),
         method: "tools/call",
         params: .object([
@@ -175,22 +163,18 @@ import Testing
         ])
     ))
 
-    #expect(regular?.result?["structuredContent"]?["apps"]?["count"] == JSONValue.int(1))
-    #expect(textContent(in: regular?.result)?.contains("Editor Helper") == false)
-    #expect(all?.result?["structuredContent"]?["apps"]?[1]?["name"] == JSONValue.string("Editor Helper"))
-    #expect(textContent(in: all?.result)?.contains("bundleIdentifier") == true)
+    #expect(handler.requests.first?.params == .object(["all": .bool(true)]))
+    #expect(response?.result?["structuredContent"]?["apps"]?[1]?["name"] == JSONValue.string("Editor Helper"))
+    #expect(textContent(in: response?.result)?.contains("bundleIdentifier") == true)
 }
 
 @Test func mcpLookAppsDebugReturnsFullAppObjects() {
-    let commandRouter = CommandRouter(
-        listApps: {
-            []
-        },
-        listAllApps: {
-            [AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7)]
-        }
-    )
-    let response = MCPRouter(commandRouter: commandRouter).handle(JSONRPCRequest(
+    let handler = MCPRecordingCommandHandler(result: [
+        "apps": .array([
+            AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7).wireFixture
+        ])
+    ])
+    let response = MCPRouter(commandHandler: handler).handle(JSONRPCRequest(
         id: .string("call"),
         method: "tools/call",
         params: .object([
@@ -299,7 +283,10 @@ import Testing
 }
 
 @Test func mcpToolsCallReportsCommandErrorsAsToolErrors() {
-    let response = MCPRouter(commandRouter: CommandRouter()).handle(JSONRPCRequest(
+    let handler = MCPRecordingCommandHandler { request in
+        JSONRPCResponse(id: request.id, error: .invalidParams("click requires target"))
+    }
+    let response = MCPRouter(commandHandler: handler).handle(JSONRPCRequest(
         id: .string("call-error"),
         method: "tools/call",
         params: .object([
@@ -308,34 +295,31 @@ import Testing
         ])
     ))
 
+    #expect(handler.requests.map(\.method) == ["click"])
     #expect(response?.error == nil)
     #expect(response?.result?["isError"] == .bool(true))
     #expect(response?.result?["structuredContent"]?["error"]?["code"] == .int(-32602))
+    #expect(response?.result?["structuredContent"]?["error"]?["message"] == .string("click requires target"))
 }
 
 @Test func mcpLookDefaultsToCompactStateWithScreenshotCapture() {
-    let commandRouter = CommandRouter(
-        captureSnapshot: { app, screenshot in
-            #expect(app == "com.example.App")
-            #expect(screenshot == true)
-            return AppSnapshot(
-                id: SnapshotID("mcp-compact"),
-                app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
-                windows: [
-                    AXNode(role: "AXWindow", title: "Main", children: [
-                        AXNode(role: "AXGroup", children: [
-                            AXNode(role: "AXButton", title: "Run", actions: ["AXPress"]),
-                            AXNode(role: "AXStaticText", title: "Ready")
-                        ]),
-                        AXNode(role: "AXButton", title: "Hidden Tab", frame: AXFrame(x: -5000, y: 10, width: 80, height: 30), actions: ["AXPress"])
-                    ])
-                ],
-                screenshot: nil
-            )
-        }
+    let snapshot = AppSnapshot(
+        id: SnapshotID("mcp-compact"),
+        app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
+        windows: [
+            AXNode(role: "AXWindow", title: "Main", children: [
+                AXNode(role: "AXGroup", children: [
+                    AXNode(role: "AXButton", title: "Run", actions: ["AXPress"]),
+                    AXNode(role: "AXStaticText", title: "Ready")
+                ]),
+                AXNode(role: "AXButton", title: "Hidden Tab", frame: AXFrame(x: -5000, y: 10, width: 80, height: 30), actions: ["AXPress"])
+            ])
+        ],
+        screenshot: nil
     )
+    let handler = MCPRecordingCommandHandler(result: ["snapshot": snapshot.wireFixture])
 
-    let response = MCPRouter(commandRouter: commandRouter).handle(JSONRPCRequest(
+    let response = MCPRouter(commandHandler: handler).handle(JSONRPCRequest(
         id: .string("compact-state"),
         method: "tools/call",
         params: .object([
@@ -344,50 +328,48 @@ import Testing
         ])
     ))
 
-    let snapshot = response?.result?["structuredContent"]
+    let observation = response?.result?["structuredContent"]
     let text = textContent(in: response?.result)
+    #expect(handler.requests.first?.params == .object([
+        "app": .string("com.example.App"),
+        "screenshot": .bool(true),
+        "tree": .bool(true)
+    ]))
     #expect(response?.error == nil)
-    #expect(snapshot?["format"] == .string("observation"))
-    #expect(snapshot?["snapshot"] == .string("mcp-compact"))
-    #expect(snapshot?["tree"]?.stringValue?.contains("main/run: button \"Run\" [click]") == true)
-    #expect(snapshot?["indexedNodes"] == nil)
-    #expect(snapshot?["windows"] == nil)
-    #expect(snapshot?["screenshot"] == nil)
-    #expect(snapshot?["screenshotUnavailable"]?["code"] == .string("capture-failed"))
-    #expect(snapshot?["screenshotUnavailable"]?["reason"]?.stringValue?.contains("ScreenCaptureKit") == true)
+    #expect(observation?["format"] == .string("observation"))
+    #expect(observation?["snapshot"] == .string("mcp-compact"))
+    #expect(observation?["tree"]?.stringValue?.contains("mcp-compact:2: button \"Run\" [click]") == true)
+    #expect(observation?["indexedNodes"] == nil)
+    #expect(observation?["windows"] == nil)
+    #expect(observation?["screenshot"] == nil)
     #expect(text?.contains("\"snapshot\":\"mcp-compact\"") == true)
-    #expect(text?.contains("main/run: button \\\"Run\\\" [click]") == true)
+    #expect(text?.contains("mcp-compact:2: button \\\"Run\\\" [click]") == true)
     #expect(text?.contains("\"format\":\"observation\"") == true)
     #expect(text?.contains("\"windows\"") == false)
     #expect(text?.contains("Hidden Tab") == false)
 }
 
-@Test func mcpLookDebugDepthKeepsRetainedHandlesAndShowsHiddenChildren() {
-    let commandRouter = CommandRouter(
-        captureSnapshot: { app, screenshot in
-            #expect(app == "org.mozilla.firefox")
-            #expect(screenshot == true)
-            return AppSnapshot(
-                id: SnapshotID("mcp-depth"),
-                app: AppIdentity(bundleIdentifier: "org.mozilla.firefox", name: "Firefox", processIdentifier: 7),
-                windows: [
-                    AXNode(role: "AXWindow", title: "Firefox", children: [
-                        AXNode(role: "AXTabGroup", title: "Browser tabs", children: [
-                            AXNode(role: "AXRadioButton", title: "Tab 1", actions: ["AXPress"]),
-                            AXNode(role: "AXRadioButton", title: "Tab 2", actions: ["AXPress"]),
-                            AXNode(role: "AXRadioButton", title: "Tab 3", actions: ["AXPress"])
-                        ]),
-                        AXNode(role: "AXToolbar", description: "Navigation", children: [
-                            AXNode(role: "AXButton", title: "Reload", actions: ["AXPress"])
-                        ])
-                    ])
-                ],
-                screenshot: nil
-            )
-        }
+@Test func mcpLookDebugAsksForNoTreeAndReturnsTheDaemonSnapshotUnformatted() {
+    let snapshot = AppSnapshot(
+        id: SnapshotID("mcp-depth"),
+        app: AppIdentity(bundleIdentifier: "org.mozilla.firefox", name: "Firefox", processIdentifier: 7),
+        windows: [
+            AXNode(role: "AXWindow", title: "Firefox", children: [
+                AXNode(role: "AXTabGroup", title: "Browser tabs", children: [
+                    AXNode(role: "AXRadioButton", title: "Tab 1", actions: ["AXPress"]),
+                    AXNode(role: "AXRadioButton", title: "Tab 2", actions: ["AXPress"]),
+                    AXNode(role: "AXRadioButton", title: "Tab 3", actions: ["AXPress"])
+                ]),
+                AXNode(role: "AXToolbar", description: "Navigation", children: [
+                    AXNode(role: "AXButton", title: "Reload", actions: ["AXPress"])
+                ])
+            ])
+        ],
+        screenshot: nil
     )
+    let handler = MCPRecordingCommandHandler(result: ["snapshot": snapshot.wireFixture])
 
-    let response = MCPRouter(commandRouter: commandRouter).handle(JSONRPCRequest(
+    let response = MCPRouter(commandHandler: handler).handle(JSONRPCRequest(
         id: .string("depth"),
         method: "tools/call",
         params: .object([
@@ -395,16 +377,23 @@ import Testing
             "arguments": .object([
                 "app": .string("org.mozilla.firefox"),
                 "depth": .int(1),
-                "format": .string("debug"),
-                "tree": .bool(true)
+                "format": .string("debug")
             ])
         ])
     ))
 
-    let snapshot = response?.result?["structuredContent"]?["snapshot"]
-    let toolbar = snapshot?["windows"]?[0]?["children"]?[1]
+    let toolbar = response?.result?["structuredContent"]?["snapshot"]?["windows"]?[0]?["children"]?[1]
     let text = textContent(in: response?.result)
 
+    // Debug output is the daemon's own document, so the facade neither asks for the compact tree
+    // nor rewrites what comes back.
+    #expect(handler.requests.first?.params == .object([
+        "app": .string("org.mozilla.firefox"),
+        "depth": .int(1),
+        "format": .string("debug"),
+        "screenshot": .bool(true),
+        "tree": .bool(false)
+    ]))
     #expect(response?.error == nil)
     #expect(toolbar?["handle"] == .string("mcp-depth:5"))
     #expect(toolbar?["children"]?[0]?["handle"] == .string("mcp-depth:6"))
@@ -412,537 +401,20 @@ import Testing
     #expect(text?.contains("mcp-depth:6") == true)
 }
 
-@Test func mcpLookScreenTextAddsOCRWithoutScreenshotPayload() {
-    let commandRouter = CommandRouter(
-        captureSnapshot: { app, screenshot in
-            #expect(app == "com.example.App")
-            #expect(screenshot == true)
-            return AppSnapshot(
-                id: SnapshotID("mcp-ocr"),
-                app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
-                windows: [
-                    AXNode(
-                        role: "AXWindow",
-                        title: "Main",
-                        frame: AXFrame(x: 100, y: 200, width: 800, height: 600)
-                    )
-                ],
-                screenshot: EncodedScreenshot(
-                    mediaType: "image/png",
-                    base64Data: "internal-image-payload",
-                    width: 800,
-                    height: 600,
-                    sourceWindowFrame: AXFrame(x: 100, y: 200, width: 800, height: 600)
-                )
-            )
-        },
-        recognizeText: { _ in
-            [
-                RecognizedTextObservation(
-                    text: "Second line",
-                    boundingBox: NormalizedTextBoundingBox(x: 0.20, y: 0.50, width: 0.20, height: 0.05),
-                    confidence: 0.91
-                ),
-                RecognizedTextObservation(
-                    text: "First line",
-                    boundingBox: NormalizedTextBoundingBox(x: 0.10, y: 0.80, width: 0.20, height: 0.05),
-                    confidence: 1
-                )
-            ]
-        }
-    )
-
-    let response = MCPRouter(commandRouter: commandRouter).handle(JSONRPCRequest(
-        id: .string("screen-text"),
-        method: "tools/call",
-        params: .object([
-            "name": .string("look"),
-            "arguments": .object([
-                "app": .string("com.example.App"),
-                "screenText": .bool(true),
-                "screenshot": .bool(false)
-            ])
-        ])
-    ))
-
-    let result = response?.result
-    let snapshot = result?["structuredContent"]
-    let text = textContent(in: result)
-
-    #expect(response?.error == nil)
-    #expect(result?["isError"] == .bool(false))
-    #expect(snapshot?["screenText"]?[0]?["text"] == .string("First line"))
-    #expect(snapshot?["screenText"]?[0]?["confidence"] == .double(1))
-    #expect(snapshot?["screenText"]?[0]?["frame"] == nil)
-    #expect(snapshot?["screenText"]?[1]?["text"] == .string("Second line"))
-    #expect(snapshot?["screenText"]?[1]?["confidence"] == .double(0.91))
-    #expect(snapshot?["screenshot"] == nil)
-    #expect(snapshot?["screenshotUnavailable"] == nil)
-    #expect(imageContent(in: result) == nil)
-    #expect(text?.contains("\"screenText\":[") == true)
-    #expect(text?.contains("\"text\":\"First line\"") == true)
-    #expect(text?.contains("\"confidence\":1") == true)
-    #expect(text?.contains("\"text\":\"Second line\"") == true)
-    #expect(text?.contains("internal-image-payload") == false)
-}
-
-@Test func mcpLookScreenTextCanIncludeFramesWhenRequested() {
-    let commandRouter = CommandRouter(
-        captureSnapshot: { _, screenshot in
-            #expect(screenshot == true)
-            return AppSnapshot(
-                id: SnapshotID("mcp-ocr-frames"),
-                app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
-                windows: [
-                    AXNode(
-                        role: "AXWindow",
-                        title: "Main",
-                        frame: AXFrame(x: 100, y: 200, width: 800, height: 600)
-                    )
-                ],
-                screenshot: EncodedScreenshot(
-                    mediaType: "image/png",
-                    base64Data: "internal-image-payload",
-                    width: 800,
-                    height: 600,
-                    sourceWindowFrame: AXFrame(x: 100, y: 200, width: 800, height: 600)
-                )
-            )
-        },
-        recognizeText: { _ in
-            [
-                RecognizedTextObservation(
-                    text: "Framed text",
-                    boundingBox: NormalizedTextBoundingBox(x: 0.25, y: 0.60, width: 0.20, height: 0.10),
-                    confidence: nil
-                )
-            ]
-        }
-    )
-
-    let response = MCPRouter(commandRouter: commandRouter).handle(JSONRPCRequest(
-        id: .string("screen-text-frames"),
-        method: "tools/call",
-        params: .object([
-            "name": .string("look"),
-            "arguments": .object([
-                "app": .string("com.example.App"),
-                "screenText": .bool(true),
-                "frames": .bool(true)
-            ])
-        ])
-    ))
-
-    let snapshot = response?.result?["structuredContent"]
-
-    #expect(response?.error == nil)
-    #expect(snapshot?["screenText"]?[0]?["text"] == .string("Framed text"))
-    #expect(snapshot?["screenText"]?[0]?["frame"]?["x"] == .double(300))
-    #expect(snapshot?["screenText"]?[0]?["frame"]?["y"] == .double(380))
-    #expect(snapshot?["screenText"]?[0]?["frame"]?["width"] == .double(160))
-    #expect(snapshot?["screenText"]?[0]?["frame"]?["height"] == .double(60))
-}
-
-@Test func mcpAppStateDoesNotLeakDeterministicSecretsInTextOrStructuredContent() throws {
-    let secret = "sk-proj-abcdef1234567890SECRET"
-    let commandRouter = CommandRouter(
-        captureSnapshot: { app, screenshot in
-            #expect(app == "com.example.App")
-            #expect(screenshot == true)
-            return AppSnapshot(
-                id: SnapshotID("mcp-sensitive"),
-                app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
-                windows: [
-                    AXNode(role: "AXWindow", title: "Main", children: [
-                        AXNode(role: "AXTextField", value: secret)
-                    ])
-                ],
-                screenshot: nil
-            )
-        }
-    )
-
-    let response = MCPRouter(commandRouter: commandRouter).handle(JSONRPCRequest(
-        id: .string("deterministic-redaction-state"),
-        method: "tools/call",
-        params: .object([
-            "name": .string("look"),
-            "arguments": .object([
-                "app": .string("com.example.App")
-            ])
-        ])
-    ))
-
-    let result = response?.result
-    let snapshot = result?["structuredContent"]
-    let encoded = try encodedJSONString(.object(result ?? [:]))
-
-    #expect(response?.error == nil)
-    #expect(result?["isError"] == .bool(false))
-    #expect(snapshot?["redaction"]?["reasons"]?["value"] == .string("auth-credential"))
-    #expect(snapshot?["indexedNodes"] == nil)
-    #expect(snapshot?["tree"]?.stringValue?.contains("<redacted: auth-credential>") == true)
-    #expect(textContent(in: result)?.contains("SECRET") == false)
-    #expect(encoded.contains("SECRET") == false)
-}
-
-@Test func mcpLookRedactsActiveCredentialsWithoutSensitiveFlag() throws {
-    let secret = "correct horse battery staple"
-    let commandRouter = CommandRouter(
-        captureSnapshot: { app, screenshot in
-            #expect(app == "com.example.App")
-            #expect(screenshot == true)
-            return AppSnapshot(
-                id: SnapshotID("mcp-active"),
-                app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
-                windows: [
-                    AXNode(role: "AXWindow", title: "Main", children: [
-                        AXNode(role: "AXTextField", value: secret)
-                    ])
-                ],
-                screenshot: nil
-            )
-        },
-        activeCredentialFilter: try mcpActiveCredentialFilter(values: [secret])
-    )
-
-    let response = MCPRouter(commandRouter: commandRouter).handle(JSONRPCRequest(
-        id: .string("active-state"),
-        method: "tools/call",
-        params: .object([
-            "name": .string("look"),
-            "arguments": .object([
-                "app": .string("com.example.App")
-            ])
-        ])
-    ))
-
-    let result = response?.result
-    let snapshot = result?["structuredContent"]
-    let encoded = try encodedJSONString(.object(result ?? [:]))
-
-    #expect(response?.error == nil)
-    #expect(result?["isError"] == .bool(false))
-    #expect(snapshot?["tree"]?.stringValue?.contains("<redacted: active-credential>") == true)
-    #expect(snapshot?["redaction"]?["references"]?["value"]?[0] == .string("op://MCP/Active/secret"))
-    #expect(textContent(in: result)?.contains("redaction=op://MCP/Active/secret") == true)
-    #expect(textContent(in: result)?.contains(secret) == false)
-    #expect(encoded.contains(secret) == false)
-    #expect(encoded.contains("<redacted: active-credential>"))
-}
-
-@Test func mcpLookScreenTextRedactsActiveCredentials() throws {
-    let secret = "correct horse battery staple"
-    let commandRouter = CommandRouter(
-        captureSnapshot: { app, screenshot in
-            #expect(app == "com.example.App")
-            #expect(screenshot == true)
-            return AppSnapshot(
-                id: SnapshotID("mcp-active-ocr"),
-                app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
-                windows: [
-                    AXNode(
-                        role: "AXWindow",
-                        title: "Main",
-                        frame: AXFrame(x: 100, y: 200, width: 800, height: 600)
-                    )
-                ],
-                screenshot: EncodedScreenshot(
-                    mediaType: "image/png",
-                    base64Data: "ocr-image-payload",
-                    width: 800,
-                    height: 600,
-                    sourceWindowFrame: AXFrame(x: 100, y: 200, width: 800, height: 600)
-                )
-            )
-        },
-        recognizeText: { _ in
-            [
-                RecognizedTextObservation(
-                    text: secret,
-                    boundingBox: NormalizedTextBoundingBox(x: 0.10, y: 0.80, width: 0.20, height: 0.05),
-                    confidence: 1
-                )
-            ]
-        },
-        activeCredentialFilter: try mcpActiveCredentialFilter(values: [secret])
-    )
-
-    let response = MCPRouter(commandRouter: commandRouter).handle(JSONRPCRequest(
-        id: .string("active-screen-text"),
-        method: "tools/call",
-        params: .object([
-            "name": .string("look"),
-            "arguments": .object([
-                "app": .string("com.example.App"),
-                "screenText": .bool(true)
-            ])
-        ])
-    ))
-
-    let result = response?.result
-    let snapshot = result?["structuredContent"]
-    let encoded = try encodedJSONString(.object(result ?? [:]))
-
-    #expect(response?.error == nil)
-    #expect(snapshot?["screenText"]?[0]?["text"] == .string("<redacted: active-credential>"))
-    #expect(textContent(in: result)?.contains(secret) == false)
-    #expect(encoded.contains(secret) == false)
-    #expect(imageContent(in: result) == nil)
-}
-
-@Test func mcpLookOmitsScreenshotWhenActiveCredentialIsDetected() throws {
-    let secret = "correct horse battery staple"
-    let commandRouter = CommandRouter(
-        captureSnapshot: { app, screenshot in
-            #expect(app == "com.example.App")
-            #expect(screenshot == true)
-            return AppSnapshot(
-                id: SnapshotID("mcp-active-screenshot"),
-                app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
-                windows: [
-                    AXNode(role: "AXWindow", title: "Main", children: [
-                        AXNode(role: "AXTextField", title: "Password", value: secret)
-                    ])
-                ],
-                screenshot: EncodedScreenshot(
-                    mediaType: "image/png",
-                    base64Data: "raw-image-payload",
-                    width: 1200,
-                    height: 800
-                )
-            )
-        },
-        activeCredentialFilter: try mcpActiveCredentialFilter(values: [secret])
-    )
-
-    let response = MCPRouter(commandRouter: commandRouter).handle(JSONRPCRequest(
-        id: .string("active-shot"),
-        method: "tools/call",
-        params: .object([
-            "name": .string("look"),
-            "arguments": .object([
-                "app": .string("com.example.App"),
-                "screenshot": .bool(true)
-            ])
-        ])
-    ))
-
-    let result = response?.result
-    let snapshot = result?["structuredContent"]
-    let encoded = try encodedJSONString(.object(result ?? [:]))
-
-    #expect(response?.error == nil)
-    #expect(snapshot?["screenshot"] == nil)
-    #expect(snapshot?["warnings"]?[0] == .string("screenshot omitted because active credential text was redacted"))
-    #expect(imageContent(in: result) == nil)
-    #expect(textContent(in: result)?.contains(secret) == false)
-    #expect(encoded.contains(secret) == false)
-    #expect(encoded.contains("raw-image-payload") == false)
-}
-
-@Test func mcpLookScreenshotOnlyRunsOCRGuardBeforeReturningImage() throws {
-    let secret = "correct horse battery staple"
-    let commandRouter = CommandRouter(
-        captureSnapshot: { app, screenshot in
-            #expect(app == "com.example.App")
-            #expect(screenshot == true)
-            return AppSnapshot(
-                id: SnapshotID("mcp-active-shot-ocr"),
-                app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
-                windows: [
-                    AXNode(
-                        role: "AXWindow",
-                        title: "Main",
-                        frame: AXFrame(x: 100, y: 200, width: 1200, height: 800)
-                    )
-                ],
-                screenshot: EncodedScreenshot(
-                    mediaType: "image/png",
-                    base64Data: "raw-image-payload",
-                    width: 1200,
-                    height: 800,
-                    sourceWindowFrame: AXFrame(x: 100, y: 200, width: 1200, height: 800)
-                )
-            )
-        },
-        recognizeText: { _ in
-            [
-                RecognizedTextObservation(
-                    text: secret,
-                    boundingBox: NormalizedTextBoundingBox(x: 0.10, y: 0.80, width: 0.20, height: 0.05),
-                    confidence: 1
-                )
-            ]
-        },
-        activeCredentialFilter: try mcpActiveCredentialFilter(values: [secret])
-    )
-
-    let response = MCPRouter(commandRouter: commandRouter).handle(JSONRPCRequest(
-        id: .string("active-shot-ocr"),
-        method: "tools/call",
-        params: .object([
-            "name": .string("look"),
-            "arguments": .object([
-                "app": .string("com.example.App"),
-                "screenshot": .bool(true),
-                "tree": .bool(false)
-            ])
-        ])
-    ))
-
-    let result = response?.result
-    let snapshot = result?["structuredContent"]
-    let encoded = try encodedJSONString(.object(result ?? [:]))
-
-    #expect(response?.error == nil)
-    #expect(snapshot?["screenshot"] == nil)
-    #expect(snapshot?["screenText"] == nil)
-    #expect(snapshot?["warnings"]?[0] == .string("screenshot omitted because active credential text was redacted"))
-    #expect(imageContent(in: result) == nil)
-    #expect(encoded.contains(secret) == false)
-    #expect(encoded.contains("raw-image-payload") == false)
-}
-
-@Test func mcpLookUsesCurrentActiveCredentialFilterProvider() throws {
-    let secret = "correct horse battery staple"
-    let provider = RotatingActiveCredentialFilterProvider(
-        filters: [
-            EmptyActiveCredentialFilter(),
-            try mcpActiveCredentialFilter(values: [secret])
-        ]
-    )
-    let commandRouter = CommandRouter(
-        captureSnapshot: { _, _ in
-            AppSnapshot(
-                id: SnapshotID("mcp-rotating-filter"),
-                app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
-                windows: [
-                    AXNode(role: "AXWindow", title: "Main", children: [
-                        AXNode(role: "AXTextField", value: secret)
-                    ])
-                ],
-                screenshot: nil
-            )
-        },
-        activeCredentialFilterProvider: provider.current
-    )
-
-    let first = MCPRouter(commandRouter: commandRouter).handle(lookCall(id: "first-current-filter"))
-    let second = MCPRouter(commandRouter: commandRouter).handle(lookCall(id: "second-current-filter"))
-
-    #expect(textContent(in: first?.result)?.contains(secret) == true)
-    #expect(textContent(in: second?.result)?.contains(secret) == false)
-    #expect(textContent(in: second?.result)?.contains("<redacted: active-credential>") == true)
-}
-
-@Test func mcpRemovedSensitiveArgumentDoesNotRejectScreenshots() {
-    let commandRouter = CommandRouter(
-        captureSnapshot: { app, screenshot in
-            #expect(app == "com.example.App")
-            #expect(screenshot)
-            return AppSnapshot(
-                id: SnapshotID("removed-sensitive-shot"),
-                app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
-                windows: [AXNode(role: "AXWindow", title: "Main")],
-                screenshot: EncodedScreenshot(
-                    mediaType: "image/png",
-                    base64Data: "raw-image",
-                    width: 20,
-                    height: 10
-                )
-            )
-        }
-    )
-    let response = MCPRouter(commandRouter: commandRouter).handle(JSONRPCRequest(
-        id: .string("removed-sensitive-shot"),
-        method: "tools/call",
-        params: .object([
-            "name": .string("look"),
-            "arguments": .object([
-                "app": .string("com.example.App"),
-                "sensitive": .bool(true),
-                "screenshot": .bool(true)
-            ])
-        ])
-    ))
-
-    #expect(response?.error == nil)
-    #expect(response?.result?["isError"] == .bool(false))
-    #expect(response?.result?["structuredContent"]?["screenshot"]?["width"] == .int(20))
-}
-
-@Test func mcpRemovedSensitiveArgumentDoesNotRejectScreenText() {
-    let commandRouter = CommandRouter(
-        captureSnapshot: { app, screenshot in
-            #expect(app == "com.example.App")
-            #expect(screenshot)
-            return AppSnapshot(
-                id: SnapshotID("removed-sensitive-screen-text"),
-                app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
-                windows: [
-                    AXNode(
-                        role: "AXWindow",
-                        title: "Main",
-                        frame: AXFrame(x: 0, y: 0, width: 300, height: 200)
-                    )
-                ],
-                screenshot: EncodedScreenshot(
-                    mediaType: "image/png",
-                    base64Data: "raw-image",
-                    width: 300,
-                    height: 200,
-                    sourceWindowFrame: AXFrame(x: 0, y: 0, width: 300, height: 200)
-                )
-            )
-        },
-        recognizeText: { _ in
-            [
-                RecognizedTextObservation(
-                    text: "Visible text",
-                    boundingBox: NormalizedTextBoundingBox(x: 0, y: 0, width: 1, height: 1),
-                    confidence: 1
-                )
-            ]
-        }
-    )
-    let response = MCPRouter(commandRouter: commandRouter).handle(JSONRPCRequest(
-        id: .string("removed-sensitive-screen-text"),
-        method: "tools/call",
-        params: .object([
-            "name": .string("look"),
-            "arguments": .object([
-                "app": .string("com.example.App"),
-                "sensitive": .bool(true),
-                "screenText": .bool(true)
-            ])
-        ])
-    ))
-
-    #expect(response?.error == nil)
-    #expect(response?.result?["isError"] == .bool(false))
-    #expect(response?.result?["structuredContent"]?["screenText"]?[0]?["text"] == .string("Visible text"))
-}
-
 @Test func mcpScreenshotUsesImageContentInsteadOfTextualBase64() {
-    let commandRouter = CommandRouter(
-        captureSnapshot: { app, screenshot in
-            #expect(app == "com.example.App")
-            #expect(screenshot == true)
-            return AppSnapshot(
-                id: SnapshotID("screenshot-only"),
-                app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
-                windows: [AXNode(role: "AXWindow", title: "Main")],
-                screenshot: EncodedScreenshot(
-                    mediaType: "image/png",
-                    base64Data: "raw-image-payload",
-                    width: 1600,
-                    height: 990
-                )
-            )
-        }
+    let snapshot = AppSnapshot(
+        id: SnapshotID("screenshot-only"),
+        app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
+        windows: [AXNode(role: "AXWindow", title: "Main")],
+        screenshot: EncodedScreenshot(
+            mediaType: "image/png",
+            base64Data: "raw-image-payload",
+            width: 1600,
+            height: 990
+        )
     )
-    let response = MCPRouter(commandRouter: commandRouter).handle(JSONRPCRequest(
+    let handler = MCPRecordingCommandHandler(result: ["snapshot": snapshot.wireFixture])
+    let response = MCPRouter(commandHandler: handler).handle(JSONRPCRequest(
         id: .string("shot"),
         method: "tools/call",
         params: .object([
@@ -974,24 +446,19 @@ import Testing
 }
 
 @Test func mcpAppStateScreenshotUsesImageContentInsteadOfStructuredBase64() {
-    let commandRouter = CommandRouter(
-        captureSnapshot: { app, screenshot in
-            #expect(app == "com.example.App")
-            #expect(screenshot == true)
-            return AppSnapshot(
-                id: SnapshotID("with-image"),
-                app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
-                windows: [AXNode(role: "AXWindow", title: "Main")],
-                screenshot: EncodedScreenshot(
-                    mediaType: "image/png",
-                    base64Data: "nested-image-payload",
-                    width: 1200,
-                    height: 800
-                )
-            )
-        }
+    let snapshot = AppSnapshot(
+        id: SnapshotID("with-image"),
+        app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
+        windows: [AXNode(role: "AXWindow", title: "Main")],
+        screenshot: EncodedScreenshot(
+            mediaType: "image/png",
+            base64Data: "nested-image-payload",
+            width: 1200,
+            height: 800
+        )
     )
-    let response = MCPRouter(commandRouter: commandRouter).handle(JSONRPCRequest(
+    let handler = MCPRecordingCommandHandler(result: ["snapshot": snapshot.wireFixture])
+    let response = MCPRouter(commandHandler: handler).handle(JSONRPCRequest(
         id: .string("state-shot"),
         method: "tools/call",
         params: .object([
@@ -1022,7 +489,7 @@ import Testing
 }
 
 @Test func mcpNotificationDoesNotProduceResponse() {
-    let response = MCPRouter(commandRouter: CommandRouter()).handle(JSONRPCRequest(
+    let response = MCPRouter(commandHandler: MCPRecordingCommandHandler()).handle(JSONRPCRequest(
         id: nil,
         method: "notifications/initialized"
     ))
@@ -1044,51 +511,6 @@ private func imageContent(in result: [String: JSONValue]?) -> JSONValue? {
     return content.first { item in
         item["type"] == .string("image")
     }
-}
-
-private func lookCall(id: String) -> JSONRPCRequest {
-    JSONRPCRequest(
-        id: .string(id),
-        method: "tools/call",
-        params: .object([
-            "name": .string("look"),
-            "arguments": .object(["app": .string("com.example.App")])
-        ])
-    )
-}
-
-private func encodedJSONString(_ value: JSONValue) throws -> String {
-    let data = try JSONEncoder().encode(value)
-    return String(decoding: data, as: UTF8.self)
-}
-
-private final class RotatingActiveCredentialFilterProvider: @unchecked Sendable {
-    private let lock = NSLock()
-    private let filters: [any ActiveCredentialFilter]
-    private var index = 0
-
-    init(filters: [any ActiveCredentialFilter]) {
-        self.filters = filters
-    }
-
-    func current() -> any ActiveCredentialFilter {
-        lock.lock()
-        defer { lock.unlock() }
-        let filter = filters[min(index, filters.count - 1)]
-        index += 1
-        return filter
-    }
-}
-
-private func mcpActiveCredentialFilter(values: [String]) throws -> ActiveCredentialIndex {
-    try ActiveCredentialIndex(
-        secrets: values.map {
-            ActiveCredentialSecret(value: $0, provider: "test", reference: "op://MCP/Active/secret")
-        },
-        hmacKey: Data(repeating: 0xC3, count: 32),
-        provider: "test",
-        createdAt: Date(timeIntervalSince1970: 1_775_000_000)
-    )
 }
 
 private func toolNames(in value: JSONValue?) -> [String] {
@@ -1121,16 +543,22 @@ private extension JSONValue {
     }
 }
 
+/// Stands in for the daemon behind the facade: records what the facade forwarded and answers with
+/// a fixed result or whatever `respond` builds.
 private final class MCPRecordingCommandHandler: JSONRPCCommandHandling {
-    private let response: JSONRPCResponse
+    private let respond: (JSONRPCRequest) -> JSONRPCResponse
     private(set) var requests: [JSONRPCRequest] = []
 
-    init(result: [String: JSONValue]) {
-        self.response = JSONRPCResponse(id: .string("recorded"), result: result)
+    init(result: [String: JSONValue] = [:]) {
+        self.respond = { JSONRPCResponse(id: $0.id, result: result) }
+    }
+
+    init(respond: @escaping (JSONRPCRequest) -> JSONRPCResponse) {
+        self.respond = respond
     }
 
     func handle(_ request: JSONRPCRequest) -> JSONRPCResponse {
         requests.append(request)
-        return JSONRPCResponse(id: request.id, result: response.result ?? [:])
+        return respond(request)
     }
 }

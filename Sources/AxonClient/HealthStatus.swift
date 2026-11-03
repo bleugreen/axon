@@ -139,6 +139,8 @@ public struct DaemonHealth: Codable, Equatable, Sendable {
     public var endpoint: String
     public var provenance: DaemonProvenance?
     public var processId: Int?
+    /// The shell-v1 contract version the answering daemon serves, when it says.
+    public var shellContract: Int?
     public var reason: String?
     public var detail: String?
 
@@ -148,6 +150,7 @@ public struct DaemonHealth: Codable, Equatable, Sendable {
         endpoint: String,
         provenance: DaemonProvenance? = nil,
         processId: Int? = nil,
+        shellContract: Int? = nil,
         reason: String? = nil,
         detail: String? = nil
     ) {
@@ -156,6 +159,7 @@ public struct DaemonHealth: Codable, Equatable, Sendable {
         self.endpoint = endpoint
         self.provenance = provenance
         self.processId = processId
+        self.shellContract = shellContract
         self.reason = reason
         self.detail = detail
     }
@@ -167,6 +171,9 @@ public struct RegistrationHealth: Codable, Equatable, Sendable {
     public var path: String?
     public var reason: String?
     public var detail: String?
+    /// Each launchd job of a macOS install (the daemon and its menu), as launchd reports it.
+    /// `registered` and `path` describe the daemon job alone.
+    public var jobs: [JobState]?
 
     public init(
         registered: Bool,
@@ -374,7 +381,9 @@ public struct HealthStatus: Codable, Equatable, Sendable {
                 running: true,
                 ready: report.ready,
                 endpoint: report.endpoint,
+                provenance: report.provenance,
                 processId: report.processId,
+                shellContract: report.shellContract,
                 reason: report.ready ? nil : HealthReason.daemonNotReady
             ),
             registration: registration,

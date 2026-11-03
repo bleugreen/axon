@@ -167,6 +167,12 @@ pub struct DaemonHealth {
     pub endpoint: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process_id: Option<u32>,
+    /// Which implementation answered, from a daemon that says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<DaemonProvenance>,
+    /// The daemon-to-menu-shell contract version, from a daemon that serves the macOS menu.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell_contract: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -184,6 +190,22 @@ pub struct RegistrationHealth {
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// macOS only: each launchd job of the install (the daemon and its menu), as the Swift CLI
+    /// reports them. `registered` and `path` describe the daemon job alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jobs: Option<Vec<JobState>>,
+}
+
+/// One launchd job of a macOS install, as `status --json` reports it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobState {
+    pub label: String,
+    pub loaded: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_id: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }
 
 impl RegistrationHealth {
@@ -194,6 +216,7 @@ impl RegistrationHealth {
             path: None,
             reason: Some(reason::NOT_REGISTERED.into()),
             detail: None,
+            jobs: None,
         }
     }
 
@@ -204,6 +227,7 @@ impl RegistrationHealth {
             path: Some(path.into()),
             reason: None,
             detail: None,
+            jobs: None,
         }
     }
 }
@@ -446,6 +470,8 @@ impl HealthReport {
                 ready: daemon.ready,
                 endpoint: daemon.endpoint,
                 process_id: Some(daemon.process_id),
+                provenance: daemon.provenance,
+                shell_contract: daemon.shell_contract,
                 reason: (!daemon.ready).then(|| reason::DAEMON_NOT_READY.into()),
                 detail: None,
             },
@@ -479,6 +505,8 @@ impl HealthReport {
                 ready: false,
                 endpoint: endpoint.into(),
                 process_id: None,
+                provenance: None,
+                shell_contract: None,
                 reason: Some(reason::VERSION_SKEW.into()),
                 detail,
             },
@@ -505,6 +533,8 @@ impl HealthReport {
                 ready: false,
                 endpoint: report.endpoint,
                 process_id: None,
+                provenance: None,
+                shell_contract: None,
                 reason: Some(report.code.into()),
                 detail: report.detail,
             },

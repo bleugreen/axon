@@ -164,7 +164,7 @@ private func action(_ entries: [MenuEntry], _ wanted: MenuAction) -> (title: Str
 }
 
 @Test func thePickerListsEachApplicationOnceWithoutPids() {
-    let scopes = MenuModel.pickerScopes(for: [
+    let scopes = RecordingScope.pickerScopes(for: [
         AppIdentity(bundleIdentifier: "com.apple.Safari", name: "Safari", processIdentifier: 10),
         AppIdentity(bundleIdentifier: "com.apple.Safari", name: "Safari", processIdentifier: 11),
         AppIdentity(bundleIdentifier: nil, name: "Tool", processIdentifier: 12)

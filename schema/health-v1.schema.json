@@ -71,6 +71,21 @@
           "type": "string"
         },
         "processId": { "type": ["integer", "null"], "minimum": 1 },
+        "provenance": {
+          "description": "Which implementation answered, from a daemon that says: `backend` names it (`rust-axon-mac`, `rust-axon-win`, `rust-axon-linux`), and `executablePath` is the binary actually serving, which may differ from `registration.path` when something other than the registration holds the endpoint.",
+          "type": ["object", "null"],
+          "required": ["backend", "processId", "executablePath", "version"],
+          "properties": {
+            "backend": { "type": "string" },
+            "processId": { "type": "integer", "minimum": 1 },
+            "executablePath": { "type": "string" },
+            "version": { "type": "string" }
+          }
+        },
+        "shellContract": {
+          "description": "macOS only: the daemon-to-menu-shell contract version the daemon serves (shell-v1 is 1). Absent from a daemon that serves no menu shell.",
+          "type": ["integer", "null"]
+        },
         "reason": { "oneOf": [{ "$ref": "#/$defs/reason" }, { "type": "null" }] },
         "detail": { "$ref": "#/$defs/detail" }
       }
@@ -84,7 +99,21 @@
         "mechanism": { "enum": ["launchd", "scheduledTask", "systemdUser"] },
         "path": { "type": ["string", "null"] },
         "reason": { "oneOf": [{ "$ref": "#/$defs/reason" }, { "type": "null" }] },
-        "detail": { "$ref": "#/$defs/detail" }
+        "detail": { "$ref": "#/$defs/detail" },
+        "jobs": {
+          "description": "macOS only: each launchd job of the install, the daemon (`dev.axon.daemon`) and the menu (`dev.axon.menu`). `registered` and `path` above describe the daemon job alone. `processId` is present only while the job's process runs; `path` is the program its plist names, or null when it has no plist.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["label", "loaded"],
+            "properties": {
+              "label": { "type": "string" },
+              "loaded": { "type": "boolean" },
+              "processId": { "type": ["integer", "null"] },
+              "path": { "type": ["string", "null"] }
+            }
+          }
+        }
       }
     },
     "session": {

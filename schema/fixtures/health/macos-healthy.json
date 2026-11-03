@@ -1,32 +1,4 @@
 {
-  "schemaVersion": "health-v1",
-  "version": "0.1.7",
-  "platform": "macos",
-  "daemon": {
-    "running": true,
-    "ready": true,
-    "endpoint": "/tmp/axon.sock",
-    "processId": 4210
-  },
-  "registration": {
-    "registered": true,
-    "mechanism": "launchd",
-    "path": "/Applications/Axon.app/Contents/MacOS/Axon"
-  },
-  "session": {
-    "interactive": true,
-    "graphical": true
-  },
-  "permissions": [
-    {
-      "name": "accessibility",
-      "granted": true
-    },
-    {
-      "name": "screenRecording",
-      "granted": true
-    }
-  ],
   "capabilities": [
     {
       "capability": "enumerate",
@@ -42,7 +14,9 @@
     },
     {
       "capability": "observeChanges",
-      "usable": true
+      "reason": "not-implemented",
+      "restriction": "not implemented by axon-mac",
+      "usable": false
     },
     {
       "capability": "invoke",
@@ -88,5 +62,54 @@
       "capability": "observeGlobalInput",
       "usable": true
     }
-  ]
+  ],
+  "daemon": {
+    "endpoint": "/tmp/axon.sock",
+    "processId": 4210,
+    "provenance": {
+      "backend": "rust-axon-mac",
+      "executablePath": "/Applications/Axon.app/Contents/MacOS/Axon",
+      "processId": 4210,
+      "version": "0.4.0"
+    },
+    "ready": true,
+    "running": true,
+    "shellContract": 1
+  },
+  "permissions": [
+    {
+      "granted": true,
+      "name": "accessibility"
+    },
+    {
+      "granted": true,
+      "name": "screenRecording"
+    }
+  ],
+  "platform": "macos",
+  "registration": {
+    "jobs": [
+      {
+        "label": "dev.axon.daemon",
+        "loaded": true,
+        "path": "/Applications/Axon.app/Contents/MacOS/Axon",
+        "processId": 4210
+      },
+      {
+        "label": "dev.axon.menu",
+        "loaded": true,
+        "path": "/Applications/Axon.app/Contents/Library/Applications/Axon Menu.app/Contents/MacOS/AxonMenu",
+        "processId": 4211
+      }
+    ],
+    "mechanism": "launchd",
+    "path": "/Applications/Axon.app/Contents/MacOS/Axon",
+    "registered": true
+  },
+  "schemaVersion": "health-v1",
+  "session": {
+    "graphical": true,
+    "interactive": true
+  },
+  "version": "0.4.0"
 }

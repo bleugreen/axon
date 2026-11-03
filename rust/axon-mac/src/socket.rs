@@ -263,6 +263,35 @@ fn permission_states(permissions: MacPermissions) -> Vec<PermissionState> {
     ]
 }
 
+/// The `health` answer as a pure function of what the daemon observed, so the shared macOS health
+/// fixtures can be produced by this code path rather than written by hand.
+fn daemon_report(
+    permissions: MacPermissions,
+    session: SessionHealth,
+    process_id: u32,
+    endpoint: &str,
+    executable_path: &str,
+    version: &str,
+) -> DaemonReport {
+    DaemonReport {
+        version: version.to_owned(),
+        platform: HealthPlatform::Macos,
+        ready: permissions.accessibility && session.interactive && session.graphical,
+        process_id,
+        endpoint: endpoint.to_owned(),
+        provenance: Some(DaemonProvenance {
+            backend: "rust-axon-mac".into(),
+            process_id,
+            executable_path: executable_path.to_owned(),
+            version: version.to_owned(),
+        }),
+        shell_contract: Some(SHELL_CONTRACT_VERSION),
+        session,
+        permissions: permission_states(permissions),
+        capabilities: CapabilityState::complete(&capability_report(permissions)),
+    }
+}
+
 /// The menu shell's methods take no parameters; anything else is a caller bug worth naming.
 fn no_params(request: &JsonRpcRequest) -> Result<(), JsonRpcError> {
     match &request.params {
@@ -323,31 +352,16 @@ fn dispatch(
             // denied-Accessibility daemon report Screen Recording ungranted, and going through
             // `MacBackend::new()` here meant a construction failure would silently publish an
             // empty capability list.
-            let permissions = MacPermissions::read();
-            let reported = capability_report(permissions);
-            let version = env!("CARGO_PKG_VERSION").to_owned();
-            let process_id = std::process::id();
-            let executable_path = std::env::current_exe()
-                .map(|path| path.display().to_string())
-                .unwrap_or_default();
-            let session = session_health();
-            let report = DaemonReport {
-                version: version.clone(),
-                platform: HealthPlatform::Macos,
-                ready: permissions.accessibility && session.interactive && session.graphical,
-                process_id,
-                endpoint: endpoint.display().to_string(),
-                provenance: Some(DaemonProvenance {
-                    backend: "rust-axon-mac".into(),
-                    process_id,
-                    executable_path,
-                    version,
-                }),
-                shell_contract: Some(SHELL_CONTRACT_VERSION),
-                session,
-                permissions: permission_states(permissions),
-                capabilities: CapabilityState::complete(&reported),
-            };
+            let report = daemon_report(
+                MacPermissions::read(),
+                session_health(),
+                std::process::id(),
+                &endpoint.display().to_string(),
+                &std::env::current_exe()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_default(),
+                env!("CARGO_PKG_VERSION"),
+            );
             (
                 serde_json::to_value(JsonRpcResponse::success(
                     id,
@@ -458,6 +472,77 @@ fn mcp_success_response(id: Value, result: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The shared macOS health fixtures are what this daemon publishes, composed the way the CLI
+    /// composes `status --json`. Set `AXON_REGENERATE_HEALTH_FIXTURES=1` to rewrite them from this
+    /// code path after a deliberate change; the semantic checks in
+    /// `rust/axon-core/tests/health.rs` then say whether the change means what it should.
+    #[test]
+    fn macos_health_fixtures_are_what_this_daemon_publishes() {
+        use axon_core::{HealthReport, JobState, RegistrationHealth, RegistrationMechanism};
+        let main = "/Applications/Axon.app/Contents/MacOS/Axon";
+        for (name, permissions) in [
+            (
+                "macos-healthy.json",
+                MacPermissions {
+                    accessibility: true,
+                    screen_recording: true,
+                },
+            ),
+            (
+                "macos-accessibility-denied.json",
+                MacPermissions {
+                    accessibility: false,
+                    screen_recording: true,
+                },
+            ),
+        ] {
+            let report = daemon_report(
+                permissions,
+                SessionHealth::usable(None),
+                4210,
+                DEFAULT_SOCKET_PATH,
+                main,
+                "0.4.0",
+            );
+            let menu = "/Applications/Axon.app/Contents/Library/Applications/Axon Menu.app/Contents/MacOS/AxonMenu";
+            let mut registration =
+                RegistrationHealth::present(RegistrationMechanism::Launchd, main);
+            registration.jobs = Some(vec![
+                JobState {
+                    label: "dev.axon.daemon".into(),
+                    loaded: true,
+                    process_id: Some(4210),
+                    path: Some(main.into()),
+                },
+                JobState {
+                    label: "dev.axon.menu".into(),
+                    loaded: true,
+                    process_id: Some(4211),
+                    path: Some(menu.into()),
+                },
+            ]);
+            let produced =
+                serde_json::to_value(HealthReport::running(report, registration)).unwrap();
+            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../schema/fixtures/health")
+                .join(name);
+            if std::env::var_os("AXON_REGENERATE_HEALTH_FIXTURES").is_some() {
+                fs::write(
+                    &path,
+                    serde_json::to_string_pretty(&produced).unwrap() + "\n",
+                )
+                .unwrap();
+            }
+            let committed: Value =
+                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(
+                produced, committed,
+                "{name} is not what axon-mac publishes; regenerate it"
+            );
+        }
+    }
+
     #[test]
     fn facade_matches_shared_observation_envelope() {
         let fixture: Value = serde_json::from_str(include_str!(

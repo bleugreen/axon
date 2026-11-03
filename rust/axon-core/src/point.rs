@@ -3,8 +3,8 @@
 //!
 //! The accepted shapes are the ones the public schema documents for every backend:
 //! `{point:{x,y,coordinateSpace,app}}`, `{app,coordinateSpace,point:{x,y}}`, and
-//! `{x,y,coordinateSpace}`. The Swift daemon's `ToolTarget` reads them with the same precedence, so
-//! a recorded `{app, point}` fallback means the same thing to both.
+//! `{x,y,coordinateSpace}`, with the same precedence the Swift daemon used until 0.4.0, so a
+//! `{app, point}` fallback recorded by either daemon means the same thing.
 
 use serde_json::{Map, Value};
 

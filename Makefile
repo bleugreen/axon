@@ -1,7 +1,7 @@
 SWIFT ?= $(HOME)/.swiftly/bin/swift
 
 .PHONY: build test check-version doctor permit package-app package-linux package-win \
-	install-daemon uninstall-daemon restart-daemon shutdown status logs codex-mcp-config check-local
+	install-daemon serve uninstall-daemon restart-daemon shutdown status logs codex-mcp-config check-local
 
 build:
 	$(SWIFT) build
@@ -28,10 +28,15 @@ package-linux:
 package-win:
 	./scripts/package-rust axon-win
 
-# These register the built executable in .build/debug, which is a build directory: fine for a
-# short development loop, never for a real install. The CLI warns about it.
-install-daemon:
-	$(SWIFT) run axon daemon install
+# The macOS daemon is the Rust axon-mac and ships only inside Axon.app, so installing means
+# packaging first and registering that bundle: fine for a short development loop from dist/, never
+# for a real install. The verbs below act on whatever is registered, whichever CLI asks.
+install-daemon: package-app
+	./dist/Axon.app/Contents/Resources/bin/axon daemon install
+
+# Development without packaging: the daemon on a private socket, no launchd, no menu.
+serve:
+	cd rust && AXON_SOCKET_PATH=$${AXON_SOCKET_PATH:-/tmp/axon-dev.sock} cargo run -p axon-mac -- serve
 
 uninstall-daemon:
 	$(SWIFT) run axon daemon uninstall

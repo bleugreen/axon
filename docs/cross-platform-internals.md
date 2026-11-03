@@ -10,7 +10,7 @@ These are the only sources that promote or sustain a **Supported** cell.
 
 | evidence | where | what it proves | cadence |
 | --- | --- | --- | --- |
-| macOS live loop | `.github/workflows/live.yml` `macos` job | capture → resolve → `invoke` `AXPress` → verified Calculator display; complete health-v1 document; Accessibility grant — each asserted against the app bundle the job launched, by process id | every push to `main` |
+| macOS live loop | `.github/workflows/live.yml` `macos` job | capture → resolve → `invoke` `AXPress` → verified Calculator display; a window PNG; `look(since:)` answering unchanged before a press and changed after it; OCR screen text; replay of a recording the 0.3.6 Swift daemon made; complete health-v1 document naming `rust-axon-mac` and shell contract 1; Accessibility grant — each asserted against the daemon launchd started from the built bundle under the lane's private label, by process id | every push to `main` |
 | macOS grant-carry upgrade verification | `bglab-mac`, measured during the axn/119 v0.3.0 rollout | `daemon install` from `~/.local/lib/axon/0.3.0` repointed the LaunchAgent from 0.2.3 while the unchanged `com.bleugreen.axon` bundle identity carried Accessibility and Screen Recording grants across the upgrade: the daemon returned ready in about one second with all fifteen capabilities usable and no System Settings prompts | manual (2026-08-11); re-run on changes to bundle identity or installation registration |
 | Linux live loop (Wayland) | `.github/workflows/live.yml` `linux` job, on `bglab-ub` (GNOME/Mutter Wayland) | AT-SPI capture/resolve/invoke with verified readback on GNOME Calculator; honest refusal of global input at both policies and of `recording.start` with `wayland-restricted`; systemd-user lifecycle and health-v1, including the session accessibility switch this runner has on | every push to `main` |
 | Linux X11 live loop | `.github/workflows/live.yml` `linux-x11` job, on `bginf-sp2` (GNOME 46 on Xorg) | a direct X11 window screenshot of GNOME Calculator, checked against the window's size as a separate X client reads it and against a blank capture; AT-SPI invoke with verified readback; `keyboard` into Calculator refused under `backgroundOnly` (naming the GTK 4 pixel refusal) and delivered under `foregroundPermitted` through XTEST, with activation proved from a known window, the `0` → `07` transition read back, and the foreground handed back; the XRecord recorder end to end via `scripts/linux-recording-probe --target gtk3`, including the daemon's own XTEST input kept out of recordings; systemd-user lifecycle and health-v1 with input, capture, hit testing, and observation usable | every push to `main` |
@@ -26,14 +26,14 @@ These are the only sources that promote or sustain a **Supported** cell.
 
 ### Environment notes
 
-**macOS.** The live loop covers the semantic rung end to end. The pointer,
-keyboard, and screenshot cells are this audit's most surprising finding:
-macOS is the most-used platform, and its pixel and foreground paths are
-covered by an extensive deterministic suite (`DeliveryRoutingTests`,
-`ForegroundEscalationTests`, `PointerTargetValidationTests`,
-`DragEventPathTests`) but by no live probe. The promotion path is to extend
-the macOS live loop with a click that falls to the pixel rung and a
-screenshot capture.
+**macOS.** The live loop covers the semantic rung end to end, a window
+screenshot, `look(since:)`, OCR screen text, and the replay of a recording the
+Swift daemon made before 0.4.0. The pointer and keyboard cells are the gap:
+macOS is the most-used platform, and its application and foreground rungs are
+covered by `axon-mac`'s deterministic suite and by dated bench sessions (see
+the [capability census](platform-capability-matrix.md)) but by no lane. The
+promotion path is to extend the macOS live loop with a click that falls to the
+foreground rung.
 
 **Windows.** Mechanism and probe findings are in
 [Windows backend](#windows-backend). Two restrictions are deliberately not
@@ -135,16 +135,32 @@ should be discoverable here first.
   unambiguous only while that application has exactly one managed top-level
   window; with more, nothing here can choose between them on the caller's
   behalf, and it says so rather than guessing.
-- `drag` on Windows and Linux: not implemented. A drag holds a button across
+- `drag` on every platform: not implemented. A drag holds a button across
   the whole gesture and needs its own account of a press held across a failed
-  restoration.
-- Change observation (`look(since:)`, `wait_for_value`, `wait_for_stability`):
-  macOS only. AT-SPI event observation is not wired into the Linux backend;
-  UIA event delivery is probe-verified on Windows but excluded from the v1
-  surface.
+  restoration. On macOS the drag the Swift daemon implemented left with it at
+  0.4.0; the CLI, SDKs, and MCP tool list keep the verb, and `axon-mac`
+  refuses it with `-32004` and capability `PointerDrag`.
+- The editor's step debugger (`debug.*`) on macOS: refused with `-32004` and
+  capability `DebugSession` since 0.4.0, when the Swift daemon that ran the
+  session was deleted. On the first refusal the editor disables Debug and Run
+  to Selected with an explanation, keeps breakpoints in the document, and
+  records Record From Here before the selected step instead of at a paused
+  position. Porting the session into `axon-core`, which would give Windows
+  and Linux the debugger too, is follow-up work.
+- Change observation as an event stream: no backend has one behind the v1
+  surface. `axon-mac` has no Accessibility event observer, so `look(since:)`
+  compares a fresh capture with the retained one, `wait_for_value` and
+  `wait_for_stability` poll, and health reports `observeChanges` unusable with
+  `not-implemented` even with every grant held. AT-SPI event observation is not
+  wired into the Linux backend; UIA event delivery is probe-verified on Windows
+  but excluded from the v1 surface.
+- OCR screen text on macOS: implemented through Vision in `axon-mac`
+  (`vision_bridge.m`), with a bench probe on a development identity but no
+  evidence yet from the shipping bundle. The live loop and the signed cutover
+  qualification assert it; a failure there reports `screenTextUnavailable`
+  while the semantic `look` still succeeds.
 - Recording (`save` from live history, global user-input observation): the
-  shipping implementation is macOS-only and lives in the Swift daemon. The
-  shared half of the port now lives in `axon-core` — `recording.rs` carries the
+  shared half lives in `axon-core` — `recording.rs` carries the
   provider-neutral event vocabulary, the `GlobalInputObserver` seam, and v2
   authoring; `postconditions.rs` carries the observed-state model and the rules
   that decide which transitions may be asserted. A platform supplies only the
@@ -153,8 +169,10 @@ should be discoverable here first.
   per platform. macOS and Windows implement the observer hook — a listen-only
   CGEvent tap with Accessibility reads taken in the callback, and a low-level
   hook pair feeding an enrichment thread that reads UI Automation at event time,
-  respectively. Linux does not, which is why `observeGlobalInput` stays unusable
-  there and refuses with a typed capability reason rather than a bare error.
+  respectively. Linux implements it on X11 through the RECORD extension; a
+  Wayland session has no listen-only input protocol, so `observeGlobalInput`
+  stays unusable there and `recording.start` refuses with a typed capability
+  reason rather than a bare error.
 
   A keystroke burst captured under a sensitive focus is never serialized; the
   rule and the floor each observer owes it are the observer sensitivity contract
@@ -170,8 +188,8 @@ should be discoverable here first.
   `status --json` carries `session.accessibilityEnabled` false with reason
   `accessibility-disabled` before anyone has asked for an application, and
   capture names it again for a caller who did.
-- macOS pixel, foreground, and screenshot paths: implemented and
-  unit-verified, with no live probe (see the macOS note above).
+- macOS application and foreground input paths: implemented, unit-verified,
+  and bench-probed, with no live lane (see the macOS note above).
 
 ### Maintaining these claims
 
@@ -352,15 +370,18 @@ systemd user unit bound to `graphical-session.target` on Linux.
 None of the three copies a binary anywhere, so there is exactly one
 registration truth and callers must invoke from a permanent path. Windows
 derives and registers the windowless daemon beside the invoking CLI, Linux
-registers the *invoking* executable, and macOS registers the enclosing
-`Axon.app` when there is one, because that is the only way a privacy grant
-binds to the bundle identity instead of to a path that changes every release.
+registers the *invoking* executable, and macOS registers the main executable
+of the enclosing `Axon.app` together with its nested menu, refusing outside
+one, because the main executable is the only way a privacy grant binds to the
+bundle identity instead of to a path that changes every release. The macOS
+jobs are tabled under [the launchd topology](#trust-model-and-launchd-topology).
 All three treat a successful authenticated health round trip as the readiness
 contract; a bound socket or an existing pipe is never taken as evidence that a
 daemon is serving.
 
 Status is one versioned document, `health-v1`, described by
-`schema/health-v1.schema.json` and modelled in both Swift (`AxonCore`) and Rust
+`schema/health-v1.schema.json` and modelled by the Swift CLI that writes it on
+macOS (`Sources/AxonClient/HealthStatus.swift`) and by Rust
 (`axon-core::health`) against the same shared fixtures. Degradation is data:
 a daemon that is not running, a Windows service session, a Linux greeter with
 no AT-SPI bus, and a denied macOS grant are all schema-valid documents that exit
@@ -1083,15 +1104,22 @@ the target, so the semantic rung sets the value directly and reads it back.
 
 The platform-neutral specification drives a shared conformance suite. Its
 fixtures should be language-neutral data wherever possible, with adapters that
-run them against Swift and Rust. Schema snapshots verify the public tools;
+run them against every implementation that produces or consumes the shape.
+Schema snapshots verify the public tools;
 synthetic trees verify locator behavior; strict target fixtures reject handles and
 standalone locators while accepting `{app, name}`; request/response fixtures verify JSON-RPC
 and MCP envelopes; `.axn` fixtures verify parsing and traces; backend harnesses
 verify capability and honest-result semantics. `schema/fixtures/delivery` holds
-the delivery vocabulary and result shapes, read by both
-`Tests/AxonCoreTests/SharedDeliveryConformanceTests.swift` and
-`rust/axon-core/tests/delivery.rs`, so a rung or refusal reason cannot be renamed
-on one side alone.
+the delivery vocabulary and result shapes that `rust/axon-core/tests/delivery.rs`
+pins. Where a Swift client and a Rust daemon meet — `schema/fixtures/shell` and
+`schema/fixtures/health` — the daemon's code path produces each fixture and the
+Swift models decode it.
+
+Two corpora are frozen. `rust/axon-core/fixtures/swift-*` and
+`schema/fixtures/browser` were produced by the Swift daemon before it was
+deleted in 0.4.0, and nothing can regenerate them; they are the compatibility
+guarantee for recordings and browser answers made by that daemon. A test that
+fails against them is fixed in the Rust code, never in the fixture.
 
 Native integration tests remain necessary because no fixture can prove UIA or
 AT-SPI exposure. Conformance establishes that implementations mean the same
@@ -1122,8 +1150,12 @@ otherwise first execute on a real desktop with nothing having tried them, and
 the branches deciding whether that desktop keeps its start-at-login daemon only
 run once a probe has already failed. `scripts/test-macos-live-recovery` extracts
 those step bodies from the workflow file itself and drives them against stubbed
-`launchctl`, `pgrep`, `open`, and Axon commands, asserting the branch and the
-message each scenario produces. It runs on the macOS runner rather than a hosted
+`launchctl`, `pgrep`, `pkill`, `open`, and Axon commands, asserting the branch,
+the message, the order of the calls, and which jobs each scenario leaves
+loaded. Its `launchctl` stub keeps a file-backed set of loaded jobs, and its
+`shutdown` and `daemon restart` act on that set the way `Supervision` does, so
+a scenario checks the state the desktop is left in rather than only the calls
+made. It runs on the macOS runner rather than a hosted
 one so that the shell interpreting it is the same `bash` 3.2 the live lane gets.
 
 The `Test` workflow's Windows job does the same for the Windows lane, whose
@@ -1159,11 +1191,16 @@ request. Its self-hosted jobs use dedicated `axon-live-*` labels and serialize
 per machine because the same desktops also serve as Cairn executors. A live-lane
 failure reports a real integration regression without blocking a pull request:
 
-- macOS builds and Developer-ID-signs the checked-out app, stops the desktop's
-  own daemon so the endpoint is free, starts that app under the stable
-  Accessibility-approved identity, then captures Calculator, resolves a button,
-  invokes `AXPress`, and verifies the display changed — putting the desktop's
-  own daemon back afterwards whatever the probe did;
+- macOS builds and Developer-ID-signs the checked-out app, parks the desktop's
+  own menu and daemon so the endpoint is free, and launches the candidate's
+  daemon and menu as private launchd jobs (`dev.axon.live.daemon`,
+  `dev.axon.live.menu`) on a per-run socket, `/tmp/axon-live-<run>.sock`. It
+  asserts the health document names `rust-axon-mac`, the bundle's main
+  executable, launchd's pid for the daemon job, and shell contract 1, and that
+  the menu is still running; then captures Calculator, resolves a button,
+  invokes `AXPress`, and verifies the display changed, and checks a window
+  PNG, `look(since:)`, screen text, and the replay of a Swift-made recording —
+  putting the desktop's own jobs back afterwards whatever the probe did;
 - Linux connects to the logged-in GNOME session's AT-SPI bus and runs the
   hardened Calculator probe, which verifies the expected text transition on the
   same AT-SPI object that was captured before dispatch, then asserts that
@@ -1196,11 +1233,16 @@ All three lanes close this. Each stops the desktop's own daemon once for the
 whole job rather than once per probe, confirms nothing is answering on the
 endpoint before any probe starts, and asserts that the process id in the health
 document is the process id it launched. What that pid names differs by platform.
-On Linux it is the `serve` process the probe backgrounded. On macOS the app
-bundle serves the endpoint from inside its own process — there is no `serve`
-child — so it is the pid of the app that `open -n` launched, found by the bundle
-executable's path under the workspace, which no installed copy shares, and
-required to be the only process running from it. On Windows nothing the job runs
+On Linux it is the `serve` process the probe backgrounded. On macOS it is the
+pid `launchctl print` reports for the lane's private daemon job, which both
+`daemon.processId` and `daemon.provenance.processId` must equal, with
+`provenance.executablePath` the workspace bundle's main executable. The
+candidate runs under launchd rather than from the runner's shell because that
+is the only launch whose privacy grants are its own, and never through
+`open -n`: opened that way, the main executable takes its launcher path and runs
+the bundle's `axon start` against the desktop's production registration
+instead of serving. The lane refuses to bootstrap a candidate plist that lacks
+`AXON_DAEMON_MANAGED_BY_LAUNCHD=1` for the same reason. On Windows nothing the job runs
 launches the daemon at all: Task Scheduler does, in the logged-in session, and it
 reports nothing about the process it started, so the pid is found by the probe
 executable's path — outside the workspace, and shared by no installed copy — and
@@ -1222,14 +1264,18 @@ questions that the exit code does not answer on its own — the Windows park wor
 both out from the process, described with the rest of that lane's patience below.
 
 A stop also incurs a debt, and a final `if: always()` step pays it. `axon
-shutdown` is not a pause — it boots the LaunchAgent out precisely so `KeepAlive`
+shutdown` is not a pause — it boots the LaunchAgents out precisely so `KeepAlive`
 cannot relaunch the daemon between it acknowledging the request and exiting, and
-the agent then stays unloaded for the rest of the login session while the plist
-sits on disk still reading as registered. Linux puts its systemd unit back:
-contents, enablement, and running state. macOS reloads the agent with `axon
-daemon restart`, which bootstraps the plist on disk without rewriting it;
-`daemon install` would repoint the desktop's registration at the job's `dist`
-directory and is never the restore. Neither lane trusts the restart's exit code,
+the agents then stay unloaded for the rest of the login session while the plists
+sit on disk still reading as registered. The macOS park boots the desktop's menu
+out before it calls `shutdown`, and refuses to stop the daemon underneath a menu
+it could not park. Linux puts its systemd unit back: contents, enablement, and
+running state. macOS reloads both jobs with `axon daemon restart`, which
+bootstraps the plists on disk without rewriting them, and then requires each
+job that was loaded when the lane arrived to be loaded again, booting out a menu
+that restart loaded but the desktop did not have; `daemon install` would
+repoint the desktop's registration at the job's `dist` directory and is never
+the restore. Neither lane trusts the restart's exit code,
 because whatever starts a daemon reports on starting it: `systemctl start` is a
 claim about `exec` under `Type=simple`, and `launchctl bootstrap` is a claim
 about loading a job. Both therefore require the restored daemon to answer a
@@ -1238,17 +1284,19 @@ treats the restart command's own status as the verdict — on macOS that command
 includes a readiness wait parsed with the *building* release's decoder, which a
 release skew the rest of the step deliberately tolerates could fail on its own.
 
-The macOS probe leaves one thing behind that its Linux counterpart cannot, and
-`scripts/stop-probe-app` is what removes it. The two daemons behave differently
-when they lose the endpoint: `serve` exits, while the app bundle catches the
-socket error, records it in its menu, and keeps running. A probe app that never
-bound is therefore a live process answering no health request, which `axon
-shutdown` can neither see nor stop, since it stops a daemon by asking it to —
-and one that bound and then wedged still holds the advisory lock that makes the
-next `serve` refuse. Left alone it outlives its job and survives the next
-checkout, because deleting an executable does not change a running process's
-arguments. Both the parking and restore steps sweep it by workspace path, which
-is what keeps the sweep from ever reaching an installed copy; the Windows job's
+The macOS probe can leave a candidate behind that `axon shutdown` cannot reach,
+and `scripts/stop-probe-app` is what removes it. Its private jobs are not the
+desktop's registration, so `shutdown` never boots them out, and a job left
+loaded makes the next run's bootstrap fail as already loaded. A candidate whose
+job was unloaded around it, as on a killed runner, is a process launchd no
+longer tracks, and one that bound and then wedged still holds the advisory lock
+that makes the next daemon refuse. Left alone it outlives its job and survives
+the next checkout, because deleting an executable does not change a running
+process's arguments. So both the parking and restore steps run
+`stop-probe-app --launchd-label` with the lane's two labels, which boots those
+labels out and then sweeps any process still running one of the workspace
+executables. Labels no installed Axon uses and paths under the workspace are
+what keep it from ever reaching an installed copy; the Windows job's
 `Remove leaked live-probe daemons` is the same measure for the same reason.
 
 Windows carries one rule the other two do not need, because its registration is
@@ -1418,11 +1466,9 @@ gh api repos/bleugreen/axon/actions/runners/registration-token -X POST --jq .tok
 `axon_core::PlatformBackend`. It captures each selected application's complete
 Accessibility window tree, including native `AXRole`/`AXSubrole` vocabulary,
 labels, values, identifiers, actions, editability, and screen extents. Its role
-semantics deliberately mirror the Swift tables in
-`Sources/AxonCore/AXHierarchyBulkCapturer.swift` and
-`Sources/AxonCore/AXRoleSemantics.swift`: press is inferred for buttons, links,
-check boxes, radio buttons, and menu items, while combo boxes, text areas, and
-text fields are editable.
+semantics carry over the tables the Swift daemon used before 0.4.0: press is
+inferred for buttons, links, check boxes, radio buttons, and menu items, while
+combo boxes, text areas, and text fields are editable.
 
 One vocabulary names an application throughout this backend. Resolution matches
 an `AppQuery` against the running applications it enumerates: `process_id`
@@ -1448,16 +1494,14 @@ resolves applications by localized name and bundle identifier and never consults
 AXTitle; AXTitle names windows and elements, not applications. Sharing the
 decision keeps a recorded artifact calling an application what `look` calls it.
 
-The v1 facade exposes `look`, `find`, `click`, `type`, `keyboard`, `invoke`,
-`scroll`, and `run`. `look` derives semantic names through axon-core and actions
-resolve the strict `{app,name}` target through the shared registry; ambiguous
-names return candidates without dispatch. Element clicks use `AXPress`, typing
-uses `AXValue`, invoke uses the requested AX action (defaulting to `AXPress`),
-and scrolling uses `AXScrollToVisible`. Global keyboard input has no semantic
-Accessibility action and therefore refuses honestly in v1. Pixel and foreground
-delivery are likewise unimplemented rather than approximated. Extended
-observation, history, permission prompting, and drag tools fail before native
-dispatch with capability errors.
+`look` derives semantic names through axon-core and actions resolve the strict
+`{app,name}` target through the shared registry; ambiguous names return
+candidates without dispatch. At the semantic rung element clicks use `AXPress`,
+typing uses `AXValue`, invoke uses the requested AX action (defaulting to
+`AXPress`), and a zero-delta scroll uses `AXScrollToVisible`; the application
+and foreground rungs are described in the [platform spec](platform-spec.md) and
+the [capability census](platform-capability-matrix.md). `drag` and the editor's
+`debug.*` methods fail before native dispatch with capability errors.
 
 Full application observations capture the first Accessibility window through
 Core Graphics' synchronous per-window image API, resize its long edge to the
@@ -1489,7 +1533,8 @@ private-endpoint override so branch builds never need to repoint an installed da
 The server owns a lifetime `flock`, reclaims only stale socket nodes, and serves
 connections concurrently through one serialized native-backend worker. Health and
 shutdown bypass that worker so a long replay or wait cannot hide daemon liveness.
-The registered Swift daemon remains unchanged until the deliberate cutover stage.
+Since 0.4.0 this binary is the registered production daemon, shipped as
+`Axon.app/Contents/MacOS/Axon`.
 
 The durable bglab-mac development identity is packaged by
 `scripts/package-macos-rust-bench` at `~/AxonBench/AxonMacDev.app`, with the
@@ -1585,16 +1630,16 @@ row read granted the whole time. `MacPermissions` in
 is a pure function of them, and health uses both rather than deriving one from
 the other.
 
-The Rust backend's `screenshot` capability is unusable without Accessibility
-even when Screen Recording is granted, because this backend names the window to
-capture by resolving the application through the Accessibility API. The Swift
-daemon resolves applications through NSWorkspace and so does not share that
-restriction; `Tests/AxonCoreTests/HealthStatusTests.swift` and
-`schema/fixtures/health/macos-accessibility-denied.json` describe that
-implementation, not this one. Both are right about themselves. Once `axon-mac`
-becomes the shipping macOS daemon this needs a decision: either the Rust backend
-grows a non-Accessibility application resolution path, or the shared fixture
-stops claiming to describe both implementations.
+The `screenshot` capability is unusable without Accessibility even when Screen
+Recording is granted, because this backend names the window to capture by
+resolving the application through the Accessibility API, and the same is true of
+listing applications. The Swift daemon before 0.4.0 resolved applications through
+NSWorkspace and kept both usable without Accessibility; that behaviour left with
+it. `schema/fixtures/health/macos-healthy.json` and
+`macos-accessibility-denied.json` are generated from `axon-mac`'s own health
+code path (set `AXON_REGENERATE_HEALTH_FIXTURES` to rewrite them), so they
+describe this backend, including a denied daemon that answers with `ready`
+false.
 
 ### Recording refuses on capability before a session exists
 
@@ -1623,8 +1668,8 @@ prompting determination presented the consent dialog through UserNotificationCen
 daemon bundle and its `NSAppleEventsUsageDescription`. Allow and Don't Allow each landed on the
 daemon's identity, and the shell held no row afterwards.
 
-The Swift daemon sends Safari and Google Chrome events directly through
-`NSAppleScript.executeAndReturnError`; it does not launch `osascript`. The Rust daemon sends the same
+The Swift daemon before 0.4.0 sent Safari and Google Chrome events through
+`NSAppleScript.executeAndReturnError`, never launching `osascript`. The Rust daemon sends the same
 questions as raw Apple events through `AESendMessage` (`rust/axon-mac/src/apple_events.rs`), one
 event per question, each shaped as AppleScript's own events were measured to be: `core/getd` of a
 property specifier hung from index specifiers (`front window` is window 1), `core/setd` with a
@@ -1639,7 +1684,8 @@ events from one budget, every event waiting at most 15 seconds: `navigate` spend
 before its `set`, the settle's 4-second wall-clock bound (which counts the reads' own latency), and
 one trailing read, so even a browser that is slow without being hung ends inside the socket client's
 30-second request timeout. The wire contract is pinned by `schema/fixtures/browser`, which is the
-Swift router's own output, and the Rust router reproduces each file end to end. Authorization is
+Swift router's own output, frozen since that router was deleted in 0.4.0, and the Rust router
+reproduces each file end to end. Authorization is
 split by who is asking. Agent-facing verbs call `AEDeterminePermissionToAutomateTarget` with
 `askUserIfNeeded: false` and refuse on anything but `noErr`: the prompting call blocks its thread
 until a person dismisses the dialog, and browser verbs run synchronously on the socket-handling
@@ -1662,8 +1708,7 @@ sender is `Axon.app/Contents/MacOS/Axon`, registered in launchd's `gui/<uid>` do
 
 Every decision names the leg that produced it — `checked`, `prompted`, or `executed` — in the
 JSON-RPC error's `data.leg` and in one stderr line per decision, which the LaunchAgent routes to
-`~/Library/Logs/Axon/daemon.err.log`. Both daemons do this; the Rust daemon also logs one line per
-Apple event with its status and latency. A field report should be readable without a bench
+`~/Library/Logs/Axon/daemon.err.log`, and one line per Apple event with its status and latency. A field report should be readable without a bench
 protocol.
 
 Only a refused event writes the executed leg (`errAEEventNotPermitted` at the send, after the check
@@ -1708,7 +1753,7 @@ operations.
 
 ## macOS daemon and menu shell contract (shell-v1)
 
-The macOS product is being split into two processes. The daemon is `rust/axon-mac`, the outer
+The macOS product is two processes. The daemon is `rust/axon-mac`, the outer
 `Axon.app`'s main executable and the only Axon process macOS grants anything to. The menu shell is
 `Axon Menu.app` (`Sources/AxonMenuApp`), nested at `Axon.app/Contents/Library/Applications`,
 signed with no entitlements and holding no TCC row. The shell links only `AxonClient`, the
@@ -1718,18 +1763,18 @@ package graph enforces and `Tests/AxonClientTests/PrivacyBoundaryTests.swift` ch
 the shell's sources for privileged imports, symbols, and protected-folder paths. Everything the
 shell shows or does that needs a grant is a request the daemon carries out under its own identity.
 
-The shell exists as a bench-proven product in `Package.swift` while `AxonDaemonApp` remains the
-shipping app. Packaging the shell, deleting `AxonDaemonApp`, and registering both jobs as one
-install transaction belong to the cutover's packaging step.
+Since 0.4.0 this is the shipping layout. `scripts/package-app` builds it, `scripts/check-app-layout`
+defines it, and `Sources/AxonClient/Supervision.swift` registers both jobs as one install
+transaction (see [Embedding Axon](embedding.md#two-jobs-on-macos)).
 
 ### Versioning
 
 The daemon publishes `shellContract` in its `health` answer (`SHELL_CONTRACT_VERSION` in
 `rust/axon-core/src/health.rs`, `ShellContract.version` in `Sources/AxonClient/ShellContract.swift`).
 This is shell-v1. A shell that reads a missing or different value shows "Incompatible daemon at
-<path>" and disables everything but Open .axn, updates, and Quit. That includes the Swift daemon,
-which publishes no `shellContract`. A change to any method, shape, or error below is a new contract
-version.
+<path>" and disables everything but Open .axn, updates, and Quit. That includes a 0.3.x Swift
+daemon, which publishes no `shellContract`; a rollback that leaves the menu job in place produces
+exactly that state. A change to any method, shape, or error below is a new contract version.
 
 ### Methods
 
@@ -1803,7 +1848,7 @@ the shell's own identifier (`ReleaseInstaller.updateRequirement`). It replaces t
 `Axon.app`, so install-layout detection sees the real versioned or fixed-location parent. The
 generated Homebrew cask re-registers nothing on upgrade, so after `brew upgrade` the shell arms the
 same finisher. Previously it relaunched with `open -b com.bleugreen.axon`, which after the split
-would start the daemon executable rather than the menu.
+runs the main executable's launcher path rather than opening the menu.
 
 ### Trust model and launchd topology
 
@@ -1813,13 +1858,37 @@ document types. It is not in `Contents/MacOS`, where a second executable becomes
 by its path. Each process is its own launchd job and its own responsible process. Neither spawns
 the other, so neither inherits the other's attribution.
 
-| Job | Program | KeepAlive | Notes |
-| --- | --- | --- | --- |
-| `dev.axon.daemon` | `Axon.app/Contents/MacOS/Axon` | `true` | unchanged |
-| `dev.axon.menu` | `Axon.app/Contents/Library/Applications/Axon Menu.app/Contents/MacOS/AxonMenu` | `{SuccessfulExit: false}` | `LaunchAgentConfiguration.menu`; Aqua, Interactive, `AXON_SOCKET_PATH`, logs at `~/Library/Logs/Axon/menu.{out,err}.log` |
-| `dev.axon.updater` | the bundle CLI, `daemon install` | `false` | armed by the shell |
+| Job | Program | KeepAlive | Environment | Written by |
+| --- | --- | --- | --- | --- |
+| `dev.axon.daemon` | `Axon.app/Contents/MacOS/Axon`, no arguments | `true` | `AXON_SOCKET_PATH`, `AXON_DAEMON_MANAGED_BY_LAUNCHD=1` | `daemon install` (`LaunchAgentConfiguration`), with the menu as one `Supervision` transaction |
+| `dev.axon.menu` | `Axon.app/Contents/Library/Applications/Axon Menu.app/Contents/MacOS/AxonMenu` | `{SuccessfulExit: false}` | `AXON_SOCKET_PATH` | `daemon install` (`LaunchAgentConfiguration.menu`), with the daemon |
+| `dev.axon.updater` | the bundle CLI, `daemon install` | `false` | `AXON_SOCKET_PATH` | the menu, for an update or Use This Copy; the finisher removes its own plist |
+
+All three are Aqua, Interactive, `RunAtLoad`, and log to `~/Library/Logs/Axon/<daemon|menu|updater>.{out,err}.log`.
+The daemon's managed key is what makes it serve: without it, and without a verb, the main
+executable takes its launcher path and runs the bundle's `axon start`. A daemon plist that lacks
+the key, or that carries the `serve` argument earlier releases wrote, is stale to `axon start`,
+which re-registers rather than resumes it.
 
 Quit Axon Menu exits 0 and launchd leaves the menu stopped. A crash brings it back. There is
 deliberately no item that stops the daemon; `axon shutdown` is that control. The bench staging of
 this topology is `scripts/stage-macos-shell-bench`, and its evidence is in
 `scripts/macos-toolkit-acceptance/live/axn249/`.
+
+### Rolling back to the Swift daemon
+
+0.3.6 is the last release whose main executable is the Swift daemon, and it registers only
+`dev.axon.daemon`. Rolling back therefore removes the menu job first and then lets the 0.3.6
+bundle's CLI register its daemon:
+
+```sh
+launchctl bootout gui/$(id -u)/dev.axon.menu
+rm ~/Library/LaunchAgents/dev.axon.menu.plist
+<0.3.6 Axon.app>/Contents/Resources/bin/axon daemon install
+```
+
+Left in place, the menu job keeps launching the 0.4.0 menu, which reads no `shellContract` from the
+0.3.6 daemon and shows "Incompatible daemon". Both releases share `com.bleugreen.axon` under team
+`JBS95V8M7P`, the identity the grants are recorded against. The signed qualification of the cutover
+(`scripts/macos-cutover-qualification`, evidence in `scripts/macos-toolkit-acceptance/live/axn125/`)
+scripts and rehearses this rollback before it runs the real upgrade.

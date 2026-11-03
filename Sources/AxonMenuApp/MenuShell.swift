@@ -44,8 +44,12 @@ final class MenuShell: NSObject, NSApplicationDelegate, NSMenuDelegate {
         UserDefaults.standard.set(false, forKey: "NSQuitAlwaysKeepsWindows")
         appRecency.start()
         statusItem.button?.imagePosition = .imageOnly
-        // Whatever started this copy, an update's scaffolding is the successor's to clear.
-        LaunchAgentManager.reapUpdateFinisher()
+        // Whatever started this copy, an update's scaffolding is the successor's to clear. A menu
+        // on a private socket (a bench or qualification candidate) leaves the production
+        // updater's label alone.
+        if !servesPrivateSocket {
+            LaunchAgentManager.reapUpdateFinisher()
+        }
         inputs.registrationWarning = registrationWarning()
         inputs.strayEditorNotice = strayEditorNotice()
         render()
@@ -276,7 +280,7 @@ final class MenuShell: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func startRecording() {
         let apps = AppResolver().recordableApps(recency: appRecency.snapshot())
             .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
-        let scopes = MenuModel.pickerScopes(for: apps)
+        let scopes = RecordingScope.pickerScopes(for: apps)
         let picker = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 320, height: 28), pullsDown: false)
         scopes.forEach { picker.addItem(withTitle: $0.displayName) }
         let alert = NSAlert()
@@ -408,7 +412,20 @@ final class MenuShell: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// Makes the enclosing bundle the registered one, through the same finisher an update uses,
     /// then quits: launchd owns the registration now, and it points here.
+    /// Whether this menu presents a daemon on a socket other than the production one, as a bench or
+    /// qualification candidate does. Registration and update scaffolding belong to production.
+    private var servesPrivateSocket: Bool {
+        socketPath != AxonEnvironment.defaultSocketPath
+    }
+
     private func useThisCopy() {
+        guard !servesPrivateSocket else {
+            showAlert(
+                title: "Cannot Use This Copy",
+                message: "This menu presents a private daemon at \(socketPath). Use This Copy registers the login items on \(AxonEnvironment.defaultSocketPath), so it is only offered there."
+            )
+            return
+        }
         guard let enclosingBundle else {
             showAlert(title: "Cannot Use This Copy", message: "This menu is not inside an Axon.app, so there is no bundle to register.")
             return
@@ -606,6 +623,13 @@ private final class RecordingAppRecencyStore {
 @main
 enum AxonMenuMain {
     static func main() {
+        // One menu per user. launchd starts one, and Spotlight or Finder can open the nested
+        // bundle again; the later copy leaves, exiting 0 so launchd does not count it as a crash.
+        if let identifier = Bundle.main.bundleIdentifier,
+           NSRunningApplication.runningApplications(withBundleIdentifier: identifier)
+               .contains(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }) {
+            exit(0)
+        }
         MainActor.assumeIsolated {
             let app = NSApplication.shared
             let shell = MenuShell()

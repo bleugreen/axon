@@ -11,24 +11,38 @@ Axon-<version>-macos-aarch64.zip
 └── Axon.app
     └── Contents
         ├── MacOS
-        │   └── Axon
+        │   └── Axon                  the Rust daemon (axon-mac), the only TCC subject
         ├── Library
         │   └── Applications
-        │       └── Axon Editor.app
+        │       ├── Axon Menu.app     the unprivileged menu bar shell
+        │       │   └── Contents
+        │       │       └── MacOS
+        │       │           └── AxonMenu
+        │       └── Axon Editor.app   the .axn editor
         │           └── Contents
         │               └── MacOS
         │                   └── AxonEditor
         └── Resources
             └── bin
-                └── axon
+                └── axon              the Swift CLI, a client of the daemon
 ```
 
 The archive root is the application itself, so extracting it yields one `Axon.app` to drag into
-`/Applications`, where Finder offers to replace an existing install. The editor is nested rather
-than shipped beside it: one bundle to move, one bundle for the in-app updater to swap, and no way
-for the recorder and editor to reach different versions. The outer bundle is signed last so its
+`/Applications`, where Finder offers to replace an existing install. The menu and the editor are
+nested rather than shipped beside it: one bundle to move, one bundle for the in-app updater to swap,
+and no way for the daemon, the menu, and the editor to reach different versions. Each nested app is
+a TCC subject of its own that asks macOS for nothing; the outer bundle keeps the identity every
+grant is recorded against, and nothing but the daemon sits in `Contents/MacOS`, where a second
+executable would become a path-keyed privacy subject. The outer bundle is signed last so its
 signature seals the nested code, and only the outer bundle is stapled — its notarization ticket
 covers everything inside.
+
+`scripts/check-app-layout` is the one definition of this shape. It requires the main executable to
+be the Rust daemon at the release version (it answers `version` itself and links no Swift runtime),
+the CLI to report the same version, both nested apps to carry their identifiers and the version,
+nothing else in `Contents/MacOS`, and the entitlements below; with `--team` it also requires the
+designated requirement to be `com.bleugreen.axon` anchored to that Developer ID team, which is what
+the grants are recorded against.
 
 The Homebrew cask installs the one app and links `Axon.app/Contents/Resources/bin/axon`.
 
@@ -43,11 +57,14 @@ still resolves.
 com.bleugreen.axon
 ```
 
-That bundle id is the stable macOS Accessibility trust identity.
+That bundle id, under team `JBS95V8M7P`, is the stable macOS Accessibility and Screen Recording
+trust identity. It did not change when the main executable became the Rust daemon in 0.4.0, which is
+what lets grants from earlier releases carry across.
 
-`Axon Editor.app` uses bundle id:
+`Axon Menu.app` and `Axon Editor.app` use bundle ids:
 
 ```text
+com.bleugreen.axon.menu
 com.bleugreen.axon.editor
 ```
 
@@ -59,23 +76,30 @@ Build the app bundle and zip:
 make package-app
 ```
 
-The script writes:
+`scripts/package-app` needs both toolchains. It builds the daemon with
+`cargo build --release --locked -p axon-mac` (for the same minimum macOS the bundle declares), then
+the Swift CLI, menu, and editor products with SwiftPM, and assembles them into the layout above. It
+writes:
 
 ```text
 dist/Axon.app
-dist/Axon Editor.app
-dist/Axon-0.2.2-macos-aarch64.zip
-dist/Axon-0.2.2-macos-aarch64.zip.sha256
+dist/Axon-0.4.0-macos-aarch64.zip
+dist/Axon-0.4.0-macos-aarch64.zip.sha256
 ```
 
 The version comes from the repository-root `VERSION` file. `Sources/AxonClient/AxonVersion.swift`,
-the Rust workspace package in `rust/Cargo.toml`, `sdk/ts/package.json`, and
-`sdk/python/pyproject.toml` are derived copies. After editing `VERSION`, run
-`./scripts/check-version --write` to synchronize them. Archives are named with the version and the
-target so a consumer pinning a release can name the artifact it wants; see
-[Embedding Axon](embedding.md).
+the Rust workspace package in `rust/Cargo.toml`, `sdk/ts/package.json`,
+`sdk/python/pyproject.toml`, and the `productVersion` in `schema/tool-surface-v1.json` are derived
+copies, and every product crate, `axon-mac` included, must inherit the workspace version rather than
+pin its own. After editing `VERSION`, run `./scripts/check-version --write` to synchronize them.
+Archives are named with the version and the target so a consumer pinning a release can name the
+artifact it wants; see [Embedding Axon](embedding.md).
 
-It also prints the SHA-256 and a Homebrew cask stanza for `bleugreen/tap`.
+It also prints the SHA-256. The Homebrew cask is written by the release workflow's publish job
+alone.
+
+Release notes for a version live at `docs/releases/<version>.md`. A release that changes what users
+see, retires a capability, or needs a rollback procedure says so there.
 
 For release signing, provide a Developer ID identity:
 
@@ -93,7 +117,7 @@ exactly one:
 com.apple.security.automation.apple-events
 ```
 
-The daemon app sends Apple events to Safari and Google Chrome for `navigate`, `windows`, and `tabs`.
+The daemon sends Apple events to Safari and Google Chrome for `navigate`, `windows`, and `tabs`.
 Under the hardened runtime a process without that entitlement may not even ask: macOS refuses
 instantly, presents no consent dialog, records no TCC row, and the app never appears in System
 Settings > Privacy & Security > Automation. Such a build verifies, notarizes, staples, launches, and
@@ -106,8 +130,9 @@ hardened runtime otherwise closes. `scripts/package-app` runs it immediately aft
 workflow's package smoke step runs it beside the `Info.plist` assertions, and the release job runs it
 again on the stapled bundle, which is the last look at the bytes users install.
 
-Only the daemon app carries the entitlement. The nested CLI and the editor send no Apple events, so
-they keep the empty entitlement set the hardened runtime gives them by default.
+Only the daemon carries the entitlement. The CLI, the menu, and the editor send no Apple events, so
+they keep the empty entitlement set the hardened runtime gives them by default, and
+`scripts/check-app-entitlements` refuses a nested menu or editor that carries any entitlement.
 
 For notarization, configure a notarytool keychain profile and pass it during packaging:
 
@@ -117,11 +142,18 @@ AXON_NOTARY_PROFILE="axon-notary" \
 make package-app
 ```
 
-When `AXON_NOTARY_PROFILE` is set, the packager submits the zip to Apple, staples the accepted ticket to both apps, and recreates the zip.
+When `AXON_NOTARY_PROFILE` is set, the packager submits the zip to Apple, staples the accepted ticket to the outer bundle, and recreates the zip.
 
-### The Rust daemons
+The release workflow's macOS job installs a Rust toolchain for the daemon build, then verifies the
+result twice with `scripts/check-app-layout --team JBS95V8M7P`: once on the stapled bundle and once
+on the bundle extracted from the archive users download. The test workflow's package smoke step runs
+the same script without `--team`, and `scripts/check-tool-surface` runs in CI so the generated
+`schema/tool-surface-v1.json` cannot drift from `ToolSurfaceSpec.swift`.
 
-The Windows and Linux daemons build natively on their own hosts:
+### The Windows and Linux daemons
+
+The macOS daemon is built by `scripts/package-app` above. The Windows and Linux daemons build
+natively on their own hosts:
 
 ```sh
 make package-win      # on Windows
@@ -283,7 +315,7 @@ The cask shape:
 
 ```ruby
 cask "axon" do
-  version "0.2.2"
+  version "0.4.0"
   sha256 "<printed by scripts/package-app>"
 
   url "https://github.com/bleugreen/axon/releases/download/v#{version}/Axon-#{version}-macos-aarch64.zip"
@@ -293,8 +325,7 @@ cask "axon" do
 
   depends_on macos: ">= :sonoma"
 
-  app "Axon-#{version}/Axon.app"
-  app "Axon-#{version}/Axon Editor.app"
+  app "Axon.app"
   binary "#{appdir}/Axon.app/Contents/Resources/bin/axon"
 
   zap trash: [
@@ -306,18 +337,42 @@ end
 
 ## Development
 
-Source checkout development uses Swift directly against the socket. Give the development server a
-path of its own, because the default one is owned by whatever is already installed and running:
+On macOS the daemon is the Rust `axon-mac` binary, and the Swift CLI, menu, and editor are its
+clients. Run a development daemon with cargo, and give it a socket path of its own, because the
+default one is owned by whatever is already installed and running:
+
+```sh
+cd rust && AXON_SOCKET_PATH=/tmp/axon-dev.sock cargo run -p axon-mac -- serve
+```
+
+Then point the Swift clients at the same path:
 
 ```sh
 make build
 make test
-AXON_SOCKET_PATH=/tmp/axon-dev.sock swift run axon serve
+AXON_SOCKET_PATH=/tmp/axon-dev.sock swift run axon status
 ```
 
-To develop against the default path instead, stop the installed server first. `axon status`
-reports the endpoint and the process serving it, so a surprising result is diagnosable.
+The explicit `serve` matters: a development binary outside any bundle serves without it, but the
+same binary inside a bundle and started without a verb or launchd's managed key takes the launcher
+path instead (see [Embedding Axon](embedding.md#what-gets-registered)). A daemon started from a
+terminal is attributed to that terminal for privacy purposes, so it holds whatever Accessibility
+grant the terminal holds.
 
-`make install-daemon` registers the LaunchAgent against `.build/debug/axon` for a short
-development loop. That is a build directory, so the CLI warns: the registration stops working the
-moment the build is cleaned. Never install that way for real.
+To develop against the default path instead, stop the installed daemon first with `axon shutdown`.
+`axon status` reports the endpoint and, through `daemon.provenance`, the executable serving it, so a
+surprising result is diagnosable.
+
+`daemon install` registers only a packaged `Axon.app`; run from `.build/debug/axon` it refuses and
+says so. To exercise the real lifecycle, package with `scripts/package-app` and install from the
+resulting bundle at a path that will outlive the session.
+
+Branch builds on the bench machines run under a separate identity, `dev.axon.mac-bench`, staged by
+`scripts/stage-macos-shell-bench` as two launchd jobs of their own. That is a different product
+from the release layout, with grants of its own, and it never touches `dev.axon.daemon`,
+`dev.axon.menu`, or `/tmp/axon.sock`.
+
+The signed qualification of a release that changes what the bundle's main executable is happens on
+the bench before merge, driven by `scripts/macos-cutover-qualification` with its evidence under
+`scripts/macos-toolkit-acceptance/live/axn125/`: first against private labels with production
+untouched, then as a real in-place upgrade in an operator-approved window.

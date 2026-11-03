@@ -9,7 +9,6 @@ let package = Package(
     ],
     products: [
         .executable(name: "axon", targets: ["AxonCLI"]),
-        .executable(name: "AxonDaemonApp", targets: ["AxonDaemonApp"]),
         .executable(name: "AxonEditorApp", targets: ["AxonEditorApp"]),
         .executable(name: "AxonMenuApp", targets: ["AxonMenuApp"]),
         .library(name: "AxonClient", targets: ["AxonClient"]),
@@ -42,10 +41,6 @@ let package = Package(
             dependencies: ["AxonClient", "AxonCore"]
         ),
         .executableTarget(
-            name: "AxonDaemonApp",
-            dependencies: ["AxonClient", "AxonCore"]
-        ),
-        .executableTarget(
             name: "AxonEditorApp",
             dependencies: ["AxonClient", "AxonCore"]
         ),
@@ -57,10 +52,6 @@ let package = Package(
         ),
         .executableTarget(
             name: "AxonReorderFixtureApp"
-        ),
-        .executableTarget(
-            name: "SemanticNameStudy",
-            dependencies: ["AxonClient", "AxonCore"]
         ),
         .testTarget(
             name: "AxonCoreTests",

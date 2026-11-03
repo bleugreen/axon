@@ -275,8 +275,10 @@ public struct ReleaseInstaller: @unchecked Sendable {
     /// The `Axon.app` at the root of an extracted archive, once it is complete enough to install.
     ///
     /// A half-published or repackaged archive is the failure this catches: the bundle must carry
-    /// the daemon executable macOS attributes grants to, the CLI that re-registers the daemon, and
-    /// the nested editor, all at the version the release claims.
+    /// the daemon executable macOS attributes grants to, the CLI that re-registers the daemon, the
+    /// nested menu that `daemon install` registers beside it, and the nested editor, all at the
+    /// version the release claims. A bundle without its menu would install a daemon with no visible
+    /// presence and no way to update itself again.
     public func verifiedBundle(in extractDirectory: URL, expectedVersion: String) throws -> URL {
         let bundleURL = extractDirectory.appendingPathComponent("Axon.app", isDirectory: true)
         guard fileManager.fileExists(atPath: bundleURL.path) else {
@@ -291,6 +293,9 @@ public struct ReleaseInstaller: @unchecked Sendable {
         let cliURL = bundleURL.appendingPathComponent(AppBundle.bundledCLIRelativePath)
         guard fileManager.isExecutableFile(atPath: cliURL.path) else {
             throw ReleaseInstallError.archiveLayout("it has no executable \(AppBundle.bundledCLIRelativePath)")
+        }
+        guard AppBundle.pairedMenuURL(beside: bundleURL, fileManager: fileManager) != nil else {
+            throw ReleaseInstallError.archiveLayout("it has no matching nested Axon Menu.app")
         }
         guard AppBundle.pairedEditorURL(beside: bundleURL, fileManager: fileManager) != nil else {
             throw ReleaseInstallError.archiveLayout("it has no matching nested Axon Editor.app")

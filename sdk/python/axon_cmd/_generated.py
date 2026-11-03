@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Final, Literal, NotRequired, Protocol, Required, TypeAlias, TypedDict
 
-SCHEMA_PRODUCT_VERSION: Final = "0.3.6"
+SCHEMA_PRODUCT_VERSION: Final = "0.4.0"
 
 # Per-tool platform availability, keyed by socket method then by daemon facade.
 AVAILABILITY: Final[Mapping[str, Mapping[str, bool]]] = {

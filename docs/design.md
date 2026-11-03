@@ -42,13 +42,13 @@ Axon should run as a local background service from the start, installed through 
 
 The service needs Accessibility permission and should fail loudly when permission is missing.
 
-The preferred transport is JSON-RPC over a local Unix domain socket owned by the daemon. Ownership is literal and exclusive, enforced in `SocketServer` rather than by caller-side preflight: a server takes an exclusive advisory lock on a sidecar file before it touches the pathname, and one that finds the lock held refuses to start rather than rebinding the path out from under the incumbent. Cleanup is checked against the bound socket's inode, so a server can only ever remove its own endpoint. MCP can be exposed by the same binary in a facade mode if stdio compatibility is needed:
+The preferred transport is JSON-RPC over a local Unix domain socket owned by the daemon. Ownership is literal and exclusive, enforced by the daemon's socket server (`rust/axon-mac/src/socket.rs` on macOS) rather than by caller-side preflight: a server takes an exclusive advisory lock on a sidecar file before it touches the pathname, and one that finds the lock held refuses to start rather than rebinding the path out from under the incumbent. Cleanup is checked against the bound socket's inode, so a server can only ever remove its own endpoint. MCP can be exposed by the same binary in a facade mode if stdio compatibility is needed:
 
 ```text
-MCP client -> `axon mcp` stdio facade -> local socket -> `axon serve` daemon
+MCP client -> `axon mcp` stdio facade -> local socket -> daemon (`Axon.app/Contents/MacOS/Axon`)
 ```
 
-This keeps the install surface to one binary while allowing the observer/cache layer to stay alive independently of any single MCP session.
+This keeps the install surface to one application while allowing the daemon's cache layer to stay alive independently of any single MCP session.
 
 ### Snapshot Engine
 
@@ -237,13 +237,15 @@ Higher-order control flow (conditionals, polling waits, repeat loops, assertions
 
 ### Technology Direction
 
-The implementation path is Swift first:
+The implementation path was Swift first:
 
 - direct access to Accessibility and CoreGraphics APIs
 - good fit for a long-running macOS service
 - simpler permission and app lifecycle integration than Python
 
-The default implementation uses `ApplicationServices` directly. Direct `ApplicationServices` is more verbose than AXSwift, but the extra work is bounded: the hardest parts are still tree modeling, locator resolution, daemon lifecycle, screenshots, and action verification.
+Since 0.4.0 the macOS daemon is Rust (`rust/axon-mac` over the platform-neutral `rust/axon-core`), the same shape the Windows and Linux daemons have, so locator scoring, the runner, and recording are implemented once. Swift remains the language of the macOS clients: the CLI, the menu bar app, and the editor.
+
+The daemon uses `ApplicationServices` directly. Direct `ApplicationServices` is more verbose than AXSwift, but the extra work is bounded: the hardest parts are still tree modeling, locator resolution, daemon lifecycle, screenshots, and action verification.
 
 AXSwift remains a useful reference and possible spike input, but the core API should not depend on wrapper-specific concepts.
 

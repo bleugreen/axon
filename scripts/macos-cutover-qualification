@@ -1,0 +1,1811 @@
+#!/usr/bin/env python3
+"""The axn/125 cutover qualification: does the notarized Rust-main Axon.app carry production's grants?
+
+Run on bgsrv-mac over ssh as the console user, from the directory the thread staged the driver and
+the candidate into (~/AxonBench/axn125), with the thread at the Mac through its desktop bridge:
+
+    ./macos-cutover-qualification --phase carry --candidate ./Axon.app --sha <git sha>
+    ./macos-cutover-qualification --phase rollback-rehearsal
+    ./macos-cutover-qualification --phase upgrade --candidate ./Axon.app --sha <git sha>
+
+Phase A (`carry`) leaves production alone. It loads the candidate under private labels on a private
+socket. The candidate shares production's identity (com.bleugreen.axon, team JBS95V8M7P), so it
+measures whether production's organic grants carry to it with no interaction. Its last step is a
+rehearsal of Phase B's rollback. Phase B (`upgrade`) replaces the real 0.3.6 registration in place
+and rolls itself back on any carry failure. Run it only in a window the operator approved, because
+production is the thread's bridge.
+
+It does every step a program can do itself: launchctl, socket calls, codesign, the TCC dumps and
+diff, and the tccd log scan. It asks the thread only for what needs hands (the HID hand tool) or
+eyes (UserNotificationCenter's windows, read through the bridge). Every step lands in
+transcript.jsonl in a per-run directory under the evidence directory. Every subprocess and
+socket call is in commands.log beside it. A one-line summary of each run is appended to
+runs.jsonl, which Phase B reads to find a passing Phase A at the same --sha.
+
+Invariants:
+- Production gets health, look, invoke and save, and nothing else. No `type`, no `keyboard`, and no
+  keyboard text, because the 0.3.6 Swift daemon crashes on keyboard text (axn/215).
+- The driver never writes /Applications. It never writes ~/Library/LaunchAgents in Phase A; the
+  private jobs load from plists in the run directory.
+- A plist that launches com.bleugreen.axon's main executable must carry
+  AXON_DAEMON_MANAGED_BY_LAUNCHD=1 (or `serve`). Without it the Rust main takes the launcher path
+  into the bundle's own `axon start` (rust/axon-mac/src/launcher.rs), which can act on
+  production's registration. This is asserted before anything is bootstrapped.
+- Nothing is dismissed on production's behalf. Prompts are read and attributed, never clicked.
+
+Exit status: 0 when every verdict passed, 1 on any FAIL or an abort, 3 when the only problems
+are gaps (something could not be measured), and 2 on a usage error.
+"""
+
+import argparse
+import base64
+import binascii
+import hashlib
+import json
+import os
+import pathlib
+import plistlib
+import re
+import shlex
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+
+HOME = pathlib.Path.home()
+DOMAIN = f"gui/{os.getuid()}"
+AGENTS = HOME / "Library/LaunchAgents"
+
+PROD_DAEMON = "dev.axon.daemon"
+PROD_MENU = "dev.axon.menu"
+PROD_SOCKET = "/tmp/axon.sock"
+PROD_PLIST = AGENTS / f"{PROD_DAEMON}.plist"
+PROD_MENU_PLIST = AGENTS / f"{PROD_MENU}.plist"
+
+QUAL_DAEMON = "dev.axon.qual125.daemon"
+QUAL_MENU = "dev.axon.qual125.menu"
+QUAL_SOCKET = "/tmp/axon-qual125.sock"
+
+AXON_ID = "com.bleugreen.axon"
+MENU_ID = "com.bleugreen.axon.menu"
+TEAM = "JBS95V8M7P"
+CANDIDATE_VERSION = "0.4.0"
+BACKEND = "rust-axon-mac"
+MANAGED_KEY = "AXON_DAEMON_MANAGED_BY_LAUNCHD"
+MENU_RELATIVE = "Contents/Library/Applications/Axon Menu.app"
+EDITOR_RELATIVE = "Contents/Library/Applications/Axon Editor.app"
+CLI_RELATIVE = "Contents/Resources/bin/axon"
+
+BENCH = HOME / "AxonBench/axn125"
+ROLLBACK = BENCH / "rollback/Axon.app"
+HAND = HOME / "AxonBench/hand"
+# The layout site/public/install.sh writes and Sources/AxonClient/ReleaseInstaller.swift detects:
+# <root>/<version>/Axon.app beside a marker holding the version.
+INSTALL_ROOT = HOME / ".local/lib/axon"
+INSTALL_MARKER = ".axon-install-complete"
+DEFAULT_EVIDENCE = "scripts/macos-toolkit-acceptance/live/axn125"
+FIXTURE_RELATIVE = "rust/axon-core/fixtures/swift-user-recording-v2.yaml"
+CALCULATOR = {"app": "Calculator", "bundle": "com.apple.calculator", "process": "Calculator"}
+# What each Calculator key is called across macOS releases (AXTitle or AXDescription), best first.
+CALC_KEYS = {
+    "clear": ("All Clear", "Clear", "AC", "C"),
+    "1": ("1",), "2": ("2",), "3": ("3",), "4": ("4",),
+    "+": ("+", "Add", "Plus"),
+    "=": ("=", "Equals", "Equal"),
+}
+SCREEN_TEXT = re.compile(r"\d|AC|=|\+|%|÷|×|−")
+
+USER_TCC = HOME / "Library/Application Support/com.apple.TCC/TCC.db"
+SYSTEM_TCC = "/Library/Application Support/com.apple.TCC/TCC.db"
+# The axn249/axn250 query, extended with the code requirement each grant was bound to.
+TCC_QUERY = (
+    "select service, client, client_type, auth_value, coalesce(indirect_object_identifier,''), "
+    "last_modified, hex(csreq) from access order by service, client, indirect_object_identifier;"
+)
+TCC_ALLOWED = "2"
+SCREEN_CAPTURE = "kTCCServiceScreenCapture"
+PERMISSION_SERVICES = {"accessibility": "kTCCServiceAccessibility", "screenRecording": SCREEN_CAPTURE}
+# tccd logs under com.apple.TCC. The private-window-picker reminder may be raised by the screen
+# capture stack rather than by tccd, so replayd's subsystem is read as well; a predicate that missed
+# the one event the classification exists for would pass for the wrong reason.
+TCC_LOG_PREDICATE = 'subsystem == "com.apple.TCC" OR subsystem == "com.apple.replayd"'
+MSG_ID = re.compile(r"msgID=([\w.]+)")
+SERVICE = re.compile(r"\b(kTCCService\w+)")
+PICKER = re.compile(r"private window picker", re.I)
+PROMPT = re.compile(
+    r"\b(prompting|promptForAccess|displaying (?:a |the )?prompt|showing (?:a |the )?prompt|"
+    r"will prompt|user prompt|kTCCAccessPrompt)\b", re.I)
+
+ARGS = None
+RUN = {"id": None, "dir": None, "transcript": None, "commands": None}
+# How each TCC dump this run read the system database: a carry verdict over a dump that could not
+# read it compares nothing that matters, because Accessibility and Screen Recording live there.
+TCC_ROUTES = {}
+verdicts = []
+gaps = []
+
+
+# ---------------------------------------------------------------------------------------------
+# Transcript, commands, and hands
+# ---------------------------------------------------------------------------------------------
+
+def log(step, **fields):
+    entry = {"at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "run": RUN["id"], "step": step, **fields}
+    with RUN["transcript"].open("a") as out:
+        out.write(json.dumps(entry, default=str) + "\n")
+    print(f"[{step}] " + json.dumps(fields, default=str)[:600])
+
+
+def verdict(step, ok, **fields):
+    """A gate. A dry run records what it would have decided without counting it."""
+    if ARGS.dry_run:
+        log(step, verdict="dry-run", wouldPass=bool(ok), **fields)
+        return bool(ok)
+    verdicts.append((step, bool(ok)))
+    log(step, verdict="pass" if ok else "FAIL", **fields)
+    return bool(ok)
+
+
+def informational(step, **fields):
+    log(step, verdict="informational", **fields)
+
+
+def gap(name, step, **fields):
+    if name not in gaps:
+        gaps.append(name)
+    log(step, verdict="gap", gap=name, **fields)
+
+
+def record_command(line, outcome):
+    with RUN["commands"].open("a") as out:
+        out.write(f"{time.strftime('%H:%M:%S')} {outcome} {line}\n")
+
+
+def clean_env(extra=None):
+    # An AXON_SOCKET_PATH inherited from the operator's shell would follow `daemon install` into
+    # the production registration, so no command this driver runs inherits one.
+    environment = {key: value for key, value in os.environ.items() if key != "AXON_SOCKET_PATH"}
+    return {**environment, **(extra or {})}
+
+
+def sh(*argv, env=None, input=None, timeout=120):
+    """Every subprocess this driver starts. A dry run prints the command and runs nothing."""
+    argv = [str(arg) for arg in argv]
+    line = shlex.join(argv)
+    if ARGS.dry_run:
+        print(f"  $ {line}")
+        record_command(line, "dry-run")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    try:
+        result = subprocess.run(argv, capture_output=True, text=True, env=clean_env(env), input=input,
+                                timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        stdout = error.stdout.decode(errors="replace") if isinstance(error.stdout, bytes) else (error.stdout or "")
+        result = subprocess.CompletedProcess(argv, 124, stdout, f"timed out after {timeout}s")
+    except OSError as error:
+        result = subprocess.CompletedProcess(argv, 127, "", str(error))
+    record_command(line, f"exit={result.returncode}")
+    return result
+
+
+def put(path, content):
+    """A file write outside the run directory, which a dry run only describes."""
+    if ARGS.dry_run:
+        print(f"  write {path}: {content!r}")
+        record_command(f"write {path}", "dry-run")
+        return
+    pathlib.Path(path).write_text(content)
+    record_command(f"write {path}", "ok")
+
+
+def rpc(path, method, params=None, timeout=10):
+    """One newline-delimited JSON-RPC exchange on a unix socket."""
+    if ARGS.dry_run:
+        print(f"  rpc {path} {method} {json.dumps(params or {})[:300]}")
+        record_command(f"rpc {path} {method}", "dry-run")
+        return {"dryRun": True}
+    try:
+        with socket.socket(socket.AF_UNIX) as conn:
+            conn.settimeout(timeout)
+            conn.connect(path)
+            request = {"jsonrpc": "2.0", "id": "qual125", "method": method, "params": params or {}}
+            conn.sendall((json.dumps(request) + "\n").encode())
+            buffer = b""
+            while not buffer.endswith(b"\n"):
+                chunk = conn.recv(1 << 16)
+                if not chunk:
+                    break
+                buffer += chunk
+        response = json.loads(buffer)
+    # A daemon going down can accept a connection and close it with no body; an empty or partial
+    # reply is the same transport failure as a refused connect.
+    except (OSError, ValueError) as error:
+        response = {"transport": str(error)}
+    outcome = "ok" if "result" in response else f"error={(response.get('error') or {}).get('code', response.get('transport'))}"
+    record_command(f"rpc {path} {method}", outcome)
+    return response
+
+
+def health(path):
+    return rpc(path, "health", timeout=5).get("result")
+
+
+def job(label):
+    out = sh("/bin/launchctl", "print", f"{DOMAIN}/{label}").stdout
+    fields = {}
+    for line in out.splitlines():
+        line = line.strip()
+        for key in ("state", "pid", "last exit code", "runs", "program"):
+            if line.startswith(f"{key} = "):
+                fields.setdefault(key, line.split(" = ", 1)[1])
+    return fields
+
+
+def wait_for(predicate, seconds, interval=0.5):
+    if ARGS.dry_run:
+        return predicate()
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        value = predicate()
+        if value:
+            return value
+        time.sleep(interval)
+    return None
+
+
+def sleep(seconds):
+    if not ARGS.dry_run:
+        time.sleep(seconds)
+
+
+def ask_text(prompt, hint="type what you see"):
+    if ARGS.dry_run:
+        print(f"\n>>> [dry-run, not asked] {prompt}")
+        log("operator", prompt=prompt, answer=None, dryRun=True)
+        return ""
+    answer = input(f"\n>>> {prompt}\n    {hint}: ").strip()
+    log("operator", prompt=prompt, answer=answer)
+    return answer
+
+
+def ask(prompt):
+    return ask_text(prompt, "answer y/n (or type what you see)").lower().startswith("y")
+
+
+def pause(prompt):
+    if ARGS.dry_run:
+        print(f"\n>>> [dry-run, not waited for] {prompt}")
+        log("operator", prompt=prompt, answer=None, dryRun=True)
+        return
+    input(f"\n>>> {prompt}\n    press Return when done: ")
+    log("operator", prompt=prompt, answer="done")
+
+
+def notification_windows(step):
+    """Before and after each phase, so a prompt that appears is attributed to a window of time."""
+    answer = ask_text(
+        "Through your bridge, read the windows of UserNotificationCenter and CoreServicesUIAgent "
+        "(look at those apps; dismiss nothing). Type each window's text, or 'none'.")
+    informational(f"{step}-notification-windows", answer=answer)
+    return answer
+
+
+def log_time():
+    return time.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def running(process):
+    return sh("/usr/bin/pgrep", "-x", process).returncode == 0
+
+
+def processes(fragment):
+    """(pid, command) for every process whose command line contains `fragment`."""
+    rows = []
+    for line in sh("/bin/ps", "-axo", "pid=,command=").stdout.splitlines():
+        pid, _, command = line.strip().partition(" ")
+        if fragment in command:
+            rows.append((pid, command.strip()))
+    return rows
+
+
+# ---------------------------------------------------------------------------------------------
+# Pure functions (covered by --self-test)
+# ---------------------------------------------------------------------------------------------
+
+def enclosing_bundle(executable):
+    """`<X>.app` when `executable` is `<X>.app/Contents/MacOS/<name>`."""
+    path = pathlib.Path(executable)
+    if path.parent.name == "MacOS" and path.parent.parent.name == "Contents" and path.parents[2].suffix == ".app":
+        return path.parents[2]
+    return None
+
+
+def job_plist(label, program, environment, keep_alive, logs):
+    """A LaunchAgent shaped as Sources/AxonClient/LaunchAgentManager.swift's propertyListObject."""
+    return {
+        "Label": label,
+        "ProgramArguments": [str(arg) for arg in program],
+        "EnvironmentVariables": dict(environment),
+        "RunAtLoad": True,
+        "KeepAlive": keep_alive,
+        "LimitLoadToSessionType": "Aqua",
+        "ProcessType": "Interactive",
+        "StandardOutPath": str(pathlib.Path(logs) / f"{label}.out.log"),
+        "StandardErrorPath": str(pathlib.Path(logs) / f"{label}.err.log"),
+    }
+
+
+def launch_hazard(plist, identifier_of):
+    """Why this job would reach the bundle's `axon start` instead of serving, or None.
+
+    Mirrors rust/axon-mac/src/launcher.rs `select`. A verb-less, unsupervised launch of a bundle's
+    main executable runs the launcher. An identifier that cannot be read counts as Axon's here,
+    because a safety check that passes on missing evidence is no check.
+    """
+    program = plist.get("ProgramArguments") or []
+    if not program:
+        return "no ProgramArguments"
+    bundle = enclosing_bundle(program[0])
+    if bundle is None:
+        return None
+    if identifier_of(bundle) not in (AXON_ID, None):
+        return None
+    if program[1:2] == ["serve"] or (plist.get("EnvironmentVariables") or {}).get(MANAGED_KEY) == "1":
+        return None
+    return (f"{program[0]} is {AXON_ID}'s main executable launched with neither `serve` nor "
+            f"{MANAGED_KEY}=1, so it would run the bundle's `axon start`")
+
+
+def designated_requirement(text):
+    for line in (text or "").splitlines():
+        line = line.strip().lstrip("#").strip()
+        if line.startswith("designated =>"):
+            return line.split("=>", 1)[1].strip()
+    return None
+
+
+def png_dimensions(data):
+    """(width, height) from a PNG's signature and IHDR chunk, or None."""
+    if len(data) < 24 or data[:8] != b"\x89PNG\r\n\x1a\n" or data[12:16] != b"IHDR":
+        return None
+    return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+
+
+def axn_action_count(text):
+    """Top-level actions in a version 2 .axn, or None when it is not one."""
+    if not (text or "").startswith("version: 2"):
+        return None
+    match = re.search(r"^actions:(.*)$", text, re.M)
+    if not match:
+        return None
+    if match.group(1).strip() == "[]":
+        return 0
+    return len(re.findall(r"^- id: ", text[match.end():], re.M))
+
+
+def swift_tree(response):
+    """The DSL tree string anywhere in a Swift look result (SnapshotObservation.swift at v0.3.6)."""
+    def find(value):
+        if isinstance(value, dict):
+            if isinstance(value.get("tree"), str):
+                return value["tree"]
+            for child in value.values():
+                found = find(child)
+                if found:
+                    return found
+        return None
+    return find((response or {}).get("result")) or ""
+
+
+def swift_calculator_names(tree):
+    """Semantic names from Swift's DSL: `  <name>: button "1" [click]` (live.yml's macOS job)."""
+    line_shape = re.compile(r'^\s*(?P<name>\S.*?): (?P<role>[\w ]+?) "(?P<text>[^"]*)"')
+    buttons = []
+    for line in tree.splitlines():
+        match = line_shape.match(line)
+        if match and match.group("role") == "button":
+            buttons.append((match.group("text"), match.group("name")))
+    found = {}
+    for key, labels in CALC_KEYS.items():
+        for label in labels:
+            name = next((name for text, name in buttons if text == label), None)
+            if name:
+                found[key] = name
+                break
+    return found
+
+
+def rust_nodes(result):
+    stack = [window.get("root") for window in ((result or {}).get("app") or {}).get("windows") or []]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            yield node
+            stack.extend(reversed(node.get("children") or []))
+
+
+def rust_calculator_names(result):
+    """Semantic names and centres from the Rust daemon's look.
+
+    Roles are raw AX roles and `label` is AXDescription (rust/axon-mac/src/platform.rs, the Node
+    construction). The display is the static text whose value reads as a number.
+    """
+    nodes = [node for node in rust_nodes(result) if node.get("name")]
+    found, centres = {}, {}
+
+    def centre(node):
+        frame = node.get("frame") or {}
+        if {"x", "y", "width", "height"} <= set(frame):
+            return round(frame["x"] + frame["width"] / 2), round(frame["y"] + frame["height"] / 2)
+        return None
+
+    for key, labels in CALC_KEYS.items():
+        for label in labels:
+            node = next((node for node in nodes if node.get("role") == "AXButton" and label in
+                         (node.get("title"), node.get("label"), node.get("description"), node.get("value"))), None)
+            if node:
+                found[key], centres[key] = node["name"], centre(node)
+                break
+    display = next((node for node in nodes if node.get("role") == "AXStaticText"
+                    and re.fullmatch(r"[\d.,\s−-]+", node.get("value") or "")), None)
+    if display:
+        found["display"] = display["name"]
+    return found, centres
+
+
+def carry_problems(report, version, executable, pid):
+    """Everything the carry verdict requires of a Rust daemon's health, as a list of failures."""
+    if not report:
+        return ["no health answer"]
+    problems = []
+    provenance = report.get("provenance") or {}
+    if provenance.get("backend") != BACKEND:
+        problems.append(f"backend {provenance.get('backend')!r}, not {BACKEND}")
+    if executable and os.path.realpath(provenance.get("executablePath") or "") != os.path.realpath(str(executable)):
+        problems.append(f"executablePath {provenance.get('executablePath')!r}, not {executable}")
+    if pid is None or str(report.get("processId")) != str(pid) or str(provenance.get("processId")) != str(pid):
+        problems.append(f"processId {report.get('processId')}/{provenance.get('processId')}, launchd pid {pid}")
+    if report.get("version") != version or provenance.get("version") != version:
+        problems.append(f"version {report.get('version')}/{provenance.get('version')}, not {version}")
+    if report.get("shellContract") != 1:
+        problems.append(f"shellContract {report.get('shellContract')!r}")
+    if report.get("ready") is not True:
+        problems.append("not ready")
+    permissions = {entry.get("name"): entry.get("granted") for entry in report.get("permissions") or []}
+    for name in PERMISSION_SERVICES:
+        if permissions.get(name) is not True:
+            problems.append(f"{name} not granted")
+    capabilities = {entry.get("capability"): entry for entry in report.get("capabilities") or []}
+    if not capabilities:
+        problems.append("no capabilities reported")
+    observe = capabilities.get("observeChanges")
+    if not observe or observe.get("usable"):
+        problems.append("observeChanges should be reported and honestly unusable")
+    unusable = sorted(name for name, entry in capabilities.items() if name != "observeChanges" and not entry.get("usable"))
+    if unusable:
+        problems.append(f"unusable: {', '.join(unusable)}")
+    return problems
+
+
+def rollback_problems(report, version):
+    """What a restored 0.3.6 daemon's health must say: ready, its version, both grants."""
+    if not report:
+        return ["no health answer"]
+    problems = []
+    if report.get("version") != version:
+        problems.append(f"version {report.get('version')}, not {version}")
+    if report.get("ready") is not True:
+        problems.append("not ready")
+    permissions = {entry.get("name"): entry.get("granted") for entry in report.get("permissions") or []}
+    problems += [f"{name} not granted" for name in PERMISSION_SERVICES if permissions.get(name) is not True]
+    return problems
+
+
+def is_axon_client(client, identities):
+    return any(client == identity or (identity.startswith("/") and client.startswith(identity))
+               for identity in identities if identity)
+
+
+def keyed(rows):
+    """TCC rows by identity (db, service, client, client type, target) -> (auth value, csreq hex).
+
+    Identity rather than whole rows: last_modified moves on rows nothing here touched, and a
+    pre-existing row (sshd-keygen-wrapper's path-keyed one included) is never "new".
+    """
+    table = {}
+    for row in rows:
+        fields = row.split("\t")
+        if len(fields) >= 7:
+            table[(fields[0], fields[1], fields[2], fields[3], fields[5])] = (fields[4], fields[7] if len(fields) > 7 else "")
+    return table
+
+
+def tcc_diff(before, after, identities):
+    old, new = keyed(before), keyed(after)
+
+    def axon(key):
+        return is_axon_client(key[2], identities)
+
+    def change(key):
+        text = "\t".join(key) + f"\tauth {old[key][0]}->{new[key][0]}"
+        return text + ("\tcsreq changed" if old[key][1] != new[key][1] else "")
+
+    added = sorted(new.keys() - old.keys())
+    removed = sorted(old.keys() - new.keys())
+    changed = sorted(key for key in new.keys() & old.keys() if new[key] != old[key])
+    return {
+        "axonAdded": ["\t".join(key) + f"\tauth={new[key][0]}" for key in added if axon(key)],
+        "axonRemoved": ["\t".join(key) for key in removed if axon(key)],
+        "axonChanged": [change(key) for key in changed if axon(key)],
+        "foreignAdded": ["\t".join(key) + f"\tauth={new[key][0]}" for key in added if not axon(key)],
+        "foreignRemoved": ["\t".join(key) for key in removed if not axon(key)],
+        "foreignChanged": [change(key) for key in changed if not axon(key)],
+    }
+
+
+def tcc_carried(diff, routes=None):
+    """No Axon row added, removed, or changed, measured over dumps that all read the system database."""
+    routes = TCC_ROUTES if routes is None else routes
+    readable = bool(routes) and all(route != "unreadable" for route in routes.values())
+    return readable and not (diff["axonAdded"] or diff["axonRemoved"] or diff["axonChanged"])
+
+
+def zero_first_grant(scan):
+    """No first-grant prompt, measured over a log that could be read: silence is not evidence."""
+    return bool(scan.get("readable")) and not scan["firstGrant"]
+
+
+def allowed_services(rows, identities, permissions):
+    """Services Axon already holds: allowed TCC rows, plus what health reports granted.
+
+    Health covers the system database when an ssh session cannot read it.
+    """
+    services = set()
+    for row in rows:
+        fields = row.split("\t")
+        if len(fields) >= 5 and is_axon_client(fields[2], identities) and fields[4] == TCC_ALLOWED:
+            services.add(fields[1])
+    services |= {PERMISSION_SERVICES[name] for name, granted in (permissions or {}).items()
+                 if granted and name in PERMISSION_SERVICES}
+    return services
+
+
+def group_tcc_events(events):
+    """tccd splits one request across lines sharing a msgID (context, attribution, result)."""
+    groups, order = {}, []
+    for event in events:
+        message = str(event.get("eventMessage") or "")
+        text = " ".join(str(event.get(key) or "") for key in ("eventMessage", "processImagePath", "senderImagePath"))
+        match = MSG_ID.search(message)
+        key = match.group(1) if match else f"#{len(order)}"
+        if key not in groups:
+            groups[key] = {"at": event.get("timestamp"), "msgID": match.group(1) if match else None, "parts": []}
+            order.append(key)
+        groups[key]["parts"].append(text)
+    return [{"at": groups[key]["at"], "msgID": groups[key]["msgID"], "text": " | ".join(groups[key]["parts"])}
+            for key in order]
+
+
+def classify_tcc_group(text, identities, allowed):
+    """None when not Axon's; otherwise what kind of TCC event it was.
+
+    first-grant FAILS the gate: a prompt or real request for a service Axon does not already hold.
+    reauthorization-reminder is informational: macOS 15+'s periodic Screen Recording reminder
+    ("...bypass the system private window picker...") for an identity already allowed.
+    allowed-request and preflight are counted; neither can show a dialog.
+    """
+    if not any(identity and identity in text for identity in identities):
+        return None
+    if PICKER.search(text):
+        return "reauthorization-reminder"
+    match = SERVICE.search(text)
+    service = match.group(1) if match else None
+    prompt = bool(PROMPT.search(text))
+    request = "preflight=no" in text or ("TCCAccessRequest" in text and "preflight=yes" not in text)
+    if prompt or request:
+        if service in allowed:
+            return "reauthorization-reminder" if prompt and service == SCREEN_CAPTURE else "allowed-request"
+        return "first-grant"
+    if "preflight=yes" in text:
+        return "preflight"
+    return "other"
+
+
+def summarize_tcc_log(groups, identities, allowed):
+    counts, first, reminders = {}, [], []
+    for group in groups:
+        kind = classify_tcc_group(group["text"], identities, allowed)
+        if kind is None:
+            continue
+        counts[kind] = counts.get(kind, 0) + 1
+        entry = {"at": group["at"], "msgID": group["msgID"], "text": group["text"][:500]}
+        if kind == "first-grant":
+            first.append(entry)
+        elif kind == "reauthorization-reminder":
+            reminders.append(entry)
+    return {"counts": counts, "firstGrant": first, "reminders": reminders}
+
+
+def parse_ndjson(text):
+    events = []
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                events.append(json.loads(line))
+            except ValueError:
+                pass
+    return events
+
+
+# ---------------------------------------------------------------------------------------------
+# Bundles, codesign, TCC, launchd
+# ---------------------------------------------------------------------------------------------
+
+def info(bundle):
+    try:
+        return plistlib.loads((pathlib.Path(bundle) / "Contents/Info.plist").read_bytes())
+    except (OSError, ValueError, plistlib.InvalidFileException):
+        return {}
+
+
+def bundle_identifier(bundle):
+    return info(bundle).get("CFBundleIdentifier")
+
+
+def main_executable(bundle):
+    return pathlib.Path(bundle) / "Contents/MacOS" / info(bundle).get("CFBundleExecutable", "Axon")
+
+
+def menu_executable(bundle):
+    return main_executable(pathlib.Path(bundle) / MENU_RELATIVE)
+
+
+def read_plist(path):
+    try:
+        return plistlib.loads(pathlib.Path(path).read_bytes())
+    except (OSError, ValueError, plistlib.InvalidFileException):
+        return {}
+
+
+def sha256_file(path):
+    try:
+        return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def combined(result):
+    return (result.stdout or "") + (result.stderr or "")
+
+
+def requirement_of(executable):
+    return designated_requirement(combined(sh("/usr/bin/codesign", "-d", "-r-", executable)))
+
+
+def codesign_record(bundle, name):
+    """codesign, Gatekeeper, and stapler evidence for one bundle, written to the run directory."""
+    bundle = pathlib.Path(bundle)
+    parts = {
+        "codesign -dvvv": sh("/usr/bin/codesign", "-dvvv", bundle),
+        "designated requirement": sh("/usr/bin/codesign", "-d", "-r-", main_executable(bundle)),
+        "entitlements": sh("/usr/bin/codesign", "-d", "--entitlements", "-", bundle),
+        "menu entitlements": sh("/usr/bin/codesign", "-d", "--entitlements", "-", bundle / MENU_RELATIVE),
+        "verify": sh("/usr/bin/codesign", "--verify", "--deep", "--strict", bundle),
+        "spctl": sh("/usr/sbin/spctl", "-a", "-t", "exec", "-vv", bundle),
+        "stapler": sh("/usr/bin/xcrun", "stapler", "validate", bundle),
+    }
+    (RUN["dir"] / name).write_text("".join(
+        f"## {title}\n$ {shlex.join(result.args)}\nexit {result.returncode}\n{combined(result)}\n"
+        for title, result in parts.items()))
+    team = re.search(r"TeamIdentifier=(\S+)", combined(parts["codesign -dvvv"]))
+    spctl = combined(parts["spctl"])
+    return {
+        "bundle": str(bundle), "identifier": bundle_identifier(bundle),
+        "version": info(bundle).get("CFBundleShortVersionString"),
+        "team": team.group(1) if team else None,
+        "requirement": designated_requirement(combined(parts["designated requirement"])),
+        "verifies": parts["verify"].returncode == 0,
+        "spctl": spctl.strip(), "gatekeeperAccepted": parts["spctl"].returncode == 0 and "accepted" in spctl,
+        "notarized": "Notarized" in spctl,
+        "stapler": combined(parts["stapler"]).strip(), "stapled": parts["stapler"].returncode == 0,
+        "menuEntitlements": parts["menu entitlements"].stdout.strip(),
+    }
+
+
+def tcc_dump(name):
+    rows = []
+    user = sh("/usr/bin/sqlite3", "-separator", "\t", USER_TCC, TCC_QUERY)
+    rows += ["user\t" + line for line in user.stdout.splitlines()]
+    # The system database holds Accessibility and Screen Recording. An ssh session usually reads it
+    # directly through sshd's Full Disk Access; sudo is the non-interactive fallback, because `dev`
+    # is not an administrator and a password prompt could not work.
+    system = sh("/usr/bin/sqlite3", "-separator", "\t", SYSTEM_TCC, TCC_QUERY)
+    route = "direct"
+    if system.returncode != 0:
+        system = sh("/usr/bin/sudo", "-n", "/usr/bin/sqlite3", "-separator", "\t", SYSTEM_TCC, TCC_QUERY)
+        route = "sudo" if system.returncode == 0 else "unreadable"
+    rows += ["system\t" + line for line in system.stdout.splitlines()]
+    (RUN["dir"] / name).write_text("\n".join(rows) + "\n")
+    log("tcc-dump", file=name, rows=len(rows), systemRoute=route,
+        userError=user.stderr.strip(), systemError=system.stderr.strip())
+    TCC_ROUTES[name] = route
+    if route == "unreadable":
+        gap("system-tcc-unreadable", "tcc-dump", file=name)
+    return rows
+
+
+def decode_csreqs(rows, identities, name):
+    """`csreq -r <blob> -t` for every distinct csreq on an Axon row, written beside the dump."""
+    decoded = {}
+    for row in rows:
+        fields = row.split("\t")
+        if len(fields) > 7 and fields[7] and is_axon_client(fields[2], identities) and fields[7] not in decoded:
+            try:
+                blob = bytes.fromhex(fields[7])
+            except ValueError:
+                decoded[fields[7]] = "(not hex)"
+                continue
+            with tempfile.NamedTemporaryFile(suffix=".csreq", delete=False) as handle:
+                handle.write(blob)
+            result = sh("/usr/bin/csreq", "-r", handle.name, "-t")
+            os.unlink(handle.name)
+            decoded[fields[7]] = combined(result).strip()
+    rows_by_requirement = [{"row": "\t".join(row.split("\t")[:6]), "csreq": decoded.get(row.split("\t")[7], "")}
+                           for row in rows if len(row.split("\t")) > 7 and is_axon_client(row.split("\t")[2], identities)]
+    (RUN["dir"] / name).write_text(json.dumps(rows_by_requirement, indent=2) + "\n")
+    return rows_by_requirement
+
+
+def identities(state):
+    """Everything a TCC row or log line can name Axon by: identifiers and bundle paths."""
+    names = [AXON_ID, MENU_ID, str(ROLLBACK)]
+    for key in ("candidate", "installed", "prodBundle"):
+        if state.get(key):
+            names.append(str(state[key]))
+            editor = bundle_identifier(pathlib.Path(state[key]) / EDITOR_RELATIVE)
+            if editor and editor not in names:
+                names.append(editor)
+    return names
+
+
+def menu_rows(rows, state):
+    menus = [MENU_ID] + [str(pathlib.Path(state[key]) / MENU_RELATIVE)
+                         for key in ("candidate", "installed") if state.get(key)]
+    return [row for row in rows if len(row.split("\t")) > 2
+            and (is_axon_client(row.split("\t")[2], menus) or "Axon Menu.app" in row)]
+
+
+def tcc_log_scan(step, start, state):
+    """Classified tccd events attributed to Axon between `start` and now."""
+    end = log_time()
+    result = sh("/usr/bin/log", "show", "--style", "ndjson", "--info", "--debug", "--start", start, "--end", end,
+                "--predicate", TCC_LOG_PREDICATE, timeout=600)
+    (RUN["dir"] / f"tcc-log-{step}.ndjson").write_text(result.stdout or "")
+    events = parse_ndjson(result.stdout)
+    if result.returncode != 0 or (not events and result.stderr.strip()):
+        gap("tcc-log-unreadable", f"{step}-tcc-log", start=start, end=end, exit=result.returncode,
+            stderr=result.stderr.strip()[-400:])
+        return {"readable": False, "firstGrant": [], "reminders": [], "counts": {}}
+    summary = summarize_tcc_log(group_tcc_events(events), identities(state), state.get("allowed", set()))
+    informational(f"{step}-tcc-log", start=start, end=end, events=len(events), **summary)
+    for reminder in summary["reminders"]:
+        informational(f"{step}-screen-recording-reauthorization", at=reminder["at"], text=reminder["text"])
+    return {"readable": True, **summary}
+
+
+def bootout(label):
+    sh("/bin/launchctl", "bootout", f"{DOMAIN}/{label}")
+    wait_for(lambda: "state" not in job(label), 15)
+
+
+def bootstrap_jobs(state, plists, step):
+    """Write each plist into the run directory, assert it cannot reach the launcher, then load it."""
+    directory = RUN["dir"] / "launchd"
+    directory.mkdir(exist_ok=True)
+    paths = []
+    for plist in plists:
+        path = directory / f"{plist['Label']}.plist"
+        path.write_bytes(plistlib.dumps(plist))
+        paths.append(path)
+    lint = sh("/usr/bin/plutil", "-lint", *paths)
+    hazards = {plist["Label"]: launch_hazard(plist, bundle_identifier) for plist in plists}
+    managed = {plist["Label"]: plist["EnvironmentVariables"].get(MANAGED_KEY) for plist in plists}
+    daemons_managed = all(managed[label] == "1" for label in managed if label.endswith(".daemon"))
+    ok = verdict(f"{step}-plists-launch-safe", lint.returncode == 0 and daemons_managed and not any(hazards.values()),
+                 plists=[str(path) for path in paths], managedKey=managed, hazards=hazards, lint=combined(lint).strip())
+    if not ok and not ARGS.dry_run:
+        raise RuntimeError("refusing to bootstrap a job that could take the launcher path")
+    for plist, path in zip(plists, paths):
+        label = plist["Label"]
+        bootout(label)
+        state.setdefault("loaded", set()).add(label)
+        result = sh("/bin/launchctl", "bootstrap", DOMAIN, path)
+        log(f"{step}-bootstrap", label=label, plist=str(path), exit=result.returncode, stderr=result.stderr.strip())
+        if result.returncode != 0 and not ARGS.dry_run:
+            raise RuntimeError(f"launchctl bootstrap {label} failed: {result.stderr.strip()}")
+    state["bootstrapAt"] = log_time()
+
+
+def remove_menu_job(label, plist_path):
+    """Shared by the rehearsal and Phase B's rollback: 0.3.6 knows no menu job to replace."""
+    bootout(label)
+    if plist_path:
+        sh("/bin/rm", "-f", plist_path)
+    remaining = job(label)
+    log("remove-menu-job", label=label, plist=str(plist_path) if plist_path else None, after=remaining)
+    return remaining
+
+
+def production_state():
+    plist = read_plist(PROD_PLIST)
+    program = (plist.get("ProgramArguments") or [None])[0]
+    report = health(PROD_SOCKET) or {}
+    return {
+        "plist": str(PROD_PLIST), "plistSha256": sha256_file(PROD_PLIST), "program": program,
+        "bundle": str(enclosing_bundle(program)) if program and enclosing_bundle(program) else None,
+        "environment": plist.get("EnvironmentVariables"), "job": job(PROD_DAEMON),
+        "version": report.get("version"), "ready": report.get("ready"), "processId": report.get("processId"),
+        "provenance": report.get("provenance"), "shellContract": report.get("shellContract"),
+        "permissions": {entry.get("name"): entry.get("granted") for entry in report.get("permissions") or []},
+        "menuPlist": PROD_MENU_PLIST.exists(),
+    }
+
+
+def adopt_production(state):
+    production = production_state()
+    state["production"] = production
+    if production["bundle"]:
+        state["prodBundle"] = pathlib.Path(production["bundle"])
+        state["prodMain"] = production["program"]
+    elif not ARGS.dry_run:
+        raise RuntimeError(f"no bundled production registration in {PROD_PLIST}")
+    return production
+
+
+def ensure_calculator(state):
+    if running(CALCULATOR["process"]):
+        return
+    sh("/usr/bin/open", "-b", CALCULATOR["bundle"])
+    state["calculatorOpened"] = True
+    wait_for(lambda: running(CALCULATOR["process"]), 20)
+    sleep(2)
+
+
+# ---------------------------------------------------------------------------------------------
+# Phase A: carry, production untouched
+# ---------------------------------------------------------------------------------------------
+
+def step0_provenance(state):
+    production = adopt_production(state)
+    log("0-production", **production)
+    state["candidate"] = ARGS.candidate
+    candidate = codesign_record(ARGS.candidate, "codesign-candidate.txt")
+    prod = codesign_record(state.get("prodBundle", ARGS.candidate), "codesign-production.txt") if state.get("prodBundle") else {}
+    # The requirement TCC binds a grant to is the main executable's, so that is what is compared.
+    production_requirement = requirement_of(state["prodMain"]) if state.get("prodMain") else None
+    log("0-candidate", **candidate)
+    log("0-production-codesign", **prod)
+    verdict("0-designated-requirement", bool(production_requirement) and production_requirement == candidate["requirement"],
+            production=production_requirement, candidate=candidate["requirement"])
+    verdict("0-candidate-identity", candidate["identifier"] == AXON_ID and candidate["team"] == TEAM
+            and candidate["version"] == CANDIDATE_VERSION and bundle_identifier(ARGS.candidate / MENU_RELATIVE) == MENU_ID
+            and candidate["verifies"] and not candidate["menuEntitlements"],
+            identifier=candidate["identifier"], team=candidate["team"], version=candidate["version"],
+            menuIdentifier=bundle_identifier(ARGS.candidate / MENU_RELATIVE), menuEntitlements=candidate["menuEntitlements"])
+    verdict("0-candidate-notarized", candidate["gatekeeperAccepted"] and candidate["notarized"],
+            spctl=candidate["spctl"], stapler=candidate["stapler"])
+    if not candidate["stapled"]:
+        informational("0-stapler", note="not stapled or xcrun unavailable; Gatekeeper above is the gate",
+                      stapler=candidate["stapler"])
+    state["candidateRequirement"] = candidate["requirement"]
+
+
+def step1_swift_recording(state):
+    """A Swift-authored recording for the replay corpus, made through production's own socket.
+
+    The 0.3.6 CLI cannot name a history session, and the default session holds the thread's own
+    bridge traffic, so this speaks JSON-RPC directly with a private `_session`
+    (Sources/AxonCore/ActionHistory.swift at v0.3.6, `sessionID(in:)`), which the router strips
+    before dispatch. The invoke shape is CLICommandParser.invoke at v0.3.6: {target:{app,name},
+    name:<action>}. Save takes sessionId and path (CommandRouter.swift at v0.3.6,
+    HistoryCommandHandler). Production gets look, invoke, and save only: no keyboard text.
+    """
+    ensure_calculator(state)
+    session = f"qual125-{RUN['id']}"
+    names = wait_for(lambda: (found := swift_calculator_names(swift_tree(rpc(
+        PROD_SOCKET, "look", {"app": "Calculator", "screenshot": False, "_session": session}, timeout=20))))
+        and all(key in found for key in ("1", "+", "2", "=")) and found, 30, 1) or {}
+    if not all(key in names for key in ("1", "+", "2", "=")):
+        verdict("1-swift-recording", False, reason="Calculator's 1, +, 2, = were not all named by production's look", names=names)
+        return
+    pressed = {}
+    for key in ("1", "+", "2", "="):
+        response = rpc(PROD_SOCKET, "invoke", {"target": {"app": "Calculator", "name": names[key]}, "name": "AXPress",
+                                               "_session": session}, timeout=20)
+        pressed[key] = response.get("error") or response.get("transport") or "ok"
+        sleep(0.4)
+    path = RUN["dir"] / "calculator-swift-0.3.6.axn"
+    saved = rpc(PROD_SOCKET, "save", {"sessionId": session, "path": str(path)}, timeout=20)
+    text = path.read_text() if path.exists() else ""
+    count = axn_action_count(text)
+    verdict("1-swift-recording", count == 4 and all(value == "ok" for value in pressed.values()),
+            file=str(path), actions=count, names=names, pressed=pressed,
+            save={key: value for key, value in (saved.get("result") or saved).items() if key != "script"})
+    state["swiftRecording"] = path
+
+
+def step2_tcc_before(state):
+    notification_windows("2-before")
+    state["windowStart"] = log_time()
+    state["tccBefore"] = tcc_dump("tcc-before.tsv")
+    production = state.get("production") or {}
+    state["allowed"] = allowed_services(state["tccBefore"], identities(state), production.get("permissions"))
+    requirements = decode_csreqs(state["tccBefore"], identities(state), "tcc-before-csreq.json")
+    informational("2-axon-grants", allowedServices=sorted(state["allowed"]), rows=requirements,
+                  candidateRequirement=state.get("candidateRequirement"),
+                  everyRowMatchesCandidate=all(entry["csreq"] == state.get("candidateRequirement")
+                                               for entry in requirements if entry["csreq"]))
+
+
+def step3_install_candidate(state):
+    target = BENCH / ARGS.sha / "Axon.app"
+    if target.parent.exists():
+        # A path LaunchServices has already seen is not a first sighting; take a fresh one.
+        target = BENCH / f"{ARGS.sha}-{RUN['id']}" / "Axon.app"
+        informational("3-path", note="the sha directory exists from an earlier run; using a fresh path", path=str(target))
+    sh("/bin/mkdir", "-p", target.parent)
+    copied = sh("/usr/bin/ditto", ARGS.candidate, target, timeout=300)
+    verified = sh("/usr/bin/codesign", "--verify", "--deep", "--strict", target)
+    state["installed"] = target
+    state["installedMain"] = main_executable(target)
+    verdict("3-installed", copied.returncode == 0 and verified.returncode == 0
+            and info(target).get("CFBundleShortVersionString") == CANDIDATE_VERSION,
+            path=str(target), main=str(state["installedMain"]), ditto=combined(copied).strip(),
+            verify=combined(verified).strip(), version=info(target).get("CFBundleShortVersionString"))
+
+
+def step4_bootstrap(state):
+    logs = RUN["dir"] / "logs"
+    logs.mkdir(exist_ok=True)
+    daemon = job_plist(QUAL_DAEMON, [state["installedMain"]],
+                       {"AXON_SOCKET_PATH": QUAL_SOCKET, MANAGED_KEY: "1"}, True, logs)
+    # Crash-only supervision, as dev.axon.menu has: Quit exits 0 and stays quit.
+    menu = job_plist(QUAL_MENU, [menu_executable(state["installed"])],
+                     {"AXON_SOCKET_PATH": QUAL_SOCKET}, {"SuccessfulExit": False}, logs)
+    bootstrap_jobs(state, [daemon, menu], "4")
+
+
+def step5_carry_verdict(state):
+    report = wait_for(lambda: (answer := health(QUAL_SOCKET)) and answer.get("ready") and answer, 45) or health(QUAL_SOCKET)
+    daemon = job(QUAL_DAEMON)
+    problems = carry_problems(report, CANDIDATE_VERSION, state["installedMain"], daemon.get("pid"))
+    verdict("5-carry", not problems, problems=problems, job=daemon, version=(report or {}).get("version"),
+            provenance=(report or {}).get("provenance"), shellContract=(report or {}).get("shellContract"),
+            permissions=(report or {}).get("permissions"), capabilities=(report or {}).get("capabilities"))
+    scan = tcc_log_scan("5", state["bootstrapAt"], state)
+    windows = notification_windows("5-after-bootstrap")
+    verdict("5-zero-interaction", zero_first_grant(scan), logReadable=scan["readable"],
+            firstGrant=scan["firstGrant"], reminders=len(scan["reminders"]), notificationWindows=windows)
+
+
+def probe_look_visual(state):
+    """look params: app, screenshot, screenText, frames (rust/axon-core/src/observation.rs
+    LookRequest::decode). The screenshot is {mediaType, base64Data, width, height} and screenText
+    a list of {text, ...} (rust/axon-mac/src/lib.rs, Router::look)."""
+    response = rpc(QUAL_SOCKET, "look", {"app": "Calculator", "screenshot": True, "screenText": True, "frames": True}, timeout=30)
+    result = response.get("result") or {}
+    shot = result.get("screenshot") or {}
+    try:
+        data = base64.b64decode(shot.get("base64Data") or "", validate=True)
+    except (binascii.Error, ValueError):
+        data = b""
+    dimensions = png_dimensions(data)
+    if data:
+        (RUN["dir"] / "look-calculator.png").write_bytes(data)
+    verdict("6-look-screenshot", bool(dimensions) and dimensions[0] > 0 and dimensions[1] > 0
+            and shot.get("mediaType") == "image/png",
+            ihdr=dimensions, reported=[shot.get("width"), shot.get("height")], bytes=len(data),
+            unavailable=result.get("screenshotUnavailable"), error=response.get("error"))
+    texts = [item.get("text") for item in result.get("screenText") or [] if isinstance(item, dict)]
+    verdict("6-look-screenText", any(SCREEN_TEXT.search(text or "") for text in texts),
+            texts=texts[:40], unavailable=result.get("screenTextUnavailable"))
+    stripped = {key: value for key, value in result.items() if key != "screenshot"}
+    (RUN["dir"] / "look-calculator.json").write_text(json.dumps(stripped, indent=2) + "\n")
+    names, centres = rust_calculator_names(result)
+    state["calcNames"], state["calcCentres"] = names, centres
+    state["calcApp"] = ((result.get("app") or {}).get("name")) or "Calculator"
+    informational("6-calculator-names", names=names, centres=centres)
+
+
+def press(state, key):
+    """invoke: {target:{app,name}, name:<AX action>} (rust/axon-mac/src/lib.rs, "invoke" arm)."""
+    name = state.get("calcNames", {}).get(key)
+    if not name:
+        return {"error": {"message": f"no semantic name for Calculator key {key!r}"}}
+    return rpc(QUAL_SOCKET, "invoke", {"target": {"app": state["calcApp"], "name": name}, "name": "AXPress"}, timeout=20)
+
+
+def probe_invoke_and_since(state):
+    """look(since:) answers {unchanged:true} | {diff} | {observation, note}
+    (rust/axon-core/src/observation.rs LookSinceResult). A diff, or a full answer because the
+    diff exceeded its threshold, is a change; a baseline-expired fallback is not evidence of one."""
+    press(state, "clear")
+    sleep(0.5)
+    base = rpc(QUAL_SOCKET, "look", {"app": "Calculator", "screenshot": False}, timeout=20).get("result") or {}
+    token = base.get("since")
+    pressed = press(state, "1")
+    dispatch = ((pressed.get("result") or {}).get("dispatch") or {})
+    verdict("6-invoke", dispatch.get("success") is True, result=pressed.get("result"), error=pressed.get("error"))
+    sleep(0.5)
+    since = rpc(QUAL_SOCKET, "look", {"app": "Calculator", "since": token}, timeout=20) if token else {}
+    result = since.get("result") or {}
+    changed = "diff" in result or result.get("note") == "diff-exceeded-threshold"
+    verdict("6-look-since-changed", bool(token) and changed, token=token, keys=sorted(result),
+            note=result.get("note"), unchanged=result.get("unchanged"), diff=result.get("diff"), error=since.get("error"))
+
+
+def probe_waits(state):
+    """wait_for_value: target plus exactly one of contains/equals/matches, timeoutMs, intervalMs.
+    wait_for_stability: app, condition (stable|changed), stableMs, timeoutMs, intervalMs. Both
+    answer {wait:{success, status, ...}} (rust/axon-mac/src/lib.rs, Router::wait_for_value and
+    Router::wait_for_stability)."""
+    names = state.get("calcNames", {})
+    target = names.get("display") or names.get("1")
+    if not names.get("display"):
+        informational("6-wait-for-value-target", note="no numeric static text was named; waiting on the 1 key's own text")
+    value = rpc(QUAL_SOCKET, "wait_for_value", {"target": {"app": state.get("calcApp", "Calculator"), "name": target or ""},
+                                                "contains": "1", "timeoutMs": 5000}, timeout=20)
+    wait = (value.get("result") or {}).get("wait") or {}
+    verdict("6-wait-for-value", wait.get("success") is True and wait.get("status") == "satisfied",
+            target=target, wait=wait, error=value.get("error"))
+    stable = rpc(QUAL_SOCKET, "wait_for_stability", {"app": "Calculator", "condition": "stable", "stableMs": 300,
+                                                     "timeoutMs": 5000}, timeout=20)
+    wait = (stable.get("result") or {}).get("wait") or {}
+    verdict("6-wait-for-stability", wait.get("success") is True,
+            wait={key: value for key, value in wait.items() if key != "snapshot"}, error=stable.get("error"))
+
+
+def replay(path, step):
+    """run: {path} (rust/axon-core/src/axn.rs prepare_run), answered {batch:{success, trace}}."""
+    response = rpc(QUAL_SOCKET, "run", {"path": str(path)}, timeout=180)
+    batch = (response.get("result") or {}).get("batch") or {}
+    trace = [{"tool": entry.get("tool"), "success": entry.get("success"), "error": entry.get("error")}
+             for entry in batch.get("trace") or []]
+    return verdict(step, batch.get("success") is True, path=str(path), trace=trace, error=response.get("error"))
+
+
+def probe_replays(state):
+    if state.get("swiftRecording") and (ARGS.dry_run or state["swiftRecording"].exists()):
+        replay(state["swiftRecording"], "6-replay-swift-recording")
+    else:
+        verdict("6-replay-swift-recording", False, reason="step 1 produced no recording")
+    here = pathlib.Path(__file__).resolve().parent
+    fixture = next((path for path in (here.parent / FIXTURE_RELATIVE, pathlib.Path.cwd() / FIXTURE_RELATIVE, here / pathlib.Path(FIXTURE_RELATIVE).name)
+                    if path.exists()), None)
+    if not fixture:
+        informational("6-replay-fixture", skipped="fixture not staged beside the driver", looked=FIXTURE_RELATIVE)
+        return
+    apps = sorted(set(re.findall(r"^\s*app: (.+?)\s*$", fixture.read_text(), re.M)))
+    present = [app for app in apps if sh("/usr/bin/mdfind", f"kMDItemDisplayName == '{app}.app'").stdout.strip()]
+    if present != apps:
+        informational("6-replay-fixture", skipped="its target apps are not on this bench", apps=apps, present=present)
+        return
+    replay(fixture, "6-replay-fixture")
+
+
+def probe_recording(state):
+    """recording.start {scope, destination?}; recording.stop accepts no fields and answers
+    {sessionId, destination, script, actionCount} (rust/axon-core/src/daemon.rs)."""
+    started = rpc(QUAL_SOCKET, "recording.start", {"scope": {"scope": "application", "app": {
+        "name": "Calculator", "bundleIdentifier": CALCULATOR["bundle"]}}})
+    if "result" not in started and not ARGS.dry_run:
+        verdict("6-recording", False, start=started)
+        return
+    centres = {key: value for key, value in state.get("calcCentres", {}).items() if value and key in ("3", "4", "+", "=")}
+    pause(f"A recording is running on the candidate ({QUAL_SOCKET}). With the hand tool only, click Calculator's "
+          f"3, +, 4, = (for example `{HAND} click X Y`). The candidate reported these centres in screen points: "
+          f"{centres}. No type or key. If the candidate's editor opens a review window when the recording stops, "
+          f"that is its menu reacting; leave it.")
+    stopped = rpc(QUAL_SOCKET, "recording.stop", {}, timeout=30)
+    result = stopped.get("result") or {}
+    script = result.get("script") or ""
+    path = RUN["dir"] / "calculator-rust-recording.axn"
+    path.write_text(script)
+    verdict("6-recording", (result.get("actionCount") or 0) >= 1 and (axn_action_count(script) or 0) >= 1,
+            file=str(path), actionCount=result.get("actionCount"), destination=result.get("destination"),
+            start=started.get("result"), error=stopped.get("error"))
+
+
+def probe_typed_refusals():
+    """Tools axon-mac does not implement answer -32004 naming the capability
+    (rust/axon-mac/src/lib.rs EXCLUDED and capability_unavailable)."""
+    for method, capability in (("debug.create", "DebugSession"), ("drag", "PointerDrag")):
+        error = rpc(QUAL_SOCKET, method, {}).get("error") or {}
+        verdict(f"6-{method}-typed-refusal", error.get("code") == -32004 and (error.get("data") or {}).get("capability") == capability,
+                error=error)
+
+
+def step6_probes(state):
+    ensure_calculator(state)
+    probe_look_visual(state)
+    probe_invoke_and_since(state)
+    probe_waits(state)
+    probe_replays(state)
+    probe_recording(state)
+    probe_typed_refusals()
+
+
+def step7_menu(state):
+    menu = wait_for(lambda: (found := job(QUAL_MENU)).get("pid") and found, 15) or job(QUAL_MENU)
+    rows = tcc_dump("tcc-step7.tsv")
+    held = menu_rows(rows, state)
+    verdict("7-menu-alive-and-holds-nothing", bool(menu.get("pid")) and not held, menu=menu, menuRows=held)
+
+
+def verify_rollback(copy, production_bundle, production_main):
+    """Whether `copy` is still production's bundle, byte for byte where it matters."""
+    copy = pathlib.Path(copy)
+    record = {
+        "path": str(copy), "version": info(copy).get("CFBundleShortVersionString"),
+        "productionVersion": info(production_bundle).get("CFBundleShortVersionString") if production_bundle else None,
+        "requirement": requirement_of(main_executable(copy)),
+        "productionRequirement": requirement_of(production_main) if production_main else None,
+        "mainSha256": sha256_file(main_executable(copy)),
+        "productionMainSha256": sha256_file(production_main) if production_main else None,
+        "verify": combined(sh("/usr/bin/codesign", "--verify", "--deep", "--strict", copy)).strip(),
+    }
+    spctl = sh("/usr/sbin/spctl", "-a", "-t", "exec", "-vv", copy)
+    record["spctl"] = combined(spctl).strip()
+    problems = []
+    if not record["version"] or record["version"] != record["productionVersion"]:
+        problems.append("version differs from production")
+    if not record["requirement"] or record["requirement"] != record["productionRequirement"]:
+        problems.append("designated requirement differs from production")
+    if not record["mainSha256"] or record["mainSha256"] != record["productionMainSha256"]:
+        problems.append("main executable differs from production")
+    if spctl.returncode != 0 or "accepted" not in record["spctl"]:
+        problems.append("Gatekeeper does not accept it")
+    record["problems"] = problems
+    return record
+
+
+def prepare_rollback_copy(state):
+    if ROLLBACK.exists():
+        record = verify_rollback(ROLLBACK, state.get("prodBundle"), state.get("prodMain"))
+        if not record["problems"]:
+            return record
+        sh("/bin/mv", ROLLBACK, ROLLBACK.with_name(f"Axon.app.stale-{RUN['id']}"))
+    sh("/bin/mkdir", "-p", ROLLBACK.parent)
+    sh("/usr/bin/ditto", state.get("prodBundle"), ROLLBACK, timeout=300)
+    return verify_rollback(ROLLBACK, state.get("prodBundle"), state.get("prodMain"))
+
+
+def step8_rollback_rehearsal(state):
+    """Phase B's rollback, minus the one step that cannot be rehearsed beside production: the 0.3.6
+    CLI's own `daemon install` hardcodes dev.axon.daemon, so it is printed, not run. It is the
+    command every 0.3.x install already ran."""
+    record = prepare_rollback_copy(state)
+    ok = verdict("8-rollback-copy", not record["problems"], **record)
+    if ok and not ARGS.dry_run:
+        (EVIDENCE / "rollback-verified.json").write_text(json.dumps({**record, "runId": RUN["id"], "sha": ARGS.sha}, indent=2) + "\n")
+    remove_menu_job(QUAL_MENU, None)
+    bootout(QUAL_DAEMON)
+    logs = RUN["dir"] / "logs"
+    logs.mkdir(exist_ok=True)
+    daemon = job_plist(QUAL_DAEMON, [main_executable(ROLLBACK)], {"AXON_SOCKET_PATH": QUAL_SOCKET, MANAGED_KEY: "1"}, True, logs)
+    bootstrap_jobs(state, [daemon], "8")
+    report = wait_for(lambda: (answer := health(QUAL_SOCKET)) and answer.get("ready") and answer, 45) or health(QUAL_SOCKET)
+    pid = job(QUAL_DAEMON).get("pid")
+    problems = rollback_problems(report, (state.get("production") or {}).get("version"))
+    if str((report or {}).get("processId")) != str(pid):
+        problems.append(f"health processId {(report or {}).get('processId')} is not launchd's {pid}")
+    verdict("8-rollback-rehearsal", not problems, problems=problems, pid=pid,
+            version=(report or {}).get("version"), permissions=(report or {}).get("permissions"))
+    informational("8-phase-b-rollback-command", dryRun=True,
+                  commands=[f"launchctl bootout {DOMAIN}/{PROD_MENU}", f"rm -f {PROD_MENU_PLIST}",
+                            shlex.join([str(ROLLBACK / CLI_RELATIVE), "daemon", "install"])],
+                  notRehearsed="the 0.3.6 CLI's daemon install (hardcodes dev.axon.daemon; release-proven)")
+    bootout(QUAL_DAEMON)
+
+
+def step9_tcc_after(state):
+    after = tcc_dump("tcc-after.tsv")
+    diff = tcc_diff(state["tccBefore"], after, identities(state))
+    decode_csreqs(after, identities(state), "tcc-after-csreq.json")
+    verdict("9-tcc-carried", tcc_carried(diff), systemRoutes=dict(TCC_ROUTES), **diff)
+    if diff["foreignAdded"] or diff["foreignRemoved"]:
+        gap("foreign-tcc-rows-moved", "9-tcc-foreign", added=diff["foreignAdded"], removed=diff["foreignRemoved"])
+    scan = tcc_log_scan("9", state["windowStart"], state)
+    windows = notification_windows("9-after")
+    verdict("9-zero-first-grant-prompts", zero_first_grant(scan), logReadable=scan["readable"],
+            firstGrant=scan["firstGrant"], reminders=len(scan["reminders"]), notificationWindows=windows)
+    before, now = state.get("production") or {}, production_state()
+    verdict("9-production-untouched", now["plistSha256"] == before.get("plistSha256") and now["ready"] is True
+            and now["job"].get("pid") == (before.get("job") or {}).get("pid") and now["version"] == before.get("version"),
+            before={key: before.get(key) for key in ("plistSha256", "job", "version", "ready")},
+            after={key: now.get(key) for key in ("plistSha256", "job", "version", "ready")})
+
+
+def step10_launcher_probe(state):
+    """Informational: an unsupervised open of the candidate while 0.3.6 is registered. The
+    candidate's `axon start` sees another copy registered and should change nothing
+    (Sources/AxonClient/Supervision.swift StartPlan.elsewhere)."""
+    before, start = production_state(), log_time()
+    clock = time.monotonic()
+    opened = sh("/usr/bin/open", state["installed"], timeout=60)
+    latency = round((time.monotonic() - clock) * 1000)
+    sleep(5)
+    after = production_state()
+    informational("10-launcher-probe", exit=opened.returncode, latencyMs=latency, output=combined(opened).strip(),
+                  candidateProcesses=processes(str(state["installedMain"])),
+                  productionPlistUnchanged=before["plistSha256"] == after["plistSha256"],
+                  productionPid=[before["job"].get("pid"), after["job"].get("pid")])
+    tcc_log_scan("10", start, state)
+
+
+def carry(state):
+    step0_provenance(state)
+    step1_swift_recording(state)
+    step2_tcc_before(state)
+    step3_install_candidate(state)
+    step4_bootstrap(state)
+    step5_carry_verdict(state)
+    step6_probes(state)
+    step7_menu(state)
+    step8_rollback_rehearsal(state)
+    step9_tcc_after(state)
+    if ARGS.launcher_probe:
+        step10_launcher_probe(state)
+
+
+def rollback_rehearsal(state):
+    adopt_production(state)
+    log("0-production", **state["production"])
+    step2_tcc_before(state)
+    step8_rollback_rehearsal(state)
+    step9_tcc_after(state)
+
+
+def teardown_private(state):
+    """Phase A's teardown: the private jobs, and only the applications this run opened."""
+    for label in (QUAL_MENU, QUAL_DAEMON):
+        sh("/bin/launchctl", "bootout", f"{DOMAIN}/{label}")
+        if (AGENTS / f"{label}.plist").exists():
+            sh("/bin/rm", "-f", AGENTS / f"{label}.plist")
+    if state.get("calculatorOpened"):
+        sh("/usr/bin/pkill", "-x", CALCULATOR["process"])
+    log("teardown", menu=job(QUAL_MENU), daemon=job(QUAL_DAEMON), quitCalculator=bool(state.get("calculatorOpened")))
+
+
+# ---------------------------------------------------------------------------------------------
+# Phase B: the in-place upgrade, in an operator-approved window
+# ---------------------------------------------------------------------------------------------
+
+def passing_carry(sha):
+    index = EVIDENCE / "runs.jsonl"
+    entries = [json.loads(line) for line in index.read_text().splitlines() if line.strip()] if index.exists() else []
+    passing = [entry for entry in entries if entry.get("phase") == "carry" and entry.get("sha") == sha
+               and not entry.get("dryRun") and not entry.get("failed") and entry.get("exit") == 0
+               and "5-carry" in (entry.get("passed") or [])]
+    return passing[-1] if passing else None
+
+
+def stepB0_preconditions(state):
+    phase_a = passing_carry(ARGS.sha)
+    verdict("B0-phase-a-passed", bool(phase_a), run=phase_a)
+    # The --sha string names a commit; the hash names the bytes. Phase B upgrades to exactly the
+    # bundle Phase A qualified.
+    candidate_main = sha256_file(main_executable(ARGS.candidate))
+    verdict("B0-same-candidate", bool(phase_a) and phase_a.get("candidateMainSha256") == candidate_main,
+            phaseA=(phase_a or {}).get("candidateMainSha256"), now=candidate_main)
+    production = adopt_production(state)
+    log("B0-production", **production)
+    verdict("B0-production-is-swift", production["ready"] is True and not production["provenance"]
+            and production["version"] != CANDIDATE_VERSION, version=production["version"], provenance=production["provenance"])
+    recorded = read_plist_json(EVIDENCE / "rollback-verified.json")
+    record = verify_rollback(ROLLBACK, state.get("prodBundle"), state.get("prodMain"))
+    verdict("B0-rollback-ready", bool(recorded) and recorded.get("path") == str(ROLLBACK) and not record["problems"]
+            and record["mainSha256"] == recorded.get("mainSha256"), recorded=recorded, now=record)
+    state["candidate"] = ARGS.candidate
+    candidate_requirement = requirement_of(main_executable(ARGS.candidate))
+    verdict("B0-designated-requirement", bool(candidate_requirement) and candidate_requirement == record["productionRequirement"],
+            candidate=candidate_requirement, production=record["productionRequirement"])
+    failed = [step for step, ok in verdicts if not ok]
+    if failed and not ARGS.dry_run:
+        raise RuntimeError(f"Phase B preconditions failed ({', '.join(failed)}); nothing was changed")
+
+
+def read_plist_json(path):
+    try:
+        return json.loads(pathlib.Path(path).read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def confirm_window(state):
+    prompt = (f"Phase B replaces {PROD_DAEMON} (Axon {state['production'].get('version')} at "
+              f"{state.get('prodBundle')}) with the candidate. Your look/click bridge on {PROD_SOCKET} is gone from "
+              f"step B3 until the Rust daemon reports ready, and on a failure until the scripted rollback to "
+              f"{state['production'].get('version')} finishes. Type 'upgrade' to proceed")
+    if ARGS.yes or ARGS.dry_run:
+        log("B0-confirmation", answer="--yes" if ARGS.yes else "dry-run", prompt=prompt)
+        return
+    answer = input(f"\n>>> {prompt}: ").strip()
+    log("B0-confirmation", prompt=prompt, answer=answer)
+    if answer != "upgrade":
+        raise RuntimeError("not confirmed; nothing was changed")
+
+
+def install_root_listing():
+    if not INSTALL_ROOT.exists():
+        return []
+    return sorted(f"{entry.name}{'/' if entry.is_dir() else ''}" + (
+        f" marker={(entry / INSTALL_MARKER).read_text().strip()!r}" if (entry / INSTALL_MARKER).exists() else "")
+                  for entry in INSTALL_ROOT.iterdir())
+
+
+def stepB2_install(state):
+    """Mirror site/public/install.sh: stage beside the version directory, move it into place, then
+    write the marker holding the version."""
+    version_dir = INSTALL_ROOT / CANDIDATE_VERSION
+    state["installListingBefore"] = install_root_listing()
+    if version_dir.exists():
+        verdict("B2-never-seen-path", False, path=str(version_dir), listing=state["installListingBefore"])
+        if not ARGS.dry_run:
+            raise RuntimeError(f"{version_dir} already exists, so it is not a never-seen path")
+    staging = INSTALL_ROOT / f"{CANDIDATE_VERSION}.installing"
+    sh("/bin/rm", "-rf", staging)
+    sh("/bin/mkdir", "-p", staging)
+    copied = sh("/usr/bin/ditto", ARGS.candidate, staging / "Axon.app", timeout=300)
+    moved = sh("/bin/mv", staging, version_dir)
+    put(version_dir / INSTALL_MARKER, f"{CANDIDATE_VERSION}\n")
+    installed = version_dir / "Axon.app"
+    verified = sh("/usr/bin/codesign", "--verify", "--deep", "--strict", installed)
+    state["installed"], state["installedMain"] = installed, main_executable(installed)
+    verdict("B2-installed", copied.returncode == 0 and moved.returncode == 0 and verified.returncode == 0
+            and info(installed).get("CFBundleShortVersionString") == CANDIDATE_VERSION,
+            path=str(installed), verify=combined(verified).strip(), listingBefore=state["installListingBefore"])
+
+
+def stepB3_daemon_install(state):
+    state["registrationTouched"] = True
+    state["upgradeAt"] = log_time()
+    result = sh(state["installed"] / CLI_RELATIVE, "daemon", "install", timeout=300)
+    lines = (result.stdout or "").splitlines()
+    log("B3-daemon-install", exit=result.returncode, stdout=result.stdout[-2000:], stderr=result.stderr[-2000:],
+        pruned=[line for line in lines if "prune" in line], listingBefore=state.get("installListingBefore"),
+        listingAfter=install_root_listing())
+
+
+def stepB4_gate(state):
+    report = wait_for(lambda: (answer := health(PROD_SOCKET)) and answer.get("ready") and answer, 60) or health(PROD_SOCKET)
+    daemon = job(PROD_DAEMON)
+    menu = wait_for(lambda: (found := job(PROD_MENU)).get("pid") and found, 20) or job(PROD_MENU)
+    registered = read_plist(PROD_PLIST)
+    problems = carry_problems(report, CANDIDATE_VERSION, state["installedMain"], daemon.get("pid"))
+    gates = [
+        verdict("B4-carry", not problems, problems=problems, job=daemon, provenance=(report or {}).get("provenance"),
+                permissions=(report or {}).get("permissions"), capabilities=(report or {}).get("capabilities")),
+        verdict("B4-registration", (registered.get("ProgramArguments") or [None])[0] == str(state["installedMain"])
+                and (registered.get("EnvironmentVariables") or {}).get(MANAGED_KEY) == "1",
+                plist=registered, plistSha256=sha256_file(PROD_PLIST)),
+        verdict("B4-menu-running", bool(menu.get("pid")), menu=menu, menuPlist=read_plist(PROD_MENU_PLIST)),
+    ]
+    after = tcc_dump("tcc-after-upgrade.tsv")
+    diff = tcc_diff(state["tccBefore"], after, identities(state))
+    decode_csreqs(after, identities(state), "tcc-after-upgrade-csreq.json")
+    gates.append(verdict("B4-tcc-carried", tcc_carried(diff), systemRoutes=dict(TCC_ROUTES), **diff))
+    scan = tcc_log_scan("B4", state["windowStart"], state)
+    gates.append(verdict("B4-zero-first-grant-prompts", zero_first_grant(scan), logReadable=scan["readable"],
+                         firstGrant=scan["firstGrant"], reminders=len(scan["reminders"])))
+    notification_windows("B4-after-upgrade")
+    state["gatePassed"] = all(gates)
+    return state["gatePassed"]
+
+
+def rollback_production(state):
+    """Back to 0.3.6 with no hands: drop the menu job 0.3.6 does not know, then let the 0.3.6 CLI
+    re-register production from the verified copy."""
+    log("B4-rollback-start")
+    remove_menu_job(PROD_MENU, PROD_MENU_PLIST)
+    result = sh(ROLLBACK / CLI_RELATIVE, "daemon", "install", timeout=300)
+    version = (state.get("production") or {}).get("version")
+    report = wait_for(lambda: (answer := health(PROD_SOCKET)) and answer.get("ready") and answer.get("version") == version
+                      and answer, 60) or health(PROD_SOCKET)
+    problems = rollback_problems(report, version)
+    state["rolledBack"] = True
+    verdict("B4-rolled-back", result.returncode == 0 and not problems, problems=problems, exit=result.returncode,
+            output=combined(result)[-2000:], registered=read_plist(PROD_PLIST), job=job(PROD_DAEMON),
+            menuJob=job(PROD_MENU))
+
+
+def b5_menu_recording(state):
+    ensure_calculator(state)
+    pause("Click the Axon menu bar item, choose Start Recording..., pick Calculator in the picker, then click "
+          f"three Calculator buttons with the hand tool ({HAND} click X Y). Leave it recording.")
+    status = rpc(PROD_SOCKET, "recording.status").get("result") or {}
+    pause("Now choose Stop Recording... in the Axon menu.")
+    stopped = wait_for(lambda: (now := rpc(PROD_SOCKET, "recording.status").get("result")) and not now.get("recording") and now, 30)
+    sleep(3)
+    editors = processes("Axon Editor.app/Contents/MacOS/")
+    review = ask("Did Axon Editor open the recording in review mode?")
+    verdict("B5-menu-recording", status.get("recording") is True and bool(stopped) and review
+            and any(str(state["installed"]) in command for _, command in editors),
+            status=status, editors=editors)
+
+
+def b5_editor(state):
+    pause("In the editor, use record-from-here: pick Calculator in the picker, click one Calculator button with the "
+          "hand tool, then stop.")
+    verdict("B5-editor-record-from-here", ask("Did the new step land in the document at the insertion point?"))
+    pause("Press Run in the editor.")
+    verdict("B5-editor-run", ask("Did the document replay to the end without an error?"))
+    verdict("B5-editor-debugger-disabled", ask("Are the editor's debugger controls disabled, explaining "
+                                              "'Step debugging isn't available with this Axon daemon yet'?"))
+
+
+def b5_quit_and_reopen(state):
+    daemon_pid = job(PROD_DAEMON).get("pid")
+    pause("Choose Quit Axon Menu from the Axon menu bar item.")
+    at_quit = wait_for(lambda: (found := job(PROD_MENU)) and not found.get("pid") and found, 15) or job(PROD_MENU)
+    sleep(30)
+    later = job(PROD_MENU)
+    verdict("B5-quit-stays-quit", not later.get("pid") and at_quit.get("last exit code") == "0", atQuit=at_quit, after30s=later)
+    clock = time.monotonic()
+    opened = sh("/usr/bin/open", state["installed"], timeout=60)
+    latency = round((time.monotonic() - clock) * 1000)
+    back = wait_for(lambda: job(PROD_MENU).get("pid"), 20)
+    sleep(5)
+    daemons = [pid for pid, command in processes(str(state["installedMain"])) if command == str(state["installedMain"])]
+    report = health(PROD_SOCKET) or {}
+    seen = ask("Is the Axon menu bar item back, reading ready?")
+    verdict("B5-open-brings-the-menu-back", opened.returncode == 0 and bool(back) and daemons == [daemon_pid]
+            and str(report.get("processId")) == str(daemon_pid) and seen,
+            exit=opened.returncode, latencyMs=latency, menuPid=back, daemonPids=daemons, healthPid=report.get("processId"),
+            daemonPidBefore=daemon_pid)
+
+
+def b5_shutdown_and_start(state):
+    cli = state["installed"] / CLI_RELATIVE
+    stopped = sh(cli, "shutdown", timeout=60)
+    down = wait_for(lambda: not job(PROD_DAEMON).get("pid") and not job(PROD_MENU).get("pid"), 20)
+    started = sh(cli, "start", timeout=120)
+    up = wait_for(lambda: job(PROD_DAEMON).get("pid") and job(PROD_MENU).get("pid")
+                  and (answer := health(PROD_SOCKET)) and answer.get("ready") and answer, 45)
+    verdict("B5-shutdown-and-start", stopped.returncode == 0 and bool(down) and started.returncode == 0 and bool(up),
+            shutdown=combined(stopped).strip(), start=combined(started).strip(),
+            daemon=job(PROD_DAEMON), menu=job(PROD_MENU))
+
+
+def b5_crash_recovery(state):
+    old = job(PROD_DAEMON).get("pid")
+    menu_pid = job(PROD_MENU).get("pid")
+    sh("/bin/kill", "-9", old or "0")
+    relaunched = wait_for(lambda: (pid := job(PROD_DAEMON).get("pid")) and pid != old
+                          and (answer := health(PROD_SOCKET)) and answer.get("ready") and pid, 30)
+    sleep(5)
+    recovered = ask("Open the Axon menu with a hand click. Does it read ready again?")
+    verdict("B5-crash-relaunch", bool(relaunched) and recovered, killed=old, relaunched=relaunched,
+            menuPidBefore=menu_pid, menuPidAfter=job(PROD_MENU).get("pid"))
+
+
+def b5_menu_holds_nothing(state):
+    rows = tcc_dump("tcc-after-shell.tsv")
+    held = menu_rows(rows, state)
+    verdict("B5-menu-holds-nothing", not held, menuRows=held)
+
+
+def stepB5_shell_and_editor(state):
+    verdict("B5-menu-visible", ask("Click the Axon menu bar item. Does it read the daemon as ready, with no 'not granted' lines?"))
+    b5_menu_recording(state)
+    b5_editor(state)
+    b5_quit_and_reopen(state)
+    b5_shutdown_and_start(state)
+    b5_crash_recovery(state)
+    b5_menu_holds_nothing(state)
+
+
+def stepB6_browser_consent(state):
+    if not ask("Optional: do the Axon menu's Browser Automation... gesture now (hand clicks, Allow), then answer y; "
+               "n skips it."):
+        informational("B6-browser-consent", skipped=True)
+        return
+    rows = tcc_dump("tcc-after-consent.tsv")
+    apple_events = [row for row in rows if "\tkTCCServiceAppleEvents\t" in row and f"\t{AXON_ID}\t" in row]
+    informational("B6-browser-consent", appleEventsRows=apple_events,
+                  status=rpc(PROD_SOCKET, "automation.status").get("result"),
+                  note="expected: the consent gesture mints Automation rows for the daemon; outside the gate")
+
+
+def upgrade(state):
+    stepB0_preconditions(state)
+    confirm_window(state)
+    step2_tcc_before(state)
+    stepB2_install(state)
+    stepB3_daemon_install(state)
+    if not stepB4_gate(state) or ARGS.dry_run:
+        # A dry run walks both branches, so the rollback's commands are printed beside the pass path.
+        rollback_production(state)
+        if not ARGS.dry_run:
+            return
+    stepB5_shell_and_editor(state)
+    stepB6_browser_consent(state)
+    log("B7-left-on-candidate", installed=str(state.get("installed")), production=production_state())
+
+
+def teardown_upgrade(state):
+    """Never undoes a passing upgrade. Rolls back one that changed the registration and did not
+    pass, including one interrupted by an exception before its gate."""
+    if state.get("registrationTouched") and not state.get("gatePassed") and not state.get("rolledBack") and not ARGS.dry_run:
+        rollback_production(state)
+    if state.get("gatePassed") and not ARGS.dry_run:
+        reload_production_jobs()
+    if state.get("calculatorOpened"):
+        sh("/usr/bin/pkill", "-x", CALCULATOR["process"])
+    log("teardown", registrationTouched=bool(state.get("registrationTouched")), gatePassed=bool(state.get("gatePassed")),
+        rolledBack=bool(state.get("rolledBack")), daemon=job(PROD_DAEMON), menu=job(PROD_MENU))
+
+
+def reload_production_jobs():
+    """After a passed upgrade, bring back any production job whose plist exists but is not loaded,
+    daemon first. Step B5 shuts both down, starts them, and kills the daemon; an interrupted or
+    failed step there must not leave the thread without its bridge."""
+    for label, plist in ((PROD_DAEMON, PROD_PLIST), (PROD_MENU, PROD_MENU_PLIST)):
+        if pathlib.Path(plist).exists() and not job(label):
+            result = sh("/bin/launchctl", "bootstrap", DOMAIN, str(plist))
+            log("teardown-reload", label=label, exit=result.returncode, error=result.stderr.strip())
+            if label == PROD_DAEMON:
+                ready = wait_for(lambda: (health(PROD_SOCKET) or {}).get("ready"), 30)
+                log("teardown-reload-ready", label=label, ready=bool(ready))
+
+
+PHASES = {
+    "carry": (carry, teardown_private),
+    "rollback-rehearsal": (rollback_rehearsal, teardown_private),
+    "upgrade": (upgrade, teardown_upgrade),
+}
+
+
+# ---------------------------------------------------------------------------------------------
+# Self-test of the pure functions
+# ---------------------------------------------------------------------------------------------
+
+def self_test():
+    failures = []
+
+    def check(name, condition):
+        print(f"{'ok  ' if condition else 'FAIL'} {name}")
+        if not condition:
+            failures.append(name)
+
+    clean = {"axonAdded": [], "axonRemoved": [], "axonChanged": []}
+    readable = {"tcc-before.tsv": "direct", "tcc-after.tsv": "direct"}
+    check("gate: carried needs every dump to have read the system database",
+          tcc_carried(clean, {"a": "direct", "b": "sudo"}) and not tcc_carried(clean, {"a": "direct", "b": "unreadable"})
+          and not tcc_carried(clean, {}))
+    check("gate: zero prompts needs a readable log",
+          zero_first_grant({"readable": True, "firstGrant": []})
+          and not zero_first_grant({"readable": False, "firstGrant": []})
+          and not zero_first_grant({"readable": True, "firstGrant": [{"at": "t"}]}))
+
+    axon_ids = [AXON_ID, MENU_ID, "/Users/dev/AxonBench/axn125/abc123/Axon.app"]
+    csreq_a, csreq_b = "FADE0C00000000AA", "FADE0C00000000BB"
+    before = [
+        f"system\tkTCCServiceAccessibility\t{AXON_ID}\t0\t2\t\t100\t{csreq_a}",
+        f"system\tkTCCServiceScreenCapture\t{AXON_ID}\t0\t2\t\t100\t{csreq_a}",
+        f"user\tkTCCServiceAppleEvents\t{AXON_ID}\t0\t2\tcom.apple.Safari\t100\t{csreq_a}",
+        "system\tkTCCServiceSystemPolicyAllFiles\t/usr/libexec/sshd-keygen-wrapper\t1\t2\t\t50\t",
+    ]
+    moved_only = [row.replace("\t100\t", "\t999\t") for row in before]
+    check("tcc: last_modified alone is not a change", tcc_carried(tcc_diff(before, moved_only, axon_ids), readable)
+          and not any(tcc_diff(before, moved_only, axon_ids).values()))
+    rebound = [before[0].replace(csreq_a, csreq_b)] + before[1:]
+    diff = tcc_diff(before, rebound, axon_ids)
+    check("tcc: a csreq rebind on an Axon row fails the carry", not tcc_carried(diff)
+          and diff["axonChanged"] and diff["axonChanged"][0].endswith("csreq changed"))
+    downgraded = [before[0].replace("\t0\t2\t", "\t0\t0\t")] + before[1:]
+    check("tcc: an auth change on an Axon row fails the carry", "auth 2->0" in tcc_diff(before, downgraded, axon_ids)["axonChanged"][0])
+    added = before + [f"system\tkTCCServiceAccessibility\t{MENU_ID}\t0\t2\t\t200\t{csreq_b}",
+                      "user\tkTCCServiceCamera\tcom.example.other\t0\t2\t\t200\t"]
+    diff = tcc_diff(before, added, axon_ids)
+    check("tcc: a new menu row is Axon's and fails the carry", not tcc_carried(diff) and len(diff["axonAdded"]) == 1)
+    check("tcc: a foreign row is reported apart", len(diff["foreignAdded"]) == 1)
+    path_row = before + ["system\tkTCCServiceAccessibility\t/Users/dev/AxonBench/axn125/abc123/Axon.app/Contents/MacOS/Axon\t1\t2\t\t200\t"]
+    check("tcc: a path-keyed row inside the candidate is Axon's", len(tcc_diff(before, path_row, axon_ids)["axonAdded"]) == 1)
+    check("tcc: the sshd-keygen-wrapper row is pre-existing and ignored",
+          tcc_carried(tcc_diff(before, before, axon_ids), readable) and not tcc_diff(before, before, axon_ids)["foreignAdded"])
+    allowed = allowed_services(before[:1], axon_ids, {"screenRecording": True})
+    check("tcc: allowed services come from rows and from health", allowed == {"kTCCServiceAccessibility", SCREEN_CAPTURE})
+
+    def event(message, at="2026-11-02 19:00:00.000000-0800", process="/System/Library/PrivateFrameworks/TCC.framework/Support/tccd"):
+        return {"eventMessage": message, "timestamp": at, "processImagePath": process}
+
+    allowed = {"kTCCServiceAccessibility", SCREEN_CAPTURE}
+    events = [
+        event('"Axon" is requesting to bypass the system private window picker and directly access your screen and audio. '
+              f"client={AXON_ID}"),
+        event("AUTHREQ_CTX: msgID=401.7, function=TCCAccessRequest, service=kTCCServiceScreenCapture, preflight=no"),
+        event(f"AUTHREQ_ATTRIBUTION: msgID=401.7, attribution={{responsible={{TCCDProcess: identifier={AXON_ID}}}}}"),
+        event("AUTHREQ_CTX: msgID=401.8, function=TCCAccessRequest, service=kTCCServiceAppleEvents, preflight=no"),
+        event(f"AUTHREQ_ATTRIBUTION: msgID=401.8, attribution={{responsible={{TCCDProcess: identifier={AXON_ID}}}}}"),
+        event("AUTHREQ_CTX: msgID=401.9, function=TCCAccessRequest, service=kTCCServiceMicrophone, preflight=yes"),
+        event(f"AUTHREQ_ATTRIBUTION: msgID=401.9, attribution={{responsible={{TCCDProcess: identifier={AXON_ID}}}}}"),
+        event("AUTHREQ_CTX: msgID=402.1, function=TCCAccessRequest, service=kTCCServiceCamera, preflight=no"),
+        event("AUTHREQ_ATTRIBUTION: msgID=402.1, attribution={responsible={TCCDProcess: identifier=com.example.other}}"),
+        event("Prompting for kTCCServiceScreenCapture", process="/Users/dev/AxonBench/axn125/abc123/Axon.app/Contents/MacOS/Axon"),
+    ]
+    groups = group_tcc_events(events)
+    check("log: lines sharing a msgID join into one request", len(groups) == 6
+          and sum(1 for group in groups if group["msgID"] == "401.7") == 1)
+    kinds = [classify_tcc_group(group["text"], axon_ids, allowed) for group in groups]
+    check("log: the private-window-picker prompt is a reminder", kinds[0] == "reauthorization-reminder")
+    check("log: a request for an allowed service is not a first grant", kinds[1] == "allowed-request")
+    check("log: a request for a service Axon does not hold is a first grant", kinds[2] == "first-grant")
+    check("log: a preflight cannot prompt", kinds[3] == "preflight")
+    check("log: another app's request is not Axon's", kinds[4] is None)
+    check("log: a ScreenCapture prompt from the candidate's own path with the grant held is a reminder",
+          kinds[5] == "reauthorization-reminder")
+    check("log: the same prompt without the grant fails",
+          classify_tcc_group(groups[5]["text"], axon_ids, {"kTCCServiceAccessibility"}) == "first-grant")
+    summary = summarize_tcc_log(groups, axon_ids, allowed)
+    check("log: the summary keeps timestamps and fails only on first grants",
+          len(summary["firstGrant"]) == 1 and len(summary["reminders"]) == 2 and summary["reminders"][0]["at"])
+    check("log: ndjson parsing skips non-JSON lines", len(parse_ndjson('Filtering the log data\n{"eventMessage":"x"}\n{bad\n')) == 1)
+
+    logs = "/Users/dev/AxonBench/axn125/evidence/logs"
+    main = "/Users/dev/AxonBench/axn125/abc123/Axon.app/Contents/MacOS/Axon"
+    menu = f"/Users/dev/AxonBench/axn125/abc123/Axon.app/{MENU_RELATIVE}/Contents/MacOS/AxonMenu"
+    identifier_of = {"/Users/dev/AxonBench/axn125/abc123/Axon.app": AXON_ID,
+                     f"/Users/dev/AxonBench/axn125/abc123/Axon.app/{MENU_RELATIVE}": MENU_ID}
+
+    def lookup(bundle):
+        return identifier_of.get(str(bundle))
+
+    daemon = job_plist(QUAL_DAEMON, [main], {"AXON_SOCKET_PATH": QUAL_SOCKET, MANAGED_KEY: "1"}, True, logs)
+    round_trip = plistlib.loads(plistlib.dumps(daemon))
+    check("plist: the daemon carries the managed key and the private socket",
+          round_trip["EnvironmentVariables"] == {"AXON_SOCKET_PATH": QUAL_SOCKET, MANAGED_KEY: "1"}
+          and round_trip["ProgramArguments"] == [main] and round_trip["KeepAlive"] is True
+          and round_trip["LimitLoadToSessionType"] == "Aqua")
+    check("plist: a managed daemon has no launcher hazard", launch_hazard(round_trip, lookup) is None)
+    unmanaged = job_plist(QUAL_DAEMON, [main], {"AXON_SOCKET_PATH": QUAL_SOCKET}, True, logs)
+    check("plist: an unmanaged Axon main is a launcher hazard", launch_hazard(unmanaged, lookup) is not None)
+    check("plist: an explicit serve is safe", launch_hazard(job_plist(QUAL_DAEMON, [main, "serve"], {}, True, logs), lookup) is None)
+    check("plist: an unreadable identifier counts as Axon's", launch_hazard(unmanaged, lambda bundle: None) is not None)
+    menu_plist = plistlib.loads(plistlib.dumps(job_plist(QUAL_MENU, [menu], {"AXON_SOCKET_PATH": QUAL_SOCKET},
+                                                         {"SuccessfulExit": False}, logs)))
+    check("plist: the nested menu is not a launcher hazard", launch_hazard(menu_plist, lookup) is None)
+    check("plist: the menu is crash-only supervised", menu_plist["KeepAlive"] == {"SuccessfulExit": False})
+    check("plist: enclosing_bundle finds the .app", str(enclosing_bundle(main)) == "/Users/dev/AxonBench/axn125/abc123/Axon.app"
+          and enclosing_bundle("/usr/local/bin/axon-mac") is None)
+
+    png = b"\x89PNG\r\n\x1a\n" + (13).to_bytes(4, "big") + b"IHDR" + (640).to_bytes(4, "big") + (480).to_bytes(4, "big") + b"\x08\x06\x00\x00\x00\x00\x00\x00\x00"
+    check("png: IHDR dimensions", png_dimensions(png) == (640, 480) and png_dimensions(b"GIF89a" + png) is None)
+    requirement = 'designated => identifier "com.bleugreen.axon" and anchor apple generic and certificate leaf[subject.OU] = JBS95V8M7P'
+    check("codesign: designated requirement parsed",
+          designated_requirement("Executable=/x\n" + requirement + "\n").startswith('identifier "com.bleugreen.axon"')
+          and designated_requirement("# " + requirement) is not None)
+    check("axn: action count", axn_action_count("version: 2\nargs: []\nactions:\n- id: a1\n  tool: invoke\n  expects:\n  - id: a1.changed.0\n- id: a2\n") == 2
+          and axn_action_count("version: 2\nargs: []\nactions: []\n") == 0 and axn_action_count("version: 1\n") is None)
+    tree = ('window "Calculator"\n  button-ac: button "All Clear" [click]\n  button-1: button "1" [click]\n'
+            '  button-add: button "Add" [click]\n  button-2: button "2" [click]\n  button-eq: button "Equals" [click]\n'
+            '  display: text "0"\n')
+    names = swift_calculator_names(tree)
+    check("calculator: Swift DSL names", names.get("1") == "button-1" and names.get("+") == "button-add"
+          and names.get("=") == "button-eq" and names.get("clear") == "button-ac")
+    check("calculator: tree found anywhere in a Swift result", swift_tree({"result": {"observation": {"tree": tree}}}) == tree)
+    snapshot = {"app": {"name": "Calculator", "windows": [{"root": {"role": "AXWindow", "name": "window", "children": [
+        {"role": "AXButton", "name": "one", "label": "1", "frame": {"x": 10, "y": 20, "width": 40, "height": 30}},
+        {"role": "AXButton", "name": "plus", "label": "Add"},
+        {"role": "AXGroup", "children": [{"role": "AXStaticText", "name": "display", "value": "0"}]}]}}]}}
+    names, centres = rust_calculator_names(snapshot)
+    check("calculator: Rust snapshot names, centres, and display", names == {"1": "one", "+": "plus", "display": "display"}
+          and centres["1"] == (30, 35))
+
+    healthy = {"version": "0.4.0", "ready": True, "processId": 4210, "shellContract": 1,
+               "provenance": {"backend": BACKEND, "executablePath": main, "processId": 4210, "version": "0.4.0"},
+               "permissions": [{"name": "accessibility", "granted": True}, {"name": "screenRecording", "granted": True}],
+               "capabilities": [{"capability": "capture", "usable": True},
+                                {"capability": "observeChanges", "usable": False, "reason": "not-implemented"}]}
+    check("health: a carried candidate passes", carry_problems(healthy, "0.4.0", main, "4210") == [])
+    check("health: a pid mismatch fails", carry_problems(healthy, "0.4.0", main, "99") != [])
+    no_screen = json.loads(json.dumps(healthy))
+    no_screen["permissions"][1]["granted"] = False
+    check("health: an ungranted screenRecording fails", any("screenRecording" in problem for problem in carry_problems(no_screen, "0.4.0", main, 4210)))
+    swift = {"version": "0.3.6", "ready": True, "processId": 1, "permissions": healthy["permissions"]}
+    check("health: Swift 0.3.6 is no carry but is a good rollback", carry_problems(swift, "0.4.0", main, 1) != []
+          and rollback_problems(swift, "0.3.6") == [])
+
+    print(f"\n{len(failures)} failed" if failures else "\nall self-tests passed")
+    return 1 if failures else 0
+
+
+# ---------------------------------------------------------------------------------------------
+# Entry
+# ---------------------------------------------------------------------------------------------
+
+def parse_args(argv):
+    parser = argparse.ArgumentParser(
+        description="Qualify the Rust-main Axon.app against production's grants on bgsrv-mac (axn/125).",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="phases:\n"
+               "  carry               Phase A steps 0-9 (10 with --launcher-probe); production untouched\n"
+               "  rollback-rehearsal  Phase A step 8 alone, bracketed by TCC dumps\n"
+               "  upgrade             Phase B; needs a passing carry at the same --sha and the verified rollback copy\n"
+               "\nexit: 0 pass, 1 any FAIL or abort, 3 gaps only, 2 usage")
+    parser.add_argument("--phase", choices=sorted(PHASES))
+    parser.add_argument("--candidate", type=pathlib.Path, help="the staged notarized Axon.app")
+    parser.add_argument("--sha", help="the candidate's git sha")
+    parser.add_argument("--evidence", type=pathlib.Path,
+                        help=f"evidence directory (default {DEFAULT_EVIDENCE} under the working directory if its parent "
+                             "exists, else ./evidence)")
+    parser.add_argument("--dry-run", action="store_true", help="print every command and socket call; run none")
+    parser.add_argument("--yes", action="store_true", help="skip confirmation prompts (not the thread's hands)")
+    parser.add_argument("--launcher-probe", action="store_true", help="carry step 10: open the candidate beside production")
+    parser.add_argument("--self-test", action="store_true", help="test the pure functions and exit")
+    args = parser.parse_args(argv)
+    if args.self_test:
+        return args
+    if not args.phase:
+        parser.error("--phase is required")
+    if args.phase in ("carry", "upgrade"):
+        if not args.candidate or not args.sha:
+            parser.error(f"--phase {args.phase} needs --candidate and --sha")
+    if args.sha and not re.fullmatch(r"[0-9a-f]{7,40}", args.sha):
+        parser.error("--sha must be a hex git sha")
+    if args.candidate:
+        args.candidate = args.candidate.expanduser().resolve()
+        if args.candidate.suffix != ".app" or not (args.dry_run or args.candidate.is_dir()):
+            parser.error(f"--candidate {args.candidate} is not an .app bundle")
+    if not args.evidence:
+        default = pathlib.Path.cwd() / DEFAULT_EVIDENCE
+        args.evidence = default if default.parent.exists() else pathlib.Path.cwd() / "evidence"
+    args.evidence = args.evidence.expanduser().resolve()
+    return args
+
+
+def main(argv):
+    global ARGS, EVIDENCE
+    ARGS = parse_args(argv)
+    if ARGS.self_test:
+        return self_test()
+    EVIDENCE = ARGS.evidence
+    RUN["id"] = time.strftime("%Y%m%d-%H%M%S") + ("-dry-run" if ARGS.dry_run else "")
+    RUN["dir"] = EVIDENCE / "runs" / f"{ARGS.phase}-{RUN['id']}"
+    RUN["dir"].mkdir(parents=True, exist_ok=True)
+    RUN["transcript"] = RUN["dir"] / "transcript.jsonl"
+    RUN["commands"] = RUN["dir"] / "commands.log"
+    protocol, teardown = PHASES[ARGS.phase]
+    state = {}
+    log("start", phase=ARGS.phase, sha=ARGS.sha, candidate=str(ARGS.candidate) if ARGS.candidate else None,
+        dryRun=ARGS.dry_run, uid=os.getuid(), host=os.uname().nodename, cwd=str(pathlib.Path.cwd()),
+        driverSha256=sha256_file(__file__))
+    try:
+        protocol(state)
+    except (Exception, KeyboardInterrupt) as error:  # the teardown below must run whatever happened
+        log("aborted", error=repr(error))
+        verdicts.append(("aborted", False))
+    finally:
+        try:
+            teardown(state)
+        except (Exception, KeyboardInterrupt) as error:  # a failed teardown is a failed run, still summarized
+            log("teardown-failed", error=repr(error))
+            verdicts.append(("teardown", False))
+    failed = [step for step, ok in verdicts if not ok]
+    status = 1 if failed else (3 if gaps else 0)
+    passed = [step for step, ok in verdicts if ok]
+    log("summary", passed=passed, failed=failed, gaps=gaps, exit=status)
+    with (EVIDENCE / "runs.jsonl").open("a") as index:
+        index.write(json.dumps({"runId": RUN["id"], "phase": ARGS.phase, "sha": ARGS.sha, "dryRun": ARGS.dry_run,
+                                "runDir": str(RUN["dir"]), "candidate": str(ARGS.candidate) if ARGS.candidate else None,
+                                "candidateMainSha256": sha256_file(main_executable(ARGS.candidate)) if ARGS.candidate else None,
+                                "passed": passed, "failed": failed, "gaps": gaps, "exit": status}) + "\n")
+    return status
+
+
+EVIDENCE = None
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

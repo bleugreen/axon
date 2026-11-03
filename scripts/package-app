@@ -10,27 +10,45 @@ else
   SWIFT="$(command -v swift)"
 fi
 
+CARGO="${CARGO:-cargo}"
+
 VERSION="${AXON_VERSION:-$("$ROOT/scripts/check-version")}"
 DIST_DIR="$ROOT/dist"
 DAEMON_APP_NAME="Axon"
 EDITOR_APP_NAME="Axon Editor"
+MENU_APP_NAME="Axon Menu"
 DAEMON_BUNDLE_ID="${AXON_BUNDLE_ID:-com.bleugreen.axon}"
 EDITOR_BUNDLE_ID="${AXON_EDITOR_BUNDLE_ID:-com.bleugreen.axon.editor}"
+MENU_BUNDLE_ID="${AXON_MENU_BUNDLE_ID:-com.bleugreen.axon.menu}"
 DAEMON_APP_DIR="$DIST_DIR/$DAEMON_APP_NAME.app"
-# The editor ships nested inside the daemon bundle. One draggable app means a Finder replace on an
-# existing install, one bundle for the in-app updater to swap, and no way for the two halves to
-# reach different versions. The outer bundle keeps the identity every TCC grant is recorded
-# against, so nesting costs no permission.
+# Layout:
+#   Contents/MacOS/Axon                         the Rust daemon (axon-mac): the bundle's main
+#                                               executable and its only TCC subject
+#   Contents/Resources/bin/axon                 the Swift CLI, a client of the daemon
+#   Contents/Library/Applications/Axon Menu.app   the unprivileged menu bar shell
+#   Contents/Library/Applications/Axon Editor.app the .axn editor
+# The nested apps ship inside the daemon bundle: one draggable app means a Finder replace on an
+# existing install, one bundle for the in-app updater to swap, and no way for the pieces to reach
+# different versions. Each nested app is its own TCC subject holding no grant; the outer bundle
+# keeps the identity every grant is recorded against.
 EDITOR_APP_DIR="$DAEMON_APP_DIR/Contents/Library/Applications/$EDITOR_APP_NAME.app"
+MENU_APP_DIR="$DAEMON_APP_DIR/Contents/Library/Applications/$MENU_APP_NAME.app"
 ICON_SOURCE="$ROOT/Assets/Axon.icns"
 MENU_BAR_ICON_SOURCE="$ROOT/Assets/AxonMenuBarTemplate.png"
 DAEMON_ENTITLEMENTS="$ROOT/Assets/Axon.entitlements"
 
 cd "$ROOT"
 
-"$SWIFT" build -c release --product axon
-"$SWIFT" build -c release --product AxonDaemonApp
-"$SWIFT" build -c release --product AxonEditorApp
+# The daemon. Built for the same minimum system the bundle declares, so the binary never asks for
+# a newer macOS than LSMinimumSystemVersion promises.
+(cd "$ROOT/rust" && MACOSX_DEPLOYMENT_TARGET=14.0 "$CARGO" build --release --locked -p axon-mac)
+RUST_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/rust/target}"
+DAEMON_BINARY="$RUST_TARGET_DIR/release/axon-mac"
+
+# One product per invocation: given several `--product` flags, SwiftPM builds only the last.
+for product in axon AxonEditorApp AxonMenuApp; do
+  "$SWIFT" build -c release --product "$product"
+done
 
 # The sibling editor path is where releases before the nesting change left a bundle. Clearing it
 # keeps a stale copy out of the archive and out of the release job's verification.
@@ -155,28 +173,66 @@ write_editor_info_plist() {
 PLIST
 }
 
-copy_common_resources() {
-  local resources_dir="$1"
+# No document types, no URL types, no usage strings, and (at signing) no entitlements: the shell
+# asks macOS for nothing, so nothing is ever recorded against it.
+write_menu_info_plist() {
+  local plist_path="$1"
+  cat > "$plist_path" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleExecutable</key>
+  <string>AxonMenu</string>
+  <key>CFBundleIdentifier</key>
+  <string>$MENU_BUNDLE_ID</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleIconFile</key>
+  <string>Axon</string>
+  <key>CFBundleName</key>
+  <string>Axon Menu</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>$VERSION</string>
+  <key>CFBundleVersion</key>
+  <string>$VERSION</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>14.0</string>
+  <key>LSUIElement</key>
+  <true/>
+</dict>
+</plist>
+PLIST
+}
+
+copy_icon() {
   if [[ -f "$ICON_SOURCE" ]]; then
-    cp "$ICON_SOURCE" "$resources_dir/Axon.icns"
-  fi
-  if [[ -f "$MENU_BAR_ICON_SOURCE" ]]; then
-    cp "$MENU_BAR_ICON_SOURCE" "$resources_dir/AxonMenuBarTemplate.png"
+    cp "$ICON_SOURCE" "$1/Axon.icns"
   fi
 }
 
 mkdir -p "$DAEMON_APP_DIR/Contents/MacOS" "$DAEMON_APP_DIR/Contents/Resources/bin"
-cp "$ROOT/.build/release/AxonDaemonApp" "$DAEMON_APP_DIR/Contents/MacOS/Axon"
+cp "$DAEMON_BINARY" "$DAEMON_APP_DIR/Contents/MacOS/Axon"
 cp "$ROOT/.build/release/axon" "$DAEMON_APP_DIR/Contents/Resources/bin/axon"
 chmod 755 "$DAEMON_APP_DIR/Contents/MacOS/Axon" "$DAEMON_APP_DIR/Contents/Resources/bin/axon"
-copy_common_resources "$DAEMON_APP_DIR/Contents/Resources"
+copy_icon "$DAEMON_APP_DIR/Contents/Resources"
 write_daemon_info_plist "$DAEMON_APP_DIR/Contents/Info.plist"
 
-mkdir -p "$EDITOR_APP_DIR/Contents/MacOS" "$EDITOR_APP_DIR/Contents/Resources"
+mkdir -p "$MENU_APP_DIR/Contents/MacOS" "$MENU_APP_DIR/Contents/Resources"
+cp "$ROOT/.build/release/AxonMenuApp" "$MENU_APP_DIR/Contents/MacOS/AxonMenu"
+chmod 755 "$MENU_APP_DIR/Contents/MacOS/AxonMenu"
+copy_icon "$MENU_APP_DIR/Contents/Resources"
+cp "$MENU_BAR_ICON_SOURCE" "$MENU_APP_DIR/Contents/Resources/AxonMenuBarTemplate.png"
+write_menu_info_plist "$MENU_APP_DIR/Contents/Info.plist"
 
+mkdir -p "$EDITOR_APP_DIR/Contents/MacOS" "$EDITOR_APP_DIR/Contents/Resources"
 cp "$ROOT/.build/release/AxonEditorApp" "$EDITOR_APP_DIR/Contents/MacOS/AxonEditor"
 chmod 755 "$EDITOR_APP_DIR/Contents/MacOS/AxonEditor"
-copy_common_resources "$EDITOR_APP_DIR/Contents/Resources"
+copy_icon "$EDITOR_APP_DIR/Contents/Resources"
 write_editor_info_plist "$EDITOR_APP_DIR/Contents/Info.plist"
 
 SIGN_IDENTITY="${AXON_CODESIGN_IDENTITY:-}"
@@ -195,22 +251,24 @@ fi
 
 # The hardened runtime forbids sending Apple events unless the signature carries the Automation
 # entitlement, and forbids it silently: no consent dialog, no TCC row, no Automation pane entry.
-# Only the daemon app sends them, so only its signature gets the entitlement — the CLI and the
-# editor stay at the empty entitlement set the runtime gives them by default.
+# Only the daemon sends them, so only its signature gets the entitlement — the CLI, the menu, and
+# the editor stay at the empty entitlement set the runtime gives them by default.
 DAEMON_SIGN_ARGS=("${SIGN_ARGS[@]}" --entitlements "$DAEMON_ENTITLEMENTS")
 
 # Signed inside-out: every nested piece is sealed before the code that contains it, so the outer
-# signature covers final bytes. Signing the outer bundle before the nested editor would invalidate
-# it the moment the editor was signed. The outer bundle's own signature is the one macOS reads the
+# signature covers final bytes. Signing the outer bundle before a nested app would invalidate it
+# the moment that app was signed. The outer bundle's own signature is the one macOS reads the
 # entitlement from, because signing a bundle re-signs its main executable in place.
 /usr/bin/codesign "${SIGN_ARGS[@]}" "$DAEMON_APP_DIR/Contents/Resources/bin/axon"
 /usr/bin/codesign "${SIGN_ARGS[@]}" "$EDITOR_APP_DIR/Contents/MacOS/AxonEditor"
 /usr/bin/codesign "${SIGN_ARGS[@]}" "$EDITOR_APP_DIR"
+/usr/bin/codesign "${SIGN_ARGS[@]}" "$MENU_APP_DIR/Contents/MacOS/AxonMenu"
+/usr/bin/codesign "${SIGN_ARGS[@]}" "$MENU_APP_DIR"
 /usr/bin/codesign "${DAEMON_SIGN_ARGS[@]}" "$DAEMON_APP_DIR/Contents/MacOS/Axon"
 /usr/bin/codesign "${DAEMON_SIGN_ARGS[@]}" "$DAEMON_APP_DIR"
 
 # Asserted at the point of signing so that no caller of this script can ship a bundle whose
-# Automation surface is dead.
+# Automation surface is dead, or whose menu or editor holds an entitlement.
 "$ROOT/scripts/check-app-entitlements" "$DAEMON_APP_DIR"
 
 # Named with the version and the target, matching the Rust archives, so a consumer pinning a
@@ -227,7 +285,7 @@ if [[ -n "${AXON_NOTARY_PROFILE:-}" ]]; then
   /usr/bin/xcrun notarytool submit "$ZIP_PATH" \
     --keychain-profile "$AXON_NOTARY_PROFILE" \
     --wait
-  # The outer bundle is the only stapling target: its ticket covers the nested editor.
+  # The outer bundle is the only stapling target: its ticket covers the nested apps.
   /usr/bin/xcrun stapler staple "$DAEMON_APP_DIR"
   archive_app
 elif [[ -n "${AXON_NOTARY_KEY_PATH:-}" || -n "${AXON_NOTARY_KEY_ID:-}" || -n "${AXON_NOTARY_ISSUER:-}" ]]; then
@@ -247,31 +305,9 @@ fi
 SHA256="$(/usr/bin/shasum -a 256 "$ZIP_PATH" | awk '{ print $1 }')"
 printf '%s  %s\n' "$SHA256" "$(basename "$ZIP_PATH")" > "$ZIP_PATH.sha256"
 
-printf 'daemon app: %s\n' "$DAEMON_APP_DIR"
+# The Homebrew cask is written by the release workflow's publish job alone.
+printf 'app: %s\n' "$DAEMON_APP_DIR"
+printf 'menu app: %s\n' "$MENU_APP_DIR"
 printf 'editor app: %s\n' "$EDITOR_APP_DIR"
 printf 'zip: %s\n' "$ZIP_PATH"
 printf 'sha256: %s\n' "$SHA256"
-cat <<CASK
-
-Homebrew cask:
-
-cask "axon" do
-  version "$VERSION"
-  sha256 "$SHA256"
-
-  url "https://github.com/bleugreen/axon/releases/download/v#{version}/Axon-#{version}-macos-aarch64.zip"
-  name "Axon"
-  desc "Local macOS accessibility service for agents"
-  homepage "https://github.com/bleugreen/axon"
-
-  depends_on macos: ">= :sonoma"
-
-  app "Axon.app"
-  binary "#{appdir}/Axon.app/Contents/Resources/bin/axon"
-
-  zap trash: [
-    "~/Library/Application Support/Axon",
-    "~/Library/Logs/Axon",
-  ]
-end
-CASK
