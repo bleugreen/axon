@@ -66,7 +66,9 @@ for argument in "$@"; do
     fi
     continue
   fi
-  [[ "$argument" == --launchd-label ]] && expect_label=true
+  if [[ "$argument" == --launchd-label ]]; then
+    expect_label=true
+  fi
 done
 
 running() {
