@@ -305,6 +305,29 @@ private let readyReport = DaemonReport(
     #expect(fixture.registered().startPlan(mainExecutable: fixture.mainExecutable) == .install)
 }
 
+@Test func startInstallsWhenTheMenuIsRegisteredFromAnotherCopy() throws {
+    let fixture = try Fixture()
+    defer { fixture.cleanUp() }
+    try fixture.bundled().install(waitUntilReady: { readyReport })
+    let plist: [String: Any] = [
+        "Label": "dev.axon.menu",
+        "ProgramArguments": ["/Applications/Other.app/Contents/Library/Applications/Axon Menu.app/Contents/MacOS/AxonMenu"]
+    ]
+    try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0).write(to: fixture.menuPlist)
+    #expect(fixture.bundled().startPlan(mainExecutable: fixture.mainExecutable) == .install)
+}
+
+@Test func aRestartWhoseDaemonNeverAnswersStillBringsTheMenuBack() throws {
+    let fixture = try Fixture()
+    defer { fixture.cleanUp() }
+    try fixture.bundled().install(waitUntilReady: { readyReport })
+
+    #expect(throws: SupervisionError.self) {
+        try fixture.registered().restart(waitUntilReady: { throw SupervisionError.incompleteBundle("timed out") })
+    }
+    #expect(fixture.launchd.loaded["dev.axon.menu"] != nil)
+}
+
 @Test func startResumesACompleteRegistrationAndBringsBackAQuitMenu() throws {
     let fixture = try Fixture()
     defer { fixture.cleanUp() }

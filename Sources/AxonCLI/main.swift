@@ -276,8 +276,20 @@ private func printSetupStatus() {
 private func startAxon() throws {
     let bundle = axonBundle()
     let supervision = Supervision.registered(socketPath: socketPath)
-    switch supervision.startPlan(mainExecutable: bundle?.mainExecutablePath) {
+    // A bundled CLI decides against its own copy's programs, so a menu registered from another
+    // copy reads as incomplete; the registered view would compare that plist with itself.
+    let plan = bundle == nil
+        ? supervision.startPlan(mainExecutable: nil)
+        : try bundledSupervision().startPlan(mainExecutable: bundle?.mainExecutablePath)
+    switch plan {
     case .install:
+        // Opening a quarantined copy runs it from an App Translocation mount under /var/folders,
+        // which disappears; registering that would leave a login item pointing at nothing.
+        if let main = bundle?.mainExecutablePath, DaemonRegistrationPath.ephemeralWarning(for: main) != nil {
+            throw CLIError.operationFailed(
+                "Axon is running from a temporary location (\(main)). Move Axon.app to Applications, then open it again."
+            )
+        }
         try installDaemon()
     case .resume:
         try bundledSupervision().resume()
@@ -399,7 +411,12 @@ private func installDaemon() throws {
     let supervision = try bundledSupervision()
     let program = supervision.daemon.configuration.program
     warnAboutEphemeralInstall(program.executablePath)
-    let report = try supervision.install(waitUntilReady: { try waitForDaemonReport(from: program.executablePath) })
+    // Strict for install: the program being registered is this release's daemon, which always says
+    // where it runs, and the answer must come from the process launchd just started. A daemon
+    // nothing supervises that still holds the socket cannot pass for it.
+    let report = try supervision.install(waitUntilReady: {
+        try waitForDaemonReport(from: program.executablePath, launchdJob: supervision.daemon)
+    })
     print("registered \(supervision.daemon.configuration.label) -> \(program.executablePath)")
     // Which of the two TCC rules this registration follows is the thing a consumer cannot see
     // from the path alone, and it decides whether the next upgrade needs a human in
@@ -661,7 +678,13 @@ private func executablePathFromPATH(_ executableName: String) -> String? {
 /// process bound it, which is exactly the state a half-started daemon leaves behind. With a
 /// `program`, the answer must also come from it, so a daemon nothing supervises that still holds
 /// the socket cannot pass for the one just registered.
-private func waitForDaemonReport(from program: String? = nil, timeoutSeconds: TimeInterval = 30) throws -> DaemonReport {
+///
+/// With a `launchdJob`, the answer must also carry provenance and come from that job's process.
+private func waitForDaemonReport(
+    from program: String? = nil,
+    launchdJob: LaunchAgentManager? = nil,
+    timeoutSeconds: TimeInterval = 30
+) throws -> DaemonReport {
     let deadline = Date().addingTimeInterval(timeoutSeconds)
     var lastError: Error = SocketError.connectionClosed
 
@@ -677,6 +700,14 @@ private func waitForDaemonReport(from program: String? = nil, timeoutSeconds: Ti
                 throw CLIError.operationFailed(
                     "the daemon answering is \(report.provenance?.executablePath ?? "unknown") (pid \(report.processId)), not \(program)"
                 )
+            }
+            if let launchdJob {
+                let launchdPid = launchdJob.jobState().processId
+                guard report.provenance != nil, launchdPid == report.processId else {
+                    throw CLIError.operationFailed(
+                        "the daemon answering (pid \(report.processId)) is not \(launchdJob.configuration.label) (pid \(launchdPid.map(String.init) ?? "none"))"
+                    )
+                }
             }
             return report
         } catch {

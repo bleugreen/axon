@@ -229,13 +229,22 @@ public struct Supervision {
         if bounceMenu {
             try menu.stop()
         }
-        try daemon.stop()
-        try daemon.load()
-        let report = try waitUntilReady()
-        if bounceMenu {
-            try menu.load()
+        do {
+            try daemon.stop()
+            try daemon.load()
+            let report = try waitUntilReady()
+            if bounceMenu {
+                try menu.load()
+            }
+            return report
+        } catch {
+            // The menu is what shows a person that something is wrong; leaving it down with the
+            // daemon would hide the failure.
+            if bounceMenu, !menu.jobState().loaded {
+                try? menu.load()
+            }
+            throw error
         }
-        return report
     }
 
     /// Unloads both jobs, menu first, and leaves both plists in place.

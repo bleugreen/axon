@@ -44,8 +44,12 @@ final class MenuShell: NSObject, NSApplicationDelegate, NSMenuDelegate {
         UserDefaults.standard.set(false, forKey: "NSQuitAlwaysKeepsWindows")
         appRecency.start()
         statusItem.button?.imagePosition = .imageOnly
-        // Whatever started this copy, an update's scaffolding is the successor's to clear.
-        LaunchAgentManager.reapUpdateFinisher()
+        // Whatever started this copy, an update's scaffolding is the successor's to clear. A menu
+        // on a private socket (a bench or qualification candidate) leaves the production
+        // updater's label alone.
+        if !servesPrivateSocket {
+            LaunchAgentManager.reapUpdateFinisher()
+        }
         inputs.registrationWarning = registrationWarning()
         inputs.strayEditorNotice = strayEditorNotice()
         render()
@@ -408,7 +412,20 @@ final class MenuShell: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// Makes the enclosing bundle the registered one, through the same finisher an update uses,
     /// then quits: launchd owns the registration now, and it points here.
+    /// Whether this menu presents a daemon on a socket other than the production one, as a bench or
+    /// qualification candidate does. Registration and update scaffolding belong to production.
+    private var servesPrivateSocket: Bool {
+        socketPath != AxonEnvironment.defaultSocketPath
+    }
+
     private func useThisCopy() {
+        guard !servesPrivateSocket else {
+            showAlert(
+                title: "Cannot Use This Copy",
+                message: "This menu presents a private daemon at \(socketPath). Use This Copy registers the login items on \(AxonEnvironment.defaultSocketPath), so it is only offered there."
+            )
+            return
+        }
         guard let enclosingBundle else {
             showAlert(title: "Cannot Use This Copy", message: "This menu is not inside an Axon.app, so there is no bundle to register.")
             return
