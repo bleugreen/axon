@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# Prints what this machine knows about why a launchd gui-domain job is not doing what it should:
+# launchd's own record of the job, the meaning of its last exit code, whether each of its logs
+# exists, what the unified log says about the label and its process, and any fresh crash report.
+#
+# A job that dies before writing a byte to its log leaves only launchd's account behind -- its
+# state, its last exit code or terminating signal, and the spawn errors it records under the label
+# -- and that account is gone once the restore step boots the label out. So whatever reports such a
+# failure calls this first, while the label is still loaded; a failure without it reads as "the
+# daemon exited" and nothing else, which is not something anyone can act on.
+#
+# Evidence only: it never fails, and every read it makes is tolerated, because it runs on paths
+# that are already failing and must print everything it can rather than stop at the first gap.
+#
+# `--pid` names the process the caller believed launchd started, so the unified log can be asked
+# about that process too: a spawn that fails in launchd's trampoline logs under the job's pid, not
+# under launchd's subsystem.
+#
+# Usage: scripts/launchd-job-evidence [--pid PID] <label> [log]...
+set -uo pipefail
+
+pid=""
+if [[ "${1:-}" == --pid ]]; then
+  pid="${2:-}"
+  shift 2 || true
+fi
+if [[ $# -lt 1 ]]; then
+  printf 'usage: %s [--pid PID] <label> [log]...\n' "$0" >&2
+  exit 2
+fi
+label="$1"
+shift
+target="gui/$(id -u)/$label"
+
+printf -- '--- launchctl print %s ---\n' "$target"
+printed=""
+print_status=0
+printed="$(launchctl print "$target" 2>&1)" || print_status=$?
+printf '%s\n' "$printed"
+if [[ "$print_status" != 0 ]]; then
+  printf '(launchctl print exited %s: %s is not loaded in this domain)\n' "$print_status" "$label"
+fi
+
+# `last exit code = 78: EX_CONFIG`, or `(never exited)` for a job still running. Only a number is
+# something `launchctl error` can explain.
+exit_code="$(printf '%s\n' "$printed" | awk '/^[[:space:]]*last exit code = / { sub(/^[^=]*= /, ""); sub(/:.*/, ""); print; exit }')"
+if [[ "$exit_code" =~ ^-?[0-9]+$ ]]; then
+  printf -- '--- launchctl error %s ---\n' "$exit_code"
+  launchctl error "$exit_code" 2>&1 || true
+fi
+
+for log in "$@"; do
+  if [[ -e "$log" ]]; then
+    printf -- '--- %s (%s bytes) ---\n' "$log" "$(wc -c < "$log" | tr -d ' ')"
+    tail -n 60 "$log" 2>&1 || true
+  else
+    # launchd creates a job's StandardOutPath and StandardErrorPath before the program runs, so a
+    # missing file says the job never got that far -- or that the path was not openable.
+    printf -- '--- %s does not exist, so the job never opened it; its directory: ---\n' "$log"
+    ls -ld "$(dirname "$log")" 2>&1 || true
+  fi
+done
+
+# The label as launchd logs it, plus the believed process's own lines and the kernel's about it:
+# code-signing and sandbox kills are reported by the kernel, naming the pid.
+predicate="(subsystem == \"com.apple.xpc.launchd\" AND eventMessage CONTAINS \"$label\")"
+if [[ "$pid" =~ ^[0-9]+$ ]]; then
+  predicate="$predicate OR processID == $pid OR (process == \"kernel\" AND eventMessage CONTAINS \"$pid\")"
+fi
+printf -- '--- log show --last 30s --predicate %s ---\n' "$predicate"
+log show --last 30s --info --style compact --predicate "$predicate" 2>&1 | tail -n 80 || true
+
+# A crash report is the one record that names the faulting thread, and it is written by a
+# different process than launchd, so it is worth a look even when launchd has nothing.
+program="$(printf '%s\n' "$printed" | awk '/^[[:space:]]*program = / { sub(/^[^=]*= /, ""); print; exit }')"
+if [[ -n "$program" ]]; then
+  name="$(basename "$program")"
+  printf -- '--- crash reports for %s from the last 10 minutes ---\n' "$name"
+  reports="$(find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -type f -name "$name*" -mmin -10 2>/dev/null || true)"
+  if [[ -z "$reports" ]]; then
+    echo '(none)'
+  else
+    printf '%s\n' "$reports" | while IFS= read -r report; do
+      printf -- '--- %s ---\n' "$report"
+      head -n 60 "$report" 2>&1 || true
+    done
+  fi
+fi
+exit 0
