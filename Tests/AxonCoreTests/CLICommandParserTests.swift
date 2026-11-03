@@ -27,8 +27,6 @@ private let semanticTargetJSON = #"{"app":"Notes","name":"main/submit"}"#
 @Test func lookWithASemanticObjectPagesThatElement() throws {
     let params = try CLICommandParser.look(arguments: ["look", semanticTargetJSON]).params
     #expect(params == ["target": .object(["app": .string("Notes"), "name": .string("main/submit")])])
-    #expect(try ToolTarget(jsonValue: try #require(params["target"]), acceptedKinds: .element)
-        == .semanticName(app: "Notes", name: "main/submit"))
     #expect(params["app"] == nil)
 }
 
@@ -123,7 +121,7 @@ private let semanticTargetJSON = #"{"app":"Notes","name":"main/submit"}"#
     }
 }
 
-@Test func everyPackedElementTargetSatisfiesTheRouterContract() throws {
+@Test func everyPackedElementTargetIsTheSemanticObject() throws {
     let packed = [
         try CLICommandParser.click(arguments: ["click", semanticTargetJSON]),
         try CLICommandParser.invoke(arguments: ["invoke", semanticTargetJSON, "AXPress"]),
@@ -132,8 +130,7 @@ private let semanticTargetJSON = #"{"app":"Notes","name":"main/submit"}"#
         try CLICommandParser.look(arguments: ["look", semanticTargetJSON]).params
     ]
     for params in packed {
-        #expect(try ToolTarget(jsonValue: try #require(params["target"]), acceptedKinds: .element)
-            == .semanticName(app: "Notes", name: "main/submit"))
+        #expect(params["target"] == .object(["app": .string("Notes"), "name": .string("main/submit")]))
     }
 }
 

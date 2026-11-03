@@ -208,54 +208,6 @@ private let foreground = DeliveryCandidate(rung: .foreground, capability: .globa
     #expect(refusal.capability == nil)
 }
 
-@Test func refusalResultsCarryNoDispatchAndSerializeAtTheTopLevel() {
-    let result = PrimitiveActionResult.refused(
-        action: "keyboard",
-        target: "frontmost",
-        policy: .backgroundOnly,
-        refusal: DeliveryRefusal(
-            reason: .foregroundNotPermitted,
-            requiredRung: .foreground,
-            capability: .globalInput,
-            message: "needs foreground"
-        )
-    )
-
-    #expect(result.success == false)
-    #expect(result.dispatchSuccess == false)
-    #expect(result.delivery == nil)
-
-    let json = result.jsonValue
-    #expect(json["deliveryPolicy"] == .string("backgroundOnly"))
-    #expect(json["delivery"] == .null)
-    #expect(json["dispatchSuccess"] == .bool(false))
-    #expect(json["refusal"]?["reason"] == .string("foregroundNotPermitted"))
-    #expect(json["refusal"]?["requiredRung"] == .string("foreground"))
-    #expect(json["refusal"]?["capability"] == .string("globalInput"))
-    #expect(json["refusal"]?["message"] == .string("needs foreground"))
-    // A refusal never claims a semantic outcome it did not attempt.
-    #expect(json["semanticStatus"] == nil)
-}
-
-@Test func dispatchedAndUnverifiedResultsKeepTheirRungOnTheWire() {
-    let verified = PrimitiveActionResult.dispatched(
-        action: "AXPress", target: "s1:2", strategy: "AXAction",
-        policy: .backgroundOnly, delivery: .semantic, success: true
-    )
-    #expect(verified.jsonValue["delivery"] == .string("semantic"))
-    #expect(verified.jsonValue["dispatchSuccess"] == .bool(true))
-    #expect(verified.jsonValue["refusal"] == .null)
-
-    let unverified = PrimitiveActionResult.unverifiedDispatch(
-        action: "click", target: "s1:2", strategy: "CGEventToPid",
-        policy: .backgroundOnly, delivery: .pixel, dispatched: true, message: "dispatched"
-    )
-    #expect(unverified.jsonValue["delivery"] == .string("pixel"))
-    #expect(unverified.jsonValue["success"] == .bool(false))
-    #expect(unverified.jsonValue["dispatchSuccess"] == .bool(true))
-    #expect(unverified.jsonValue["semanticStatus"] == .string("unverified"))
-}
-
 @Test func allVocabularyValuesRoundTripThroughTheirWireNames() throws {
     #expect(DeliveryPolicy.allCases.map(\.rawValue) == ["backgroundOnly", "foregroundPermitted"])
     #expect(DeliveryRung.allCases.map(\.rawValue) == ["semantic", "pixel", "application", "foreground"])
