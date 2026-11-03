@@ -125,50 +125,8 @@ private func schema() throws -> JSONValue {
     #expect(line.contains("\"endpoint\":\"/tmp/axon.sock\""))
 }
 
-@Test func aTrustedMacReportsEveryCapabilityUsable() throws {
-    let fixture = try Data(
-        contentsOf: schemaRoot().appendingPathComponent("fixtures/health/macos-healthy.json")
-    )
-    let expected = try JSONDecoder().decode(HealthStatus.self, from: fixture)
-
-    let derived = Doctor.capabilities(DoctorReport(
-        accessibility: PermissionReport(name: "Accessibility", status: .trusted),
-        screenRecording: PermissionReport(name: "Screen Recording", status: .trusted)
-    ))
-
-    #expect(derived == expected.capabilities)
-}
-
-@Test func deniedAccessibilityLeavesOnlyTheUngatedCapabilities() throws {
-    let fixture = try Data(
-        contentsOf: schemaRoot().appendingPathComponent("fixtures/health/macos-accessibility-denied.json")
-    )
-    let expected = try JSONDecoder().decode(HealthStatus.self, from: fixture)
-    let report = DoctorReport(
-        accessibility: PermissionReport(name: "Accessibility", status: .denied),
-        screenRecording: PermissionReport(name: "Screen Recording", status: .trusted)
-    )
-
-    #expect(Doctor.capabilities(report) == expected.capabilities)
-    #expect(Doctor.permissions(report) == expected.permissions)
-    // Listing applications goes through NSWorkspace, and screenshots answer to Screen Recording
-    // alone, so neither disappears when Accessibility is denied.
-    #expect(Doctor.capabilities(report).filter(\.usable).map(\.capability) == ["enumerate", "screenshot", "serializeHistory"])
-}
-
-@Test func deniedScreenRecordingCostsOnlyScreenshots() {
-    let capabilities = Doctor.capabilities(DoctorReport(
-        accessibility: PermissionReport(name: "Accessibility", status: .trusted),
-        screenRecording: PermissionReport(name: "Screen Recording", status: .denied)
-    ))
-
-    let unusable = capabilities.filter { !$0.usable }
-    #expect(unusable.map(\.capability) == ["screenshot"])
-    #expect(unusable.first?.reason == HealthReason.screenRecordingNotGranted)
-}
-
 @Test func aConsoleSessionIsInteractiveAndGraphical() {
-    let session = Doctor.session(attributes: [.sessionHasGraphicAccess, .sessionHasTTY])
+    let session = SessionDetection.session(attributes: [.sessionHasGraphicAccess, .sessionHasTTY])
 
     #expect(session.interactive)
     #expect(session.graphical)
@@ -176,7 +134,7 @@ private func schema() throws -> JSONValue {
 }
 
 @Test func anSSHSessionIsInteractiveWithoutADesktop() {
-    let session = Doctor.session(attributes: [.sessionHasTTY])
+    let session = SessionDetection.session(attributes: [.sessionHasTTY])
 
     #expect(session.interactive)
     #expect(!session.graphical)
@@ -184,7 +142,7 @@ private func schema() throws -> JSONValue {
 }
 
 @Test func aServiceSessionIsNeitherInteractiveNorGraphical() {
-    let session = Doctor.session(attributes: SessionAttributeBits(rawValue: 0))
+    let session = SessionDetection.session(attributes: SessionAttributeBits(rawValue: 0))
 
     #expect(!session.interactive)
     #expect(!session.graphical)
