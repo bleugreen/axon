@@ -59,7 +59,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 WORKFLOW = Path(sys.argv[1]) if len(sys.argv) > 1 else REPO / ".github/workflows/live.yml"
 BASH = "/bin/bash" if Path("/bin/bash").exists() else shutil.which("bash")
-RUN_ID = "777"
+# Unique per harness process, because the probe makes a log directory under the real /tmp named
+# after the run id, and two rehearsals on one machine must not share it.
+RUN_ID = f"7{os.getpid()}"
+LOG_DIR = Path(f"/tmp/axon-live-{RUN_ID}.logs")
 
 
 def job_lines(text: str, job_name: str) -> list[str]:
@@ -145,6 +148,8 @@ STUBS = {
     # its plist's file name, which is how both the desktop's and the lane's plists are named, and
     # takes the pid it reports from STUB_PID_<label with dots as underscores>. STUB_BOOTOUT_STICKY
     # and STUB_BOOTSTRAP_FAILS name labels whose bootout or bootstrap fails and changes nothing.
+    # STUB_DIES_<label> is a job that launchd reports running once and that has then exited with
+    # that code -- the shape of a candidate that dies before it can open its log.
     "launchctl": """
         state="$STUB_STATE/launchd"
         mkdir -p "$state"
@@ -163,11 +168,30 @@ STUBS = {
             label="$(label_of "$2")"
             [ -f "$state/$label" ] || exit 113
             pid="$(cat "$state/$label")"
+            meta="$STUB_STATE/launchd-meta"
+            mkdir -p "$meta"
+            dies="STUB_DIES_$(printf '%s' "$label" | tr '.-' '__')"
+            if [ -n "$pid" ] && [ -n "${!dies:-}" ]; then
+              if [ -f "$meta/$label.seen" ]; then
+                : > "$state/$label"
+                printf '%s' "${!dies}" > "$meta/$label.exit"
+                pid=""
+              else
+                : > "$meta/$label.seen"
+              fi
+            fi
             if [ -n "$pid" ]; then
               printf '\\tstate = running\\n\\tpid = %s\\n' "$pid"
             else
               printf '\\tstate = not running\\n'
+              if [ -f "$meta/$label.exit" ]; then
+                printf '\\tlast exit code = %s: stub exit reason\\n' "$(cat "$meta/$label.exit")"
+              fi
             fi
+            ;;
+          error)
+            echo "launchctl error $2" >> "$STUB_LOG"
+            printf '%s: stub error description\\n' "$2"
             ;;
           bootout)
             label="$(label_of "$2")"
@@ -219,6 +243,17 @@ STUBS = {
         : > "$STUB_STATE/pgrep_f"
     """,
     "killall": 'echo "killall $*" >> "$STUB_LOG"',
+    # The unified log, which scripts/launchd-job-evidence asks about a failing job. Recorded so a
+    # scenario can assert what was asked; a real query here would be slow and read this machine.
+    "log": 'echo "log $*" >> "$STUB_LOG"; echo "stub unified log entry"',
+    # `ps -p PID` succeeds while PID is listed in $STUB_STATE/ps_alive, so a scenario can say a
+    # process outlived its job.
+    "ps": """
+        echo "ps $*" >> "$STUB_LOG"
+        [ "$1" = -p ] || exit 64
+        case " $(cat "$STUB_STATE/ps_alive" 2>/dev/null) " in *" $2 "*) exit 0 ;; esac
+        exit 1
+    """,
     "open": 'echo "open $*" >> "$STUB_LOG"; exit ${STUB_OPEN_EXIT:-0}',
     # Stubbed so the bounded retry loops cost nothing; the loops' bounds are not what is under test.
     "sleep": "exit 0",
@@ -309,11 +344,13 @@ class Harness:
         return {p.name: p.read_text() for p in launchd.iterdir()} if launchd.exists() else {}
 
     def run(self, script: str, *, loaded=None, plists=None, leftovers="", calculator_pids="",
-            missing_menu=False, **stub_env):
+            alive="", missing_menu=False, **stub_env):
         shutil.rmtree(self.state, ignore_errors=True)
+        shutil.rmtree(LOG_DIR, ignore_errors=True)
         (self.state / "launchd").mkdir(parents=True)
         for label, pid in (loaded or {}).items():
             (self.state / "launchd" / label).write_text(str(pid))
+        (self.state / "ps_alive").write_text(alive)
         (self.state / "pgrep_f").write_text(leftovers)
         (self.state / "pgrep_x_Calculator").write_text(calculator_pids)
         home = self.root / "home"
@@ -357,6 +394,7 @@ class Harness:
 
     def cleanup(self):
         shutil.rmtree(self.root, ignore_errors=True)
+        shutil.rmtree(LOG_DIR, ignore_errors=True)
 
 
 def status_doc(running=True, pid=4242, registered=True, jobs=("dev.axon.daemon", "dev.axon.menu")):
@@ -387,6 +425,16 @@ def main() -> int:
     # daemon under test; everything after it needs a real desktop.
     probe_launch = (probe.split(anchor)[0]
                     + '\necho "RESOLVED=[$daemon_pid]"\necho "SOCKET=[$AXON_SOCKET_PATH]"\n')
+    # The same prefix through the assertion itself, which needs only launchd and `status --json`,
+    # both stubbed. Its failures are the ones that must carry launchd's evidence.
+    head, tail = probe.split(anchor, 1)
+    statement = []
+    for line in tail.split("\n"):
+        statement.append(line)
+        if not line.rstrip().endswith("\\"):
+            break
+    probe_assert = (head + anchor + "\n".join(statement)
+                    + '\necho "ASSERTED=[$daemon_pid]"\n')
 
     harness = Harness(env)
     daemon, menu = harness.daemon, harness.menu
@@ -492,6 +540,15 @@ def main() -> int:
     check("park", park, "refuses to stop the daemon under a menu that will not unload", 1,
           expect=["is still loaded after bootout"], forbid=["axon shutdown"],
           want_loaded=[daemon, menu], loaded=both, STUB_BOOTOUT_STICKY=menu)
+    check("park", park, "confirms the desktop's daemon process is gone after shutdown", 0,
+          expect=["the desktop's daemon (pid 4242) has exited"],
+          order=["axon shutdown", "ps -p 4242"], want_unloaded=[daemon, menu], loaded=both)
+    check("park", park, "refuses to start the candidate beside a daemon that outlives shutdown", 1,
+          expect=["is still running 10 s after shutdown"],
+          order=["axon shutdown", "ps -p 4242"], loaded=both, alive="4242")
+    check("park", park, "waits for no process when the desktop's daemon was not running", 0,
+          forbid=["ps -p", "has exited"], loaded={menu: 4343}, plists=[menu],
+          STUB_STATUS=status_doc(registered=False, jobs=(menu,)))
 
     print("Probe step (candidate launch and pid resolution)")
     socket = f"/tmp/axon-live-{RUN_ID}.sock"
@@ -515,8 +572,11 @@ def main() -> int:
                            ("LimitLoadToSessionType", "Aqua"), ("ProcessType", "Interactive")):
             if job.get(key) != value:
                 problems.append(f"daemon {key} is {job.get(key)!r}, wanted {value!r}")
-        if not str(job.get("StandardErrorPath", "")).startswith(str(harness.runner_temp)):
-            problems.append(f"daemon log {job.get('StandardErrorPath')!r} is not under RUNNER_TEMP")
+        for key in ("StandardOutPath", "StandardErrorPath"):
+            if job.get(key) != str(LOG_DIR / f"{live_daemon}.log"):
+                problems.append(f"daemon {key} is {job.get(key)!r}, not in {LOG_DIR}")
+        if not LOG_DIR.is_dir() or stat.S_IMODE(LOG_DIR.stat().st_mode) != 0o700:
+            problems.append(f"{LOG_DIR} was not made, private, before the bootstrap")
         job = plistlib.loads(menu_plist.read_bytes())
         args = job.get("ProgramArguments", [])
         if [Path(a).resolve() for a in args] != [harness.dist_menu.resolve()]:
@@ -533,9 +593,31 @@ def main() -> int:
           forbid=["open -n", f"launchctl bootstrap {live_menu}", f"launchctl bootstrap {daemon}"],
           want_loaded=[live_daemon], inspect=candidate_plists, **{pid_var: 5150})
     check("probe", probe_launch, "fails when launchd loads the candidate but never runs it", 1,
-          expect=["never launched or exited before it could serve"])
+          expect=["never launched or exited before it could serve", "--- launchctl print gui/",
+                  "state = not running", "does not exist, so the job never opened it",
+                  "log show --last 30s"])
     check("probe", probe_launch, "fails when the candidate cannot be bootstrapped", 1,
-          expect=["could not bootstrap"], STUB_BOOTSTRAP_FAILS=live_daemon, **{pid_var: 5150})
+          expect=["could not bootstrap", "is not loaded in this domain", "log show --last 30s"],
+          STUB_BOOTSTRAP_FAILS=live_daemon, **{pid_var: 5150})
+    dies_var = "STUB_DIES_" + live_daemon.replace(".", "_")
+    check("probe", probe_assert, "asserts the candidate launchd is running is the one serving", 0,
+          expect=["ASSERTED=[5150]", "the daemon under test (pid 5150) is serving"],
+          forbid=["launchctl print gui/", "log show"],
+          STUB_STATUS=status_doc(pid=5150), **{pid_var: 5150})
+    # The lane's first failure on main: launchd named a pid, the process was gone a moment later,
+    # and its log had never been created. What matters is that launchd's account is printed.
+    check("probe", probe_assert, "prints launchd's evidence when the candidate exits after launchd names it", 1,
+          expect=["(pid 5150) exited instead of serving the socket; launchd no longer runs",
+                  f"--- launchctl print gui/", "last exit code = 78", "launchctl error 78",
+                  "78: stub error description", "does not exist, so the job never opened it",
+                  "processID == 5150", "stub unified log entry"],
+          forbid=["ASSERTED", "axon status"],
+          STUB_STATUS=status_doc(pid=5150), **{pid_var: 5150, dies_var: 78})
+    check("probe", probe_assert, "prints launchd's evidence when another process serves the endpoint", 1,
+          expect=["is served by pid 4242, not the daemon under test (pid 5150)",
+                  "--- launchctl print gui/", "state = running", "processID == 5150"],
+          forbid=["ASSERTED", "launchctl error"],
+          STUB_STATUS=status_doc(pid=4242), **{pid_var: 5150})
     check("probe", probe_launch, "refuses a desktop already running Calculator", 1,
           expect=["Calculator is already running"], forbid=["launchctl bootstrap"],
           calculator_pids="777", **{pid_var: 5150})

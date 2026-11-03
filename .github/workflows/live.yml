@@ -168,11 +168,11 @@ jobs:
           uid="$(id -u)"
           daemon_plist="$RUNNER_TEMP/$AXON_LIVE_DAEMON_LABEL.plist"
           menu_plist="$RUNNER_TEMP/$AXON_LIVE_MENU_LABEL.plist"
-          # The jobs' logs live under /tmp, where scripts/macos-cutover-qualification's jobs and
-          # hand-launched reproductions write theirs, rather than inside the runner's own temporary
-          # directory: launchd opens these paths for the job before it runs, and a path it cannot
-          # open there is a failure with no log to show for it. The directory is created here so
-          # that launchd only ever has to create the file. Per run for the socket's reason below.
+          # The jobs' logs live in a directory of this run's own under /tmp rather than in the
+          # runner's temporary directory, which the runner owns and manages: launchd creates these
+          # files for the job before its program runs, so a path it cannot create fails the job
+          # with no log to show for it. The directory is made here, empty, so that launchd only
+          # ever has to create the file. Per run for the socket's reason below.
           log_dir="/tmp/axon-live-${GITHUB_RUN_ID}.logs"
           rm -rf "$log_dir"
           mkdir -m 700 "$log_dir"
