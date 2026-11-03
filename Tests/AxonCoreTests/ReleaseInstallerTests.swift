@@ -41,6 +41,45 @@ private func makeAxonBundle(at bundleURL: URL, version: String, identifier: Stri
         to: editorURL.appendingPathComponent("Contents/Info.plist")
     )
     try writeExecutable(at: editorURL.appendingPathComponent("Contents/MacOS/AxonEditor"))
+
+    let menuURL = bundleURL.appendingPathComponent(AppBundle.nestedMenuRelativePath)
+    try writePlist(
+        [
+            "CFBundleIdentifier": AppBundle.axonMenuIdentifier,
+            "CFBundleShortVersionString": version,
+            "CFBundleExecutable": "AxonMenu"
+        ],
+        to: menuURL.appendingPathComponent("Contents/Info.plist")
+    )
+    try writeExecutable(at: menuURL.appendingPathComponent("Contents/MacOS/AxonMenu"))
+}
+
+@Test func aReleaseBundleMustCarryItsNestedMenuAtTheSameVersion() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("axon-menu-verify-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let bundle = root.appendingPathComponent("Axon.app", isDirectory: true)
+    try makeAxonBundle(at: bundle, version: "0.4.0")
+    let installer = ReleaseInstaller()
+    #expect(try installer.verifiedBundle(in: root, expectedVersion: "0.4.0") == bundle)
+
+    let menuPlist = bundle.appendingPathComponent(AppBundle.nestedMenuRelativePath).appendingPathComponent("Contents/Info.plist")
+    try writePlist(
+        [
+            "CFBundleIdentifier": AppBundle.axonMenuIdentifier,
+            "CFBundleShortVersionString": "0.3.9",
+            "CFBundleExecutable": "AxonMenu"
+        ],
+        to: menuPlist
+    )
+    #expect(throws: ReleaseInstallError.self) {
+        try installer.verifiedBundle(in: root, expectedVersion: "0.4.0")
+    }
+
+    try FileManager.default.removeItem(at: bundle.appendingPathComponent(AppBundle.nestedMenuRelativePath))
+    #expect(throws: ReleaseInstallError.self) {
+        try installer.verifiedBundle(in: root, expectedVersion: "0.4.0")
+    }
 }
 
 /// Packs an Axon.app into a release archive the way `scripts/package-app` does, and returns the
