@@ -45,7 +45,10 @@ cd "$ROOT"
 RUST_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/rust/target}"
 DAEMON_BINARY="$RUST_TARGET_DIR/release/axon-mac"
 
-"$SWIFT" build -c release --product axon --product AxonEditorApp --product AxonMenuApp
+# One product per invocation: given several `--product` flags, SwiftPM builds only the last.
+for product in axon AxonEditorApp AxonMenuApp; do
+  "$SWIFT" build -c release --product "$product"
+done
 
 # The sibling editor path is where releases before the nesting change left a bundle. Clearing it
 # keeps a stale copy out of the archive and out of the release job's verification.
