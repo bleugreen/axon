@@ -5,11 +5,11 @@ use axon_core::{
     DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung, DeliverySelection,
     DiffPolicy, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId,
     JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, PointerContract,
-    ResolutionStatus, RunEnvelope, SemanticLookup, SemanticNameRegistry, SemanticRegistrationCoverage,
-    SemanticSelection,
-    Snapshot, SnapshotHandle, TextLocationResolver, TextLocationSource, TextLocationTarget,
-    TextRecognitionProvider, ToolDispatcher, classify_semantic_diff, dispatch_in_foreground,
-    goal_success, prepare_run, select_delivery,
+    ResolutionStatus, RunEnvelope, SemanticLookup, SemanticNameRegistry,
+    SemanticRegistrationCoverage, SemanticSelection, Snapshot, SnapshotHandle,
+    TextLocationResolver, TextLocationSource, TextLocationTarget, TextRecognitionProvider,
+    ToolDispatcher, classify_semantic_diff, dispatch_in_foreground, goal_success, prepare_run,
+    select_delivery,
 };
 use serde_json::{Map, Value, json};
 use std::{
@@ -453,13 +453,18 @@ impl<
         })
     }
 
-    fn register_snapshot(&mut self, snapshot: &Snapshot, coverage: SemanticRegistrationCoverage) -> Vec<axon_core::SemanticElementName> {
+    fn register_snapshot(
+        &mut self,
+        snapshot: &Snapshot,
+        coverage: SemanticRegistrationCoverage,
+    ) -> Vec<axon_core::SemanticElementName> {
         let live_processes = self.backend.live_process_ids().ok();
-        self.semantic_names.register_with_liveness(snapshot, coverage, |pid| {
-            live_processes
-                .as_ref()
-                .is_none_or(|processes| processes.contains(&pid))
-        })
+        self.semantic_names
+            .register_with_liveness(snapshot, coverage, |pid| {
+                live_processes
+                    .as_ref()
+                    .is_none_or(|processes| processes.contains(&pid))
+            })
     }
 
     fn click_text_location(
@@ -1124,7 +1129,8 @@ impl<
                         }],
                     },
                 };
-                let names = self.register_snapshot(&snapshot, SemanticRegistrationCoverage::Partial);
+                let names =
+                    self.register_snapshot(&snapshot, SemanticRegistrationCoverage::Partial);
                 let rendered = axon_core::render_semantic_names(&snapshot, &names);
                 self.snapshot = Some(snapshot);
                 Ok(json!({
@@ -1955,7 +1961,10 @@ mod tests {
         backend.snapshot.app.process_id = Some(4101);
         let queries = backend.capture_queries.clone();
         let mut router = Router::new(backend);
-        let names = router.register_snapshot(&router.backend.snapshot.clone(), SemanticRegistrationCoverage::Complete);
+        let names = router.register_snapshot(
+            &router.backend.snapshot.clone(),
+            SemanticRegistrationCoverage::Complete,
+        );
         let name = names
             .into_iter()
             .find(|name| name.label == "Save")
@@ -1986,7 +1995,10 @@ mod tests {
         backend.snapshot.app.identifier = Some("com.example.shared".into());
         let queries = backend.capture_queries.clone();
         let mut router = Router::new(backend);
-        let names = router.register_snapshot(&router.backend.snapshot.clone(), SemanticRegistrationCoverage::Complete);
+        let names = router.register_snapshot(
+            &router.backend.snapshot.clone(),
+            SemanticRegistrationCoverage::Complete,
+        );
         let name = names
             .into_iter()
             .find(|name| name.label == "Save")
@@ -2003,7 +2015,9 @@ mod tests {
             }],
         });
         newer.id = axon_core::SnapshotId("newer".into());
-        router.semantic_names.register(&newer, SemanticRegistrationCoverage::Complete);
+        router
+            .semantic_names
+            .register(&newer, SemanticRegistrationCoverage::Complete);
 
         let result = router.resolve(
             json!({"target":{"app":"Shared","name":name}})
@@ -2051,9 +2065,12 @@ mod tests {
     #[test]
     fn save_exports_durable_locators_for_semantic_click_and_type() {
         let mut router = Router::new(backend(vec![node("Field")], Some("before")));
-        let name = router.register_snapshot(&router.backend.snapshot.clone(), SemanticRegistrationCoverage::Complete)[0]
-            .name
-            .clone();
+        let name = router.register_snapshot(
+            &router.backend.snapshot.clone(),
+            SemanticRegistrationCoverage::Complete,
+        )[0]
+        .name
+        .clone();
         for (method, extra) in [("click", json!({})), ("type", json!({"value":"after"}))] {
             let mut params = extra.as_object().unwrap().clone();
             params.insert("target".into(), json!({"app":"App","name":name}));
@@ -2568,27 +2585,57 @@ mod tests {
     }
 
     fn coverage_name(router: &mut Router<FakeBackend>) -> String {
-        let result = coverage_request(router, "look", json!({"app":"App","screenshot":false,"format":"debug","tree":true}));
-        let name = result.pointer("/observation/app/windows/0/root/children/0/children/0/name")
-            .and_then(Value::as_str).expect("first response emits a descendant name").to_owned();
-        assert!(name.contains("panel"), "duplicate labels require ancestry: {name}");
+        let result = coverage_request(
+            router,
+            "look",
+            json!({"app":"App","screenshot":false,"format":"debug","tree":true}),
+        );
+        let name = result
+            .pointer("/observation/app/windows/0/root/children/0/children/0/name")
+            .and_then(Value::as_str)
+            .expect("first response emits a descendant name")
+            .to_owned();
+        assert!(
+            name.contains("panel"),
+            "duplicate labels require ancestry: {name}"
+        );
         name
     }
 
     fn coverage_invoke(router: &mut Router<FakeBackend>, name: &str) {
-        let result = coverage_request(router, "invoke", json!({"target":{"app":"App","name":name},"name":"Invoke"}));
+        let result = coverage_request(
+            router,
+            "invoke",
+            json!({"target":{"app":"App","name":name},"name":"Invoke"}),
+        );
         assert_eq!(result["resolution"]["status"], "unique", "{result}");
         assert_eq!(result["dispatch"]["success"], true);
         assert_eq!(router.backend.invoked.len(), 1);
         let (handle, action) = &router.backend.invoked[0];
         assert_eq!(action, "Invoke");
         assert_eq!(handle.0.rsplit_once(':').unwrap().1, "2");
-        assert_eq!(handle.0, format!("capture-{}:2", router.backend.capture_serial));
-        assert_eq!(router.backend.capture_queries.borrow().last().unwrap().process_id, Some(4242));
+        assert_eq!(
+            handle.0,
+            format!("capture-{}:2", router.backend.capture_serial)
+        );
+        assert_eq!(
+            router
+                .backend
+                .capture_queries
+                .borrow()
+                .last()
+                .unwrap()
+                .process_id,
+            Some(4242)
+        );
     }
 
     fn coverage_page(router: &mut Router<FakeBackend>, name: &str, app: &str) {
-        let result = coverage_request(router, "look", json!({"target":{"app":app,"name":name},"offset":0,"limit":1,"direct":true,"format":"debug","tree":true}));
+        let result = coverage_request(
+            router,
+            "look",
+            json!({"target":{"app":app,"name":name},"offset":0,"limit":1,"direct":true,"format":"debug","tree":true}),
+        );
         assert_eq!(result["children"]["total"], 0);
         assert_eq!(result["children"]["tree"], "[]");
         assert_eq!(result["children"]["parent"]["app"], app);
@@ -2604,7 +2651,11 @@ mod tests {
     fn coverage_retains_name_after_depth_zero_capture() {
         let mut router = coverage_router();
         let name = coverage_name(&mut router);
-        coverage_request(&mut router, "look", json!({"app":"App","screenshot":false,"depth":0,"childDepth":0,"frames":false}));
+        coverage_request(
+            &mut router,
+            "look",
+            json!({"app":"App","screenshot":false,"depth":0,"childDepth":0,"frames":false}),
+        );
         coverage_invoke(&mut router, &name);
     }
 
@@ -2621,7 +2672,11 @@ mod tests {
         for alias in ["4242", "com.example.app"] {
             let mut router = coverage_router();
             let name = coverage_name(&mut router);
-            coverage_request(&mut router, "look", json!({"app":"App","childDepth":0,"screenshot":false}));
+            coverage_request(
+                &mut router,
+                "look",
+                json!({"app":"App","childDepth":0,"screenshot":false}),
+            );
             coverage_page(&mut router, &name, alias);
             let page = router.snapshot.as_ref().unwrap();
             assert_eq!(page.app.name, "App");
@@ -2633,14 +2688,19 @@ mod tests {
 
     #[test]
     fn coverage_native_truncation_retains_names_in_look_and_stability() {
-        for (method, single) in [("look", false), ("wait_for_stability", true), ("wait_for_stability", false)] {
+        for (method, single) in [
+            ("look", false),
+            ("wait_for_stability", true),
+            ("wait_for_stability", false),
+        ] {
             let mut router = coverage_router();
             let name = coverage_name(&mut router);
             let full = router.backend.snapshot.clone();
             let root = &mut router.backend.snapshot.app.windows[0].root;
             root.children.clear();
             root.truncation_reason = Some("native-safety-limit".into());
-            let mut params = json!({"app":"App","screenshot":false,"stableMs":0,"timeoutMs":0,"intervalMs":10});
+            let mut params =
+                json!({"app":"App","screenshot":false,"stableMs":0,"timeoutMs":0,"intervalMs":10});
             if single {
                 params[axon_core::SINGLE_STABILITY_CAPTURE] = json!(true);
             }
@@ -2662,7 +2722,12 @@ mod tests {
             let name = coverage_name(&mut router);
             router.backend.snapshot.app.windows[0].root.children.clear();
             coverage_request(&mut router, "look", params);
-            let response = router.request(request("invoke", json!({"target":{"app":"App","name":name},"name":"Invoke"}))).unwrap();
+            let response = router
+                .request(request(
+                    "invoke",
+                    json!({"target":{"app":"App","name":name},"name":"Invoke"}),
+                ))
+                .unwrap();
             let JsonRpcResponse::Failure(failure) = response else {
                 panic!("complete capture must revoke omitted names");
             };
@@ -2677,12 +2742,21 @@ mod tests {
         let name = coverage_name(&mut router);
         let full = router.backend.snapshot.clone();
         router.backend.snapshot.app.windows[0].root.children.clear();
-        coverage_request(&mut router, "look", json!({"app":"App","childDepth":10,"screenshot":false}));
+        coverage_request(
+            &mut router,
+            "look",
+            json!({"app":"App","childDepth":10,"screenshot":false}),
+        );
         router.backend.snapshot = full;
         coverage_invoke(&mut router, &name);
         router.backend.snapshot.app.windows[0].root.children.clear();
         coverage_request(&mut router, "look", json!({"app":"App","screenshot":false}));
-        let response = router.request(request("invoke", json!({"target":{"app":"App","name":name},"name":"Invoke"}))).unwrap();
+        let response = router
+            .request(request(
+                "invoke",
+                json!({"target":{"app":"App","name":name},"name":"Invoke"}),
+            ))
+            .unwrap();
         assert!(matches!(response, JsonRpcResponse::Failure(_)));
         assert_eq!(router.backend.invoked.len(), 1);
     }
@@ -2691,7 +2765,11 @@ mod tests {
     fn coverage_all_children_page_is_still_partial() {
         let mut router = coverage_router();
         let name = coverage_name(&mut router);
-        let page = coverage_request(&mut router, "look", json!({"target":{"app":"App","name":name},"all":true,"format":"debug","tree":true}));
+        let page = coverage_request(
+            &mut router,
+            "look",
+            json!({"target":{"app":"App","name":name},"all":true,"format":"debug","tree":true}),
+        );
         assert_eq!(page["children"]["total"], 0);
         assert_eq!(page["children"]["tree"], "[]");
         assert_eq!(router.backend.child_page_requests[0].1.limit, None);
@@ -2707,9 +2785,13 @@ mod tests {
         let result = coverage_request(&mut router, "look", json!({}));
         assert!(result["apps"].is_array());
         assert_eq!(router.backend.capture_queries.borrow().len(), captures);
-        assert!(matches!(router.semantic_names.select(&axon_core::WireElementTarget {
-            app: "App".into(), name,
-        }), SemanticSelection::Selected(_)));
+        assert!(matches!(
+            router.semantic_names.select(&axon_core::WireElementTarget {
+                app: "App".into(),
+                name,
+            }),
+            SemanticSelection::Selected(_)
+        ));
     }
 
     #[test]
@@ -2721,7 +2803,12 @@ mod tests {
             let mut params = json!({"app":"App","stableMs":0,"timeoutMs":0,"intervalMs":10});
             params[axon_core::SINGLE_STABILITY_CAPTURE] = json!(single);
             coverage_request(&mut router, "wait_for_stability", params);
-            let response = router.request(request("invoke", json!({"target":{"app":"App","name":name},"name":"Invoke"}))).unwrap();
+            let response = router
+                .request(request(
+                    "invoke",
+                    json!({"target":{"app":"App","name":name},"name":"Invoke"}),
+                ))
+                .unwrap();
             let JsonRpcResponse::Failure(failure) = response else {
                 panic!("complete stability capture must revoke omitted name");
             };
@@ -3868,7 +3955,10 @@ mod tests {
         let captures = backend.capture_queries.clone();
         let mut router = Router::new(backend);
         let name = router
-            .register_snapshot(&router.backend.snapshot.clone(), SemanticRegistrationCoverage::Complete)
+            .register_snapshot(
+                &router.backend.snapshot.clone(),
+                SemanticRegistrationCoverage::Complete,
+            )
             .into_iter()
             .find(|name| name.label == "save")
             .unwrap()
@@ -3907,7 +3997,10 @@ mod tests {
         let backend = backend(vec![node("save")], None);
         let mut router = Router::new(backend);
         let name = router
-            .register_snapshot(&router.backend.snapshot.clone(), SemanticRegistrationCoverage::Complete)
+            .register_snapshot(
+                &router.backend.snapshot.clone(),
+                SemanticRegistrationCoverage::Complete,
+            )
             .into_iter()
             .find(|name| name.label == "save")
             .unwrap()
@@ -3938,7 +4031,10 @@ mod tests {
         let backend = backend(vec![node("save")], None);
         let mut router = Router::new(backend);
         let name = router
-            .register_snapshot(&router.backend.snapshot.clone(), SemanticRegistrationCoverage::Complete)
+            .register_snapshot(
+                &router.backend.snapshot.clone(),
+                SemanticRegistrationCoverage::Complete,
+            )
             .into_iter()
             .find(|name| name.label == "save")
             .unwrap()
