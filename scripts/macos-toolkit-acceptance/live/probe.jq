@@ -1,7 +1,7 @@
 # Shared by the live lane and hosted recorded-response tests.
 def ok: .result.isError == false;
 def observation: .result.structuredContent;
-def nodes: observation.app.windows[]?.root | .. | objects;
+def nodes: observation.app | objects | .windows[]?.root | .. | objects;
 def named_button($label):
   nodes | select(.role == "AXButton" and .label == $label
     and ((.actions // []) | index("AXPress"))

@@ -392,8 +392,8 @@ jobs:
             exit 1
           fi
           retained_app="$(printf '%s' "$look" | probe app_name -er)"
-          clear_name="$(printf \'%s\' "$look" | probe \'button_name("All Clear")\' -er)"
-          one_name="$(printf \'%s\' "$look" | probe \'button_name("1")\' -er)"
+          clear_name="$(printf '%s' "$look" | probe 'button_name("All Clear")' -er)"
+          one_name="$(printf '%s' "$look" | probe 'button_name("1")' -er)"
           echo 'Calculator All Clear and digit 1 buttons have retained app-scoped semantic names'
 
           shallow="$(printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"look","arguments":{"app":"Calculator","screenshot":false,"childDepth":0,"depth":0,"frames":false}}}' | "$cli" mcp)"
