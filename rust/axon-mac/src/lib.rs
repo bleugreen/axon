@@ -3366,8 +3366,6 @@ mod tests {
                 target: &SnapshotHandle,
                 action: &str,
             ) -> Result<(), axon_core::BackendError> {
-                let fresh = self.last_capture.as_ref().expect("invoke requires fresh capture");
-                assert_eq!(fresh.index_for_handle(target).unwrap(), BUTTON);
                 self.invoked_handles.push(target.clone());
                 self.invokes.push(action.into());
                 Ok(())
@@ -3687,6 +3685,8 @@ mod tests {
             assert_eq!(result["dispatchSuccess"], true);
             assert_eq!(router.backend.invokes, ["AXPress"]);
             assert_eq!(router.backend.invoked_handles.len(), 1);
+            let fresh = router.backend.last_capture.as_ref().unwrap();
+            assert_eq!(fresh.index_for_handle(&router.backend.invoked_handles[0]).unwrap(), BUTTON);
             assert_eq!(router.backend.capture_queries.last().unwrap().process_id, Some(TEXTEDIT as u32));
         }
 
@@ -3733,6 +3733,80 @@ mod tests {
                 assert_eq!(page.app.identifier.as_deref(), Some("com.apple.TextEdit"));
                 assert_eq!(page.app.process_id, Some(TEXTEDIT as u32));
                 invoke_observed_save(&mut router, target);
+            }
+        }
+
+        #[test]
+        fn semantic_coverage_display_controls_do_not_preserve_omitted_names() {
+            for display in [
+                json!({"depth":0}),
+                json!({"frames":false}),
+                json!({"tree":false}),
+                json!({"format":"debug"}),
+            ] {
+                let mut router = router(NativeFake::new());
+                let target = observed_save(&mut router);
+                router.backend.snapshot.app.windows[0].root.children.clear();
+                let mut params = display;
+                params["app"] = json!("TextEdit");
+                params["screenshot"] = json!(false);
+                ok(&mut router, "look", params);
+                let error = call(&mut router, "invoke", json!({"target":target,"name":"AXPress"})).unwrap_err();
+                assert_eq!(error.code, -32002);
+                assert!(router.backend.invokes.is_empty());
+            }
+        }
+
+        #[test]
+        fn semantic_coverage_partial_intent_and_native_truncation_retain_names() {
+            for explicit_bound in [true, false] {
+                let mut router = router(NativeFake::new());
+                let target = observed_save(&mut router);
+                let original = router.backend.snapshot.clone();
+                let root = &mut router.backend.snapshot.app.windows[0].root;
+                root.children.clear();
+                let mut params = json!({"app":"TextEdit","screenshot":false});
+                if explicit_bound {
+                    // The backend returns no marker: capture intent alone still makes it partial.
+                    params["childDepth"] = json!(0);
+                } else {
+                    // A marker below the root must be noticed even without a request bound.
+                    let mut child = original.app.windows[0].root.children[0].clone();
+                    child.truncation_reason = Some("native safety limit".into());
+                    root.children.push(child);
+                }
+                ok(&mut router, "look", params);
+                router.backend.snapshot = original;
+                invoke_observed_save(&mut router, target.clone());
+                router.backend.snapshot.app.windows[0].root.children.clear();
+                ok(&mut router, "look", json!({"app":"TextEdit","screenshot":false}));
+                let error = call(&mut router, "invoke", json!({"target":target,"name":"AXPress"})).unwrap_err();
+                assert_eq!(error.code, -32002, "a later complete capture revokes the retained name");
+                assert_eq!(router.backend.invokes.len(), 1);
+            }
+        }
+
+        #[test]
+        fn semantic_coverage_stability_captures_use_native_coverage() {
+            for truncated in [true, false] {
+                let mut router = router(NativeFake::new());
+                let target = observed_save(&mut router);
+                let original = router.backend.snapshot.clone();
+                let root = &mut router.backend.snapshot.app.windows[0].root;
+                root.children.clear();
+                root.truncation_reason = truncated.then(|| "native safety limit".into());
+                let result = ok(&mut router, "wait_for_stable", json!({
+                    "app":"TextEdit","stableMs":0,"timeoutMs":100,"intervalMs":10
+                }));
+                assert_eq!(result["wait"]["success"], true);
+                router.backend.snapshot = original;
+                if truncated {
+                    invoke_observed_save(&mut router, target);
+                } else {
+                    let error = call(&mut router, "invoke", json!({"target":target,"name":"AXPress"})).unwrap_err();
+                    assert_eq!(error.code, -32002);
+                    assert!(router.backend.invokes.is_empty());
+                }
             }
         }
 
