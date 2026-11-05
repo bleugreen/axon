@@ -3361,26 +3361,35 @@ mod tests {
                 target: &SnapshotHandle,
                 request: axon_core::ChildPageRequest,
             ) -> Result<axon_core::ChildPageCapture, axon_core::BackendError> {
-                assert!(
-                    target.0.ends_with(":2"),
+                let active = self.last_capture.as_ref().expect("paging needs an active capture");
+                assert_eq!(
+                    active.index_for_handle(target).expect("paging must reject stale cache handles"),
+                    BUTTON,
                     "page must address Save, not another node"
                 );
                 self.page_handles.push(target.clone());
                 self.capture_sequence += 1;
-                Ok(axon_core::ChildPageCapture {
+                let page = axon_core::ChildPageCapture {
                     snapshot: axon_core::SnapshotId(format!("mac-page-{}", self.capture_sequence)),
                     parent: self.snapshot.node(BUTTON).unwrap().clone(),
                     offset: request.offset,
                     limit: request.limit.unwrap_or(1),
                     total: Some(0),
                     children: Vec::new(),
-                })
+                };
+                let mut active = self.snapshot.clone();
+                active.id = page.snapshot.clone();
+                active.app.windows[0].root = page.parent.clone();
+                self.last_capture = Some(active);
+                Ok(page)
             }
             fn invoke(
                 &mut self,
                 target: &SnapshotHandle,
                 action: &str,
             ) -> Result<(), axon_core::BackendError> {
+                self.last_capture.as_ref().expect("invoke needs active capture")
+                    .index_for_handle(target).expect("invoke must reject stale cache handles");
                 self.invoked_handles.push(target.clone());
                 self.invokes.push(action.into());
                 Ok(())
@@ -3717,6 +3726,7 @@ mod tests {
         }
 
         fn empty_save_page(router: &mut Router<NativeFake>, target: Value) {
+            let before = router.backend.capture_sequence;
             let result = ok(
                 router,
                 "look",
@@ -3728,9 +3738,11 @@ mod tests {
             assert_eq!(result["children"]["total"], 0);
             assert_eq!(result["children"]["tree"], "[]");
             assert_eq!(
-                router.backend.page_handles,
-                [SnapshotHandle("mac-capture-1:2".into())]
+                router.backend.page_handles.last(),
+                Some(&SnapshotHandle(format!("mac-capture-{}:2", before + 1)))
             );
+            assert_eq!(router.backend.capture_queries.last().unwrap().process_id, Some(TEXTEDIT as u32));
+            assert_eq!(router.backend.capture_sequence, before + 2);
         }
 
         #[test]
@@ -3933,6 +3945,19 @@ mod tests {
                     assert!(router.backend.invokes.is_empty());
                 }
             }
+        }
+
+        #[test]
+        fn semantic_coverage_paging_after_action_and_previous_page_uses_fresh_handles() {
+            let mut router = router(NativeFake::new());
+            let target = observed_save(&mut router);
+            // Finding the target performs a new capture and invalidates the observed handle.
+            let found = ok(&mut router, "find", json!({"target":target}));
+            assert_eq!(found["resolution"]["status"], "unique");
+            empty_save_page(&mut router, target.clone());
+            // Paging also replaces the active native cache.
+            empty_save_page(&mut router, target.clone());
+            invoke_observed_save(&mut router, target);
         }
 
         fn also_refused(result: &Value) -> String {
