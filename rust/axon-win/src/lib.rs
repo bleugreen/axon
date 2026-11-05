@@ -1109,6 +1109,7 @@ impl<
                         "semantic target has no live retained capture; call look for its app first",
                     )
                 })?;
+                // Native captures replace their handle cache; retained provenance is not a live handle.
                 let (handle, _) = self.resolve(params)?;
                 let page = self
                     .backend
