@@ -2699,8 +2699,10 @@ mod tests {
     #[test]
     fn coverage_registration_page_operational_errors_do_not_retry() {
         for (query_failure, evict, stale_pages) in [
-            (true, false, 0), (false, false, 0),
-            (false, true, 0), (false, false, 1),
+            (true, false, 0),
+            (false, false, 0),
+            (false, true, 0),
+            (false, false, 1),
         ] {
             let mut router = coverage_router();
             let name = coverage_leaf_name(&mut router);
