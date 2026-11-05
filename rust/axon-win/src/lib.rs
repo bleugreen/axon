@@ -1103,25 +1103,43 @@ impl<
                         });
                     }
                 };
-                context.recorded_handle().ok_or_else(|| {
+                let recorded = context.recorded_handle().ok_or_else(|| {
                     rpc_error(
                         -32002,
                         "semantic target has no live retained capture; call look for its app first",
                     )
-                })?;
-                // Native captures replace their handle cache; retained provenance is not a live handle.
-                let (handle, _) = self.resolve(params)?;
-                let page = self
-                    .backend
-                    .capture_child_page(
-                        &handle,
-                        axon_core::ChildPageRequest {
-                            offset,
-                            limit,
-                            include_descendants: !direct,
-                        },
-                    )
-                    .map_err(backend_error)?;
+                })?.clone();
+                let paging = axon_core::ChildPageRequest {
+                    offset,
+                    limit,
+                    include_descendants: !direct,
+                };
+                // Current page-local handles can reach beyond whole-app capture limits.
+                let retained_page = if self.backend.retains_handle(&recorded).map_err(backend_error)? {
+                    match self.backend.capture_child_page(&recorded, paging) {
+                        Ok(page) => Some(page),
+                        Err(axon_core::BackendError::StaleHandle { .. }) => None,
+                        Err(error) => return Err(backend_error(error)),
+                    }
+                } else {
+                    None
+                };
+                let page = if let Some(page) = retained_page {
+                    page
+                } else {
+                    let (handle, _) = self.resolve(params)?;
+                    self.backend.capture_child_page(&handle, paging).map_err(|error| {
+                        if matches!(error, axon_core::BackendError::StaleHandle { .. }) {
+                            JsonRpcError {
+                                code: -32002,
+                                message: format!("semantic name not found: {} / {}", target.app, target.name),
+                                data: Some(json!({"status":"missing","query":target})),
+                            }
+                        } else {
+                            backend_error(error)
+                        }
+                    })?
+                };
                 let mut parent = page.parent.clone();
                 parent.children = page.children.clone();
                 let snapshot = Snapshot {
@@ -2748,6 +2766,12 @@ mod tests {
     }
 
     fn coverage_page(router: &mut Router<FakeBackend>, name: &str, app: &str) {
+        let SemanticSelection::Selected(context) = router.semantic_names.select(&axon_core::WireElementTarget {
+            app: app.into(), name: name.into(),
+        }) else { panic!("page target must be selected"); };
+        let recorded = context.recorded_handle().unwrap().clone();
+        let current = router.backend.require_active_handle(&recorded).is_ok();
+        let captures = router.backend.capture_queries.borrow().len();
         let result = coverage_request(
             router,
             "look",
@@ -2758,15 +2782,17 @@ mod tests {
         assert_eq!(result["children"]["parent"]["app"], app);
         assert_eq!(router.backend.child_page_requests.len(), 1);
         let (handle, request) = &router.backend.child_page_requests[0];
-        assert_eq!(
-            handle.0,
-            format!("capture-{}:2", router.backend.capture_serial - 1)
-        );
         let queries = router.backend.capture_queries.borrow();
-        let query = queries.last().unwrap();
-        assert_eq!(query.process_id, Some(4242));
-        assert_eq!(query.name, None);
-        assert_eq!(query.identifier, None);
+        assert_eq!(queries.len(), captures + usize::from(!current));
+        if current {
+            assert_eq!(handle, &recorded);
+        } else {
+            assert_eq!(handle.0, format!("capture-{}:2", router.backend.capture_serial - 1));
+            let query = queries.last().unwrap();
+            assert_eq!(query.process_id, Some(4242));
+            assert_eq!(query.name, None);
+            assert_eq!(query.identifier, None);
+        }
         assert_eq!(request.offset, 0);
         assert_eq!(request.limit, Some(1));
         assert!(!request.include_descendants);
