@@ -3209,6 +3209,11 @@ mod tests {
             /// Every post, in order: the only record of what reached the session.
             dispatches: Vec<String>,
             invokes: Vec<String>,
+            invoked_handles: Vec<SnapshotHandle>,
+            capture_sequence: usize,
+            capture_queries: Vec<AppQuery>,
+            last_capture: Option<Snapshot>,
+            page_handles: Vec<SnapshotHandle>,
             point_owner: Option<i32>,
             window_origin: (f64, f64),
             target_alive: bool,
@@ -3267,6 +3272,11 @@ mod tests {
                     activations: Vec::new(),
                     dispatches: Vec::new(),
                     invokes: Vec::new(),
+                    invoked_handles: Vec::new(),
+                    capture_sequence: 0,
+                    capture_queries: Vec::new(),
+                    last_capture: None,
+                    page_handles: Vec::new(),
                     point_owner: Some(TEXTEDIT),
                     window_origin: (0.0, 0.0),
                     target_alive: true,
@@ -3325,14 +3335,40 @@ mod tests {
                     })
                     .collect())
             }
-            fn capture(&mut self, _: &AppQuery) -> Result<Snapshot, axon_core::BackendError> {
-                Ok(self.snapshot.clone())
+            fn capture(&mut self, app: &AppQuery) -> Result<Snapshot, axon_core::BackendError> {
+                assert!(self.find(app).is_some(), "capture must select the intended process");
+                self.capture_queries.push(app.clone());
+                self.capture_sequence += 1;
+                let mut snapshot = self.snapshot.clone();
+                snapshot.id = axon_core::SnapshotId(format!("mac-capture-{}", self.capture_sequence));
+                self.last_capture = Some(snapshot.clone());
+                Ok(snapshot)
+            }
+            fn capture_child_page(
+                &mut self,
+                target: &SnapshotHandle,
+                request: axon_core::ChildPageRequest,
+            ) -> Result<axon_core::ChildPageCapture, axon_core::BackendError> {
+                assert!(target.0.ends_with(":2"), "page must address Save, not another node");
+                self.page_handles.push(target.clone());
+                self.capture_sequence += 1;
+                Ok(axon_core::ChildPageCapture {
+                    snapshot: axon_core::SnapshotId(format!("mac-page-{}", self.capture_sequence)),
+                    parent: self.snapshot.node(BUTTON).unwrap().clone(),
+                    offset: request.offset,
+                    limit: request.limit.unwrap_or(1),
+                    total: Some(0),
+                    children: Vec::new(),
+                })
             }
             fn invoke(
                 &mut self,
-                _: &SnapshotHandle,
+                target: &SnapshotHandle,
                 action: &str,
             ) -> Result<(), axon_core::BackendError> {
+                let fresh = self.last_capture.as_ref().expect("invoke requires fresh capture");
+                assert_eq!(fresh.index_for_handle(target).unwrap(), BUTTON);
+                self.invoked_handles.push(target.clone());
                 self.invokes.push(action.into());
                 Ok(())
             }
@@ -3636,6 +3672,68 @@ mod tests {
                 .name
                 .clone();
             json!({"app": "TextEdit", "name": name})
+        }
+
+        fn observed_save(router: &mut Router<NativeFake>) -> Value {
+            let result = ok(router, "look", json!({"app":"TextEdit","screenshot":false}));
+            let name = result.pointer("/app/windows/0/root/children/1/name")
+                .and_then(Value::as_str).expect("full look emits Save's semantic name");
+            json!({"app":"TextEdit","name":name})
+        }
+
+        fn invoke_observed_save(router: &mut Router<NativeFake>, target: Value) {
+            let result = ok(router, "invoke", json!({"target":target,"name":"AXPress"}));
+            assert_eq!(result["targetResolution"]["status"], "unique");
+            assert_eq!(result["dispatchSuccess"], true);
+            assert_eq!(router.backend.invokes, ["AXPress"]);
+            assert_eq!(router.backend.invoked_handles.len(), 1);
+            assert_eq!(router.backend.capture_queries.last().unwrap().process_id, Some(TEXTEDIT as u32));
+        }
+
+        fn empty_save_page(router: &mut Router<NativeFake>, target: Value) {
+            let result = ok(router, "look", json!({
+                "target":target,"offset":0,"limit":1,"direct":true
+            }));
+            assert_eq!(result["children"]["total"], 0);
+            assert_eq!(result["children"]["tree"], "[]");
+            assert_eq!(router.backend.page_handles.len(), 1);
+        }
+
+        #[test]
+        fn semantic_coverage_shallow_look_retains_original_name() {
+            let mut router = router(NativeFake::new());
+            let target = observed_save(&mut router);
+            ok(&mut router, "look", json!({
+                "app":"TextEdit","screenshot":false,"depth":0,"childDepth":0,"frames":false
+            }));
+            invoke_observed_save(&mut router, target);
+        }
+
+        #[test]
+        fn semantic_coverage_empty_leaf_page_retains_original_name() {
+            let mut router = router(NativeFake::new());
+            let target = observed_save(&mut router);
+            empty_save_page(&mut router, target.clone());
+            invoke_observed_save(&mut router, target);
+        }
+
+        #[test]
+        fn semantic_coverage_combined_alias_page_preserves_canonical_identity() {
+            for alias in ["4242", "com.apple.TextEdit"] {
+                let mut router = router(NativeFake::new());
+                let target = observed_save(&mut router);
+                ok(&mut router, "look", json!({
+                    "app":"TextEdit","screenshot":false,"depth":0,"childDepth":0,"frames":false
+                }));
+                let mut alias_target = target.clone();
+                alias_target["app"] = json!(alias);
+                empty_save_page(&mut router, alias_target);
+                let page = router.snapshot.as_ref().unwrap();
+                assert_eq!(page.app.name, "TextEdit");
+                assert_eq!(page.app.identifier.as_deref(), Some("com.apple.TextEdit"));
+                assert_eq!(page.app.process_id, Some(TEXTEDIT as u32));
+                invoke_observed_save(&mut router, target);
+            }
         }
 
         fn also_refused(result: &Value) -> String {
