@@ -2542,11 +2542,16 @@ mod tests {
         JsonRpcRequest::new(Some(JsonRpcId::Integer(1)), method, Some(params))
     }
     fn coverage_router() -> Router<FakeBackend> {
-        let mut backend = backend(vec![node("Save"), node("Save")], None);
+        let mut panel = node("Panel");
+        panel.children = vec![node("Save")];
+        panel.child_count = Some(1);
+        let mut other_panel = node("OtherPanel");
+        other_panel.children = vec![node("Save")];
+        other_panel.child_count = Some(1);
+        let mut backend = backend(vec![panel, other_panel], None);
+        backend.snapshot.app.windows[0].root.child_count = Some(2);
         backend.snapshot.app.process_id = Some(4242);
         backend.snapshot.app.identifier = Some("com.example.app".into());
-        backend.snapshot.app.windows[0].root.children[0].identifier = Some("left".into());
-        backend.snapshot.app.windows[0].root.children[1].identifier = Some("right".into());
         backend.fresh_capture_ids = true;
         Router::new(backend)
     }
@@ -2560,9 +2565,9 @@ mod tests {
 
     fn coverage_name(router: &mut Router<FakeBackend>) -> String {
         let result = coverage_request(router, "look", json!({"app":"App","screenshot":false,"format":"debug","tree":true}));
-        let name = result.pointer("/observation/app/windows/0/root/children/0/name")
+        let name = result.pointer("/observation/app/windows/0/root/children/0/children/0/name")
             .and_then(Value::as_str).expect("first response emits a descendant name").to_owned();
-        assert_ne!(name, "Save", "must use the emitted semantic name");
+        assert!(name.contains("panel"), "duplicate labels require ancestry: {name}");
         name
     }
 
@@ -2573,8 +2578,8 @@ mod tests {
         assert_eq!(router.backend.invoked.len(), 1);
         let (handle, action) = &router.backend.invoked[0];
         assert_eq!(action, "Invoke");
-        assert_eq!(handle.0.rsplit_once(':').unwrap().1, "1");
-        assert_eq!(handle.0, format!("capture-{}:1", router.backend.capture_serial));
+        assert_eq!(handle.0.rsplit_once(':').unwrap().1, "2");
+        assert_eq!(handle.0, format!("capture-{}:2", router.backend.capture_serial));
         assert_eq!(router.backend.capture_queries.borrow().last().unwrap().process_id, Some(4242));
     }
 
