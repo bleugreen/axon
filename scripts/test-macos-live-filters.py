@@ -189,8 +189,10 @@ print(json.dumps(json.loads((pathlib.Path(os.environ["FIXTURES"]) / (name + ".js
             cli.chmod(0o755)
             log = root / "requests"
             script = 'set -euo pipefail\nopen() { :; }\nsleep() { :; }\n' + body
+            # This bounds the whole simulation, including repeated interpreter launches.
+            # It is not the probe's resolve deadline; macOS process startup can dominate it.
             result = subprocess.run([helper["BASH"], "-c", script], cwd=REPO, text=True,
-                capture_output=True, timeout=30,
+                capture_output=True, timeout=120,
                 env={**os.environ, "cli": str(cli), "REQUESTS": str(log),
                      "FIXTURES": str(LIVE / "responses"), "CAPTURES": json.dumps(captures)})
             requests = [json.loads(line) for line in log.read_text().splitlines()]
