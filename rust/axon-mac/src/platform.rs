@@ -697,7 +697,10 @@ impl MacBackend {
         self.handles
             .get(handle)
             .map(|v| v.0)
-            .ok_or_else(|| op("resolve", "snapshot handle is stale or unknown"))
+            .ok_or_else(|| BackendError::StaleHandle {
+                operation: "resolve".into(),
+                message: "snapshot handle is stale or unknown".into(),
+            })
     }
     fn set_attribute(
         &self,
@@ -918,6 +921,9 @@ impl PlatformBackend for MacBackend {
             .map(|(i, element)| (snapshot.handle(i), element))
             .collect();
         Ok(snapshot)
+    }
+    fn retains_handle(&mut self, handle: &SnapshotHandle) -> Result<bool, BackendError> {
+        Ok(self.handles.contains_key(handle))
     }
     fn capture_child_page(
         &mut self,
@@ -1222,6 +1228,26 @@ impl PointerTargetVerifier for MacBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn semantic_coverage_retains_only_exact_native_cache_members() {
+        let mut backend = MacBackend::new().unwrap();
+        let handle = SnapshotHandle("cache-one:3".into());
+        // Cache ownership is independent of querying a live Accessibility element.
+        backend
+            .handles
+            .insert(handle.clone(), cfstr("owned native reference").unwrap());
+        assert!(backend.retains_handle(&handle).unwrap());
+        for absent in ["cache-one:2", "cache-one:999", "cache-two:3", "malformed"] {
+            assert!(
+                !backend
+                    .retains_handle(&SnapshotHandle(absent.into()))
+                    .unwrap()
+            );
+        }
+        backend.handles.clear();
+        assert!(!backend.retains_handle(&handle).unwrap());
+    }
+
     #[test]
     fn mirrors_swift_role_tables() {
         assert!(editable("AXTextField"));

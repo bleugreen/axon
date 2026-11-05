@@ -6,10 +6,10 @@ use axon_core::{
     DiffPolicy, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId,
     JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, PointSpace, PointTarget,
     PointerContract, ResolutionStatus, RunEnvelope, SemanticElementName, SemanticLookup,
-    SemanticNameRegistry, SemanticSelection, SinceToken, Snapshot, SnapshotHandle,
-    TextLocationResolver, TextLocationSource, TextLocationTarget, TextRecognitionProvider,
-    ToolDispatcher, classify_semantic_diff, dispatch_in_foreground, goal_success,
-    look_since_response, pointer_target_is_point, prepare_run, select_delivery,
+    SemanticNameRegistry, SemanticRegistrationCoverage, SemanticSelection, SinceToken, Snapshot,
+    SnapshotHandle, TextLocationResolver, TextLocationSource, TextLocationTarget,
+    TextRecognitionProvider, ToolDispatcher, classify_semantic_diff, dispatch_in_foreground,
+    goal_success, look_since_response, pointer_target_is_point, prepare_run, select_delivery,
 };
 use serde_json::{Map, Value, json};
 use std::{
@@ -565,13 +565,18 @@ impl<
         }
     }
 
-    fn register_snapshot(&mut self, snapshot: &Snapshot) -> Vec<axon_core::SemanticElementName> {
+    fn register_snapshot(
+        &mut self,
+        snapshot: &Snapshot,
+        coverage: SemanticRegistrationCoverage,
+    ) -> Vec<axon_core::SemanticElementName> {
         let live_processes = self.backend.live_process_ids().ok();
-        self.semantic_names.register_with_liveness(snapshot, |pid| {
-            live_processes
-                .as_ref()
-                .is_none_or(|processes| processes.contains(&pid))
-        })
+        self.semantic_names
+            .register_with_liveness(snapshot, coverage, |pid| {
+                live_processes
+                    .as_ref()
+                    .is_none_or(|processes| processes.contains(&pid))
+            })
     }
 
     /// Resolves a text location to the point a pointer action aims at, and what stands behind it.
@@ -1566,41 +1571,70 @@ impl<
                     });
                 }
             };
-            let handle = context
-                .recorded_handle()
-                .ok_or_else(|| {
-                    rpc_error(
-                        -32002,
-                        "semantic target has no live retained capture; call look for its app first",
-                    )
-                })?
-                .clone();
-            let page = self
-                .backend
-                .capture_child_page(
-                    &handle,
-                    axon_core::ChildPageRequest {
-                        offset: *offset,
-                        limit: *limit,
-                        include_descendants: !*direct,
-                    },
+            let recorded = context.recorded_handle().ok_or_else(|| {
+                rpc_error(
+                    -32002,
+                    "semantic target has no live retained capture; call look for its app first",
                 )
-                .map_err(backend_error)?;
+            })?;
+            let page_request = || axon_core::ChildPageRequest {
+                offset: *offset,
+                limit: *limit,
+                include_descendants: !*direct,
+            };
+            // Page-local captures can expose nodes beyond full-app capture limits. Reuse only
+            // backend-confirmed active handles, not the router's last displayed snapshot.
+            let retained_page = if self
+                .backend
+                .retains_handle(recorded)
+                .map_err(backend_error)?
+            {
+                match self.backend.capture_child_page(recorded, page_request()) {
+                    Ok(page) => Some(page),
+                    Err(axon_core::BackendError::StaleHandle { .. }) => None,
+                    Err(error) => return Err(backend_error(error)),
+                }
+            } else {
+                None
+            };
+            let page = if let Some(page) = retained_page {
+                page
+            } else {
+                // Another capture may invalidate the handle even after the ownership query.
+                // Retry once against fresh process-pinned evidence; never retry operational errors.
+                let (handle, _) = self.resolve(params)?;
+                self.backend
+                    .capture_child_page(&handle, page_request())
+                    .map_err(|error| {
+                        if matches!(error, axon_core::BackendError::StaleHandle { .. }) {
+                            JsonRpcError {
+                                code: -32002,
+                                message: format!(
+                                    "semantic name not found: {} / {}",
+                                    target.app, target.name
+                                ),
+                                data: Some(json!({"status":"missing","query":target})),
+                            }
+                        } else {
+                            backend_error(error)
+                        }
+                    })?
+            };
             let mut parent = page.parent.clone();
             parent.children = page.children.clone();
             let snapshot = Snapshot {
                 id: page.snapshot.clone(),
                 app: axon_core::Application {
-                    name: target.app.clone(),
+                    name: context.app_name().to_owned(),
                     process_id: context.process_id(),
-                    identifier: None,
+                    identifier: context.app_identifier().map(str::to_owned),
                     windows: vec![axon_core::Window {
                         title: None,
                         root: parent,
                     }],
                 },
             };
-            let names = self.register_snapshot(&snapshot);
+            let names = self.register_snapshot(&snapshot, SemanticRegistrationCoverage::Partial);
             let rendered = axon_core::render_semantic_names(&snapshot, &names);
             self.snapshot = Some(snapshot);
             return Ok(json!({
@@ -1636,7 +1670,8 @@ impl<
             .backend
             .capture_bounded(&app, axon_core::CaptureBounds { child_depth })
             .map_err(backend_error)?;
-        let names = self.register_snapshot(&snapshot);
+        let coverage = SemanticRegistrationCoverage::for_capture(&snapshot, child_depth);
+        let names = self.register_snapshot(&snapshot, coverage);
         self.observation_sequence += 1;
         let app_identity = snapshot
             .app
@@ -1854,7 +1889,8 @@ impl<
         }
         let started = Instant::now();
         let first = self.backend.capture(&app).map_err(backend_error)?;
-        let first_names = self.register_snapshot(&first);
+        let coverage = SemanticRegistrationCoverage::for_capture(&first, None);
+        let first_names = self.register_snapshot(&first, coverage);
         if params
             .get(axon_core::SINGLE_STABILITY_CAPTURE)
             .and_then(Value::as_bool)
@@ -1869,7 +1905,8 @@ impl<
         let mut stable_since = Instant::now();
         loop {
             let snapshot = self.backend.capture(&app).map_err(backend_error)?;
-            let names = self.register_snapshot(&snapshot);
+            let coverage = SemanticRegistrationCoverage::for_capture(&snapshot, None);
+            let names = self.register_snapshot(&snapshot, coverage);
             let changed_from_last = !matches!(
                 classify_semantic_diff(
                     &last,
@@ -3209,6 +3246,15 @@ mod tests {
             /// Every post, in order: the only record of what reached the session.
             dispatches: Vec<String>,
             invokes: Vec<String>,
+            invoked_handles: Vec<SnapshotHandle>,
+            capture_sequence: usize,
+            capture_queries: Vec<AppQuery>,
+            last_capture: Option<Snapshot>,
+            page_handles: Vec<SnapshotHandle>,
+            deep_paging: bool,
+            fail_handle_query: bool,
+            fail_page: bool,
+            stale_page_failures: usize,
             point_owner: Option<i32>,
             window_origin: (f64, f64),
             target_alive: bool,
@@ -3267,6 +3313,15 @@ mod tests {
                     activations: Vec::new(),
                     dispatches: Vec::new(),
                     invokes: Vec::new(),
+                    invoked_handles: Vec::new(),
+                    capture_sequence: 0,
+                    capture_queries: Vec::new(),
+                    last_capture: None,
+                    page_handles: Vec::new(),
+                    deep_paging: false,
+                    fail_handle_query: false,
+                    fail_page: false,
+                    stale_page_failures: 0,
                     point_owner: Some(TEXTEDIT),
                     window_origin: (0.0, 0.0),
                     target_alive: true,
@@ -3325,14 +3380,117 @@ mod tests {
                     })
                     .collect())
             }
-            fn capture(&mut self, _: &AppQuery) -> Result<Snapshot, axon_core::BackendError> {
-                Ok(self.snapshot.clone())
+            fn capture(&mut self, app: &AppQuery) -> Result<Snapshot, axon_core::BackendError> {
+                assert!(
+                    self.find(app).is_some(),
+                    "capture must select the intended process"
+                );
+                self.capture_queries.push(app.clone());
+                self.capture_sequence += 1;
+                let mut snapshot = self.snapshot.clone();
+                snapshot.id =
+                    axon_core::SnapshotId(format!("mac-capture-{}", self.capture_sequence));
+                if self.deep_paging {
+                    let boundary = &mut snapshot.app.windows[0].root.children[1];
+                    boundary.children.clear();
+                    boundary.truncation_reason = Some("native app depth cap".into());
+                }
+                self.last_capture = Some(snapshot.clone());
+                Ok(snapshot)
+            }
+            fn retains_handle(
+                &mut self,
+                target: &SnapshotHandle,
+            ) -> Result<bool, axon_core::BackendError> {
+                if self.fail_handle_query {
+                    return Err(operation_failure());
+                }
+                Ok(self.last_capture.as_ref().is_some_and(|active| {
+                    active
+                        .index_for_handle(target)
+                        .ok()
+                        .is_some_and(|index| active.node(index).is_some())
+                }))
+            }
+            fn capture_child_page(
+                &mut self,
+                target: &SnapshotHandle,
+                request: axon_core::ChildPageRequest,
+            ) -> Result<axon_core::ChildPageCapture, axon_core::BackendError> {
+                if self.stale_page_failures > 0 {
+                    self.stale_page_failures -= 1;
+                    self.last_capture = None;
+                    self.page_handles.push(target.clone());
+                    return Err(axon_core::BackendError::StaleHandle {
+                        operation: "captureChildPage".into(),
+                        message: "injected cache replacement".into(),
+                    });
+                }
+                let active = self
+                    .last_capture
+                    .as_ref()
+                    .expect("paging needs an active capture");
+                let index = active
+                    .index_for_handle(target)
+                    .expect("paging must reject stale cache handles");
+                let title = active
+                    .node(index)
+                    .expect("paging needs valid native index")
+                    .title
+                    .clone();
+                fn find<'a>(
+                    node: &'a axon_core::Node,
+                    title: &Option<String>,
+                ) -> Option<&'a axon_core::Node> {
+                    if &node.title == title {
+                        return Some(node);
+                    }
+                    node.children.iter().find_map(|child| find(child, title))
+                }
+                let mut parent = find(&self.snapshot.app.windows[0].root, &title)
+                    .unwrap()
+                    .clone();
+                let mut children = parent.children.clone();
+                if !request.include_descendants {
+                    for child in &mut children {
+                        if !child.children.is_empty() {
+                            child.truncation_reason = Some("page-local depth cap".into());
+                            child.children.clear();
+                        }
+                    }
+                }
+                parent.children.clear();
+                self.page_handles.push(target.clone());
+                if self.fail_page {
+                    return Err(operation_failure());
+                }
+                self.capture_sequence += 1;
+                let page = axon_core::ChildPageCapture {
+                    snapshot: axon_core::SnapshotId(format!("mac-page-{}", self.capture_sequence)),
+                    parent,
+                    offset: request.offset,
+                    limit: request.limit.unwrap_or(1),
+                    total: Some(children.len()),
+                    children,
+                };
+                let mut active = self.snapshot.clone();
+                active.id = page.snapshot.clone();
+                active.app.windows[0].root = page.parent.clone();
+                active.app.windows[0].root.children = page.children.clone();
+                self.last_capture = Some(active);
+                Ok(page)
             }
             fn invoke(
                 &mut self,
-                _: &SnapshotHandle,
+                target: &SnapshotHandle,
                 action: &str,
             ) -> Result<(), axon_core::BackendError> {
+                self.last_capture
+                    .as_ref()
+                    .expect("invoke needs active capture")
+                    .index_for_handle(target)
+                    .expect("invoke must reject stale cache handles");
+                self.invoked_handles.push(target.clone());
                 self.invokes.push(action.into());
                 Ok(())
             }
@@ -3513,11 +3671,15 @@ mod tests {
                 &mut self,
                 handle: &SnapshotHandle,
             ) -> Result<Option<Vec<String>>, axon_core::BackendError> {
-                let index = self.snapshot.index_for_handle(handle).unwrap();
+                let snapshot = self
+                    .last_capture
+                    .as_ref()
+                    .expect("an active native capture");
+                let index = snapshot.index_for_handle(handle).unwrap();
                 if index == POPUP {
                     return Ok(Some(vec!["AXPress".into(), "AXShowMenu".into()]));
                 }
-                Ok(self.snapshot.node(index).map(|node| node.actions.clone()))
+                Ok(snapshot.node(index).map(|node| node.actions.clone()))
             }
         }
         impl BackgroundApplicationKeyboard for NativeFake {
@@ -3628,7 +3790,8 @@ mod tests {
         /// `look` registers it.
         fn element(router: &mut Router<NativeFake>, index: usize) -> Value {
             let snapshot = router.backend.snapshot.clone();
-            let names = router.register_snapshot(&snapshot);
+            let coverage = SemanticRegistrationCoverage::for_capture(&snapshot, None);
+            let names = router.register_snapshot(&snapshot, coverage);
             let name = names
                 .iter()
                 .find(|name| name.source_index == index)
@@ -3636,6 +3799,425 @@ mod tests {
                 .name
                 .clone();
             json!({"app": "TextEdit", "name": name})
+        }
+
+        fn observed_save(router: &mut Router<NativeFake>) -> Value {
+            let result = ok(router, "look", json!({"app":"TextEdit","screenshot":false}));
+            let name = result
+                .pointer("/app/windows/0/root/children/1/name")
+                .and_then(Value::as_str)
+                .expect("full look emits Save's semantic name");
+            json!({"app":"TextEdit","name":name})
+        }
+
+        fn invoke_observed_save(router: &mut Router<NativeFake>, target: Value) {
+            let result = ok(router, "invoke", json!({"target":target,"name":"AXPress"}));
+            assert_eq!(result["resolution"]["status"], "unique");
+            assert_eq!(result["dispatchSuccess"], true);
+            assert_eq!(router.backend.invokes, ["AXPress"]);
+            assert_eq!(router.backend.invoked_handles.len(), 1);
+            let fresh = router.backend.last_capture.as_ref().unwrap();
+            assert_eq!(
+                fresh
+                    .index_for_handle(&router.backend.invoked_handles[0])
+                    .unwrap(),
+                BUTTON
+            );
+            assert_eq!(
+                router.backend.capture_queries.last().unwrap().process_id,
+                Some(TEXTEDIT as u32)
+            );
+        }
+
+        fn empty_save_page(router: &mut Router<NativeFake>, target: Value) {
+            let before = router.backend.capture_sequence;
+            let context = match router
+                .semantic_names
+                .select(&serde_json::from_value(target.clone()).unwrap())
+            {
+                SemanticSelection::Selected(context) => context,
+                _ => panic!("page target must remain registered"),
+            };
+            let recorded = context.recorded_handle().unwrap().clone();
+            let retained = router.backend.retains_handle(&recorded).unwrap();
+            let captures = router.backend.capture_queries.len();
+            let result = ok(
+                router,
+                "look",
+                json!({
+                    "target":target,"offset":0,"limit":1,"direct":true
+                }),
+            );
+            assert_eq!(result["children"]["parent"], target);
+            assert_eq!(result["children"]["total"], 0);
+            assert_eq!(result["children"]["tree"], "[]");
+            let expected = if retained {
+                recorded
+            } else {
+                SnapshotHandle(format!("mac-capture-{}:2", before + 1))
+            };
+            assert_eq!(router.backend.page_handles.last(), Some(&expected));
+            assert_eq!(
+                router.backend.capture_queries.len(),
+                captures + usize::from(!retained)
+            );
+            if !retained {
+                assert_eq!(
+                    router.backend.capture_queries.last().unwrap().process_id,
+                    Some(TEXTEDIT as u32)
+                );
+            }
+            assert_eq!(
+                router.backend.capture_sequence,
+                before + 1 + usize::from(!retained)
+            );
+        }
+
+        #[test]
+        fn semantic_coverage_shallow_look_retains_original_name() {
+            let mut router = router(NativeFake::new());
+            let target = observed_save(&mut router);
+            ok(
+                &mut router,
+                "look",
+                json!({
+                    "app":"TextEdit","screenshot":false,"depth":0,"childDepth":0,"frames":false
+                }),
+            );
+            invoke_observed_save(&mut router, target);
+        }
+
+        #[test]
+        fn semantic_coverage_empty_leaf_page_retains_original_name() {
+            let mut router = router(NativeFake::new());
+            let target = observed_save(&mut router);
+            empty_save_page(&mut router, target.clone());
+            invoke_observed_save(&mut router, target);
+        }
+
+        #[test]
+        fn semantic_coverage_combined_alias_page_preserves_canonical_identity() {
+            for alias in ["4242", "com.apple.TextEdit"] {
+                let mut router = router(NativeFake::new());
+                let target = observed_save(&mut router);
+                ok(
+                    &mut router,
+                    "look",
+                    json!({
+                        "app":"TextEdit","screenshot":false,"depth":0,"childDepth":0,"frames":false
+                    }),
+                );
+                let mut alias_target = target.clone();
+                alias_target["app"] = json!(alias);
+                empty_save_page(&mut router, alias_target);
+                let page = router.snapshot.as_ref().unwrap();
+                assert_eq!(page.app.name, "TextEdit");
+                assert_eq!(page.app.identifier.as_deref(), Some("com.apple.TextEdit"));
+                assert_eq!(page.app.process_id, Some(TEXTEDIT as u32));
+                invoke_observed_save(&mut router, target);
+            }
+        }
+
+        #[test]
+        fn semantic_coverage_display_controls_do_not_preserve_omitted_names() {
+            for display in [
+                json!({"depth":0}),
+                json!({"frames":false}),
+                json!({"tree":false}),
+                json!({"format":"debug"}),
+            ] {
+                let mut router = router(NativeFake::new());
+                let target = observed_save(&mut router);
+                router.backend.snapshot.app.windows[0].root.children.clear();
+                let mut params = display;
+                params["app"] = json!("TextEdit");
+                params["screenshot"] = json!(false);
+                ok(&mut router, "look", params);
+                let error = call(
+                    &mut router,
+                    "invoke",
+                    json!({"target":target,"name":"AXPress"}),
+                )
+                .unwrap_err();
+                assert_eq!(error.code, -32002);
+                assert!(router.backend.invokes.is_empty());
+            }
+        }
+
+        #[test]
+        fn semantic_coverage_partial_intent_and_native_truncation_retain_names() {
+            for child_depth in [Some(0), Some(1), Some(100), None] {
+                let mut router = router(NativeFake::new());
+                let target = observed_save(&mut router);
+                let original = router.backend.snapshot.clone();
+                let root = &mut router.backend.snapshot.app.windows[0].root;
+                root.children.clear();
+                let mut params = json!({"app":"TextEdit","screenshot":false});
+                if let Some(depth) = child_depth {
+                    // The backend returns no marker: capture intent alone still makes it partial.
+                    params["childDepth"] = json!(depth);
+                } else {
+                    // A marker below the root must be noticed even without a request bound.
+                    let mut child = original.app.windows[0].root.children[0].clone();
+                    child.truncation_reason = Some("native safety limit".into());
+                    root.children.push(child);
+                }
+                ok(&mut router, "look", params);
+                router.backend.snapshot = original;
+                invoke_observed_save(&mut router, target.clone());
+                router.backend.snapshot.app.windows[0].root.children.clear();
+                ok(
+                    &mut router,
+                    "look",
+                    json!({"app":"TextEdit","screenshot":false}),
+                );
+                let error = call(
+                    &mut router,
+                    "invoke",
+                    json!({"target":target,"name":"AXPress"}),
+                )
+                .unwrap_err();
+                assert_eq!(
+                    error.code, -32002,
+                    "a later complete capture revokes the retained name"
+                );
+                assert_eq!(router.backend.invokes.len(), 1);
+            }
+        }
+
+        #[test]
+        fn semantic_coverage_stability_captures_use_native_coverage() {
+            for truncated in [true, false] {
+                let mut router = router(NativeFake::new());
+                let target = observed_save(&mut router);
+                let original = router.backend.snapshot.clone();
+                let root = &mut router.backend.snapshot.app.windows[0].root;
+                root.children.clear();
+                root.truncation_reason = truncated.then(|| "native safety limit".into());
+                let result = ok(
+                    &mut router,
+                    "wait_for_stability",
+                    json!({
+                        "app":"TextEdit","stableMs":0,"timeoutMs":100,"intervalMs":10
+                    }),
+                );
+                assert_eq!(result["wait"]["success"], true);
+                router.backend.snapshot = original;
+                if truncated {
+                    invoke_observed_save(&mut router, target);
+                } else {
+                    let error = call(
+                        &mut router,
+                        "invoke",
+                        json!({"target":target,"name":"AXPress"}),
+                    )
+                    .unwrap_err();
+                    assert_eq!(error.code, -32002);
+                    assert!(router.backend.invokes.is_empty());
+                }
+            }
+        }
+
+        #[test]
+        fn semantic_coverage_all_children_page_is_still_partial() {
+            let mut router = router(NativeFake::new());
+            let target = observed_save(&mut router);
+            let page = ok(&mut router, "look", json!({"target":target,"all":true}));
+            assert_eq!(page["children"]["total"], 0);
+            assert_eq!(page["children"]["tree"], "[]");
+            invoke_observed_save(&mut router, target);
+        }
+
+        #[test]
+        fn semantic_coverage_display_depth_keeps_captured_descendants_and_app_list_does_not_register()
+         {
+            let mut router = router(NativeFake::new());
+            let target = observed_save(&mut router);
+            ok(
+                &mut router,
+                "look",
+                json!({
+                    "app":"TextEdit","screenshot":false,"depth":0,"frames":false
+                }),
+            );
+            let capture_count = router.backend.capture_sequence;
+            ok(&mut router, "look", json!({}));
+            assert_eq!(router.backend.capture_sequence, capture_count);
+            invoke_observed_save(&mut router, target);
+        }
+
+        #[test]
+        fn semantic_coverage_change_check_respects_capture_bound() {
+            for bounded in [true, false] {
+                let mut router = router(NativeFake::new());
+                let target = observed_save(&mut router);
+                let since = router.observations.keys().next().unwrap().clone();
+                let original = router.backend.snapshot.clone();
+                router.backend.snapshot.app.windows[0].root.children.clear();
+                let mut params = json!({"app":"TextEdit","since":since,"screenshot":false});
+                if bounded {
+                    params["childDepth"] = json!(0);
+                }
+                ok(&mut router, "look", params);
+                router.backend.snapshot = original;
+                if bounded {
+                    invoke_observed_save(&mut router, target);
+                } else {
+                    let error = call(
+                        &mut router,
+                        "invoke",
+                        json!({"target":target,"name":"AXPress"}),
+                    )
+                    .unwrap_err();
+                    assert_eq!(error.code, -32002);
+                    assert!(router.backend.invokes.is_empty());
+                }
+            }
+        }
+
+        #[test]
+        fn semantic_coverage_paging_after_action_and_previous_page_uses_fresh_handles() {
+            let mut router = router(NativeFake::new());
+            let target = observed_save(&mut router);
+            // Finding the target performs a new capture and invalidates the observed handle.
+            let found = ok(&mut router, "find", json!({"target":target}));
+            assert_eq!(found["resolution"]["status"], "unique");
+            empty_save_page(&mut router, target.clone());
+            // Paging also replaces the active native cache.
+            empty_save_page(&mut router, target.clone());
+            invoke_observed_save(&mut router, target);
+        }
+
+        fn deep_paging_router() -> Router<NativeFake> {
+            let mut backend = NativeFake::new();
+            backend.deep_paging = true;
+            let mut child = node("AXGroup", Some("Deep"), &[], rect(1.0, 1.0, 10.0, 10.0));
+            child.children.push(node(
+                "AXButton",
+                Some("End"),
+                &["AXPress"],
+                rect(2.0, 2.0, 5.0, 5.0),
+            ));
+            backend.snapshot.app.windows[0].root.children[1]
+                .children
+                .push(child);
+            router(backend)
+        }
+
+        fn page_deep_child(router: &mut Router<NativeFake>, target: Value) -> Value {
+            let page = ok(
+                router,
+                "look",
+                json!({"target":target,"direct":true,"offset":0,"limit":1}),
+            );
+            let children: Value =
+                serde_json::from_str(page["children"]["tree"].as_str().unwrap()).unwrap();
+            assert_eq!(page["children"]["total"], 1);
+            assert_eq!(children[0]["title"], "Deep");
+            json!({"app":"TextEdit","name":children[0]["name"]})
+        }
+
+        #[test]
+        fn semantic_coverage_active_page_only_child_stays_pageable_without_full_capture() {
+            let mut router = deep_paging_router();
+            let target = observed_save(&mut router);
+            assert!(
+                router
+                    .backend
+                    .last_capture
+                    .as_ref()
+                    .unwrap()
+                    .node(BUTTON)
+                    .unwrap()
+                    .children
+                    .is_empty()
+            );
+            let deep = page_deep_child(&mut router, target);
+            let captures = router.backend.capture_queries.len();
+            let result = ok(&mut router, "look", json!({"target":deep,"direct":true}));
+            let children: Value =
+                serde_json::from_str(result["children"]["tree"].as_str().unwrap()).unwrap();
+            assert_eq!(children[0]["title"], "End");
+            assert_eq!(
+                router.backend.capture_queries.len(),
+                captures,
+                "active page must not require full-app visibility"
+            );
+        }
+
+        #[test]
+        fn semantic_coverage_invalidated_page_only_name_is_missing_not_stale() {
+            let mut router = deep_paging_router();
+            let target = observed_save(&mut router);
+            let deep = page_deep_child(&mut router, target);
+            ok(
+                &mut router,
+                "look",
+                json!({"app":"TextEdit","screenshot":false}),
+            );
+            let pages = router.backend.page_handles.len();
+            let error =
+                call(&mut router, "look", json!({"target":deep,"direct":true})).unwrap_err();
+            assert_eq!(error.code, -32002);
+            assert_eq!(error.data.unwrap()["status"], "missing");
+            assert_eq!(router.backend.page_handles.len(), pages);
+        }
+
+        #[test]
+        fn semantic_coverage_paging_operational_errors_are_not_retried() {
+            for query_failure in [true, false] {
+                let mut router = router(NativeFake::new());
+                let target = observed_save(&mut router);
+                router.backend.fail_handle_query = query_failure;
+                router.backend.fail_page = !query_failure;
+                let captures = router.backend.capture_queries.len();
+                let error =
+                    call(&mut router, "look", json!({"target":target,"direct":true})).unwrap_err();
+                assert!(error.message.contains("recognize screen text"));
+                assert_eq!(router.backend.capture_queries.len(), captures);
+                assert_eq!(
+                    router.backend.page_handles.len(),
+                    usize::from(!query_failure)
+                );
+            }
+        }
+
+        #[test]
+        fn semantic_coverage_query_page_race_retries_once_and_never_leaks_stale() {
+            for failures in [1, 2] {
+                let mut router = router(NativeFake::new());
+                let target = observed_save(&mut router);
+                router.backend.stale_page_failures = failures;
+                let captures = router.backend.capture_queries.len();
+                let result = call(&mut router, "look", json!({"target":target,"direct":true}));
+                if failures == 1 {
+                    assert_eq!(result.unwrap()["children"]["total"], 0);
+                } else {
+                    let error = result.unwrap_err();
+                    assert_eq!(error.code, -32002);
+                    assert_eq!(error.data.unwrap()["status"], "missing");
+                }
+                assert_eq!(router.backend.capture_queries.len(), captures + 1);
+                assert_eq!(router.backend.page_handles.len(), 2);
+                assert_eq!(
+                    router.backend.capture_queries.last().unwrap().process_id,
+                    Some(TEXTEDIT as u32)
+                );
+            }
+        }
+
+        #[test]
+        fn semantic_coverage_deep_page_race_returns_missing_without_stale_dispatch() {
+            let mut router = deep_paging_router();
+            let target = observed_save(&mut router);
+            let deep = page_deep_child(&mut router, target);
+            router.backend.stale_page_failures = 1;
+            let pages = router.backend.page_handles.len();
+            let error =
+                call(&mut router, "look", json!({"target":deep,"direct":true})).unwrap_err();
+            assert_eq!(error.code, -32002);
+            assert_eq!(error.data.unwrap()["status"], "missing");
+            assert_eq!(router.backend.page_handles.len(), pages + 1);
         }
 
         fn also_refused(result: &Value) -> String {

@@ -265,6 +265,26 @@ locator scoring is the durable fallback after the interface changes. Missing and
 names fail closed, and accepting the old target vocabulary as a fallback would create a second,
 stale public contract.
 
+The semantic-name registry stores process entries with a protected complete-capture
+baseline and bounded partial name-group overlays. Routers explicitly classify
+capture coverage before display formatting; a display depth is not a capture
+bound. Each group shares the original capture's identity skeleton, so persistence
+minimizes its locator against the evidence that issued the name, not against a
+later page. Name freshness and process eviction recency are independent. PID-bearing entries
+are keyed by PID; PID-less captures use isolated normalized app-identity entries
+within the same process capacity. The
+[lifetime contract](tool-surface.md#semantic-name-lifetime) defines the bounds.
+
+Child paging is the deliberate exception to whole-app recapture: page-local
+capture can reach beyond the app capture's native limits. `PlatformBackend::retains_handle`
+checks current native cache ownership on the backend's owning thread. A confirmed
+handle goes directly to native child capture; absent ownership or a typed stale
+handle at the page call triggers one fresh, PID-pinned resolution and retry.
+A second stale handle returns the existing semantic-name not-found error.
+Operational failures are not stale evidence and are propagated without retry.
+This does not expand native cache lifetime or authorize stale-handle actions;
+semantic actions retain their fresh-resolution path.
+
 The socket-daemon shape stays aligned with macOS: a long-lived process owns
 native subscriptions, retained element handles, and caches, while short-lived
 MCP stdio facades connect locally. This is architectural parity, not a demand

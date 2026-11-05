@@ -327,7 +327,7 @@ fn a_saved_type_step_replayed_against_its_own_effect_reports_no_drift() {
     let capture = document_capture("capture", "before");
     let mut registry = SemanticNameRegistry::default();
     let name = registry
-        .register(&capture)
+        .register(&capture, axon_core::SemanticRegistrationCoverage::Complete)
         .into_iter()
         .find(|name| name.role == "AXTextArea")
         .unwrap()

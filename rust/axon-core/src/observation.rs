@@ -853,10 +853,12 @@ impl ScreenshotUnavailable {
                 reason,
             },
             BackendError::CapabilityReason { code, reason, .. } => Self { code, reason },
-            BackendError::Operation { message, .. } => Self {
-                code: "capture-failed",
-                reason: message,
-            },
+            BackendError::Operation { message, .. } | BackendError::StaleHandle { message, .. } => {
+                Self {
+                    code: "capture-failed",
+                    reason: message,
+                }
+            }
         }
     }
 }
@@ -864,6 +866,25 @@ impl ScreenshotUnavailable {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stale_handle_classification_preserves_operation_display_and_capture_failure_shape() {
+        let stale = BackendError::StaleHandle {
+            operation: "resolve handle".into(),
+            message: "handle is absent".into(),
+        };
+        let operation = BackendError::Operation {
+            operation: "resolve handle".into(),
+            message: "handle is absent".into(),
+            diagnostic: None,
+        };
+        assert_eq!(stale.to_string(), operation.to_string());
+        let stale = ScreenshotUnavailable::from_backend_error(stale);
+        let operation = ScreenshotUnavailable::from_backend_error(operation);
+        assert_eq!(stale.code, operation.code);
+        assert_eq!(stale.reason, operation.reason);
+        assert_eq!(stale.code, "capture-failed");
+    }
 
     #[test]
     fn screenshot_unavailability_uses_explicit_backend_reason_codes() {

@@ -125,6 +125,7 @@ enum Command {
     Identity(AppQuery, Reply<Option<String>>),
     Capture(AppQuery, CaptureBounds, Reply<Snapshot>),
     CaptureChildPage(SnapshotHandle, ChildPageRequest, Reply<ChildPageCapture>),
+    RetainsHandle(SnapshotHandle, Reply<bool>),
     AccessibilityEnabled(Reply<Option<bool>>),
     Invoke(SnapshotHandle, String, Reply<()>),
     Read(SnapshotHandle, Reply<Option<String>>),
@@ -714,6 +715,9 @@ impl PlatformBackend for LinuxBackend {
     ) -> Result<Snapshot, BackendError> {
         self.ask(|r| Command::Capture(app.clone(), bounds, r))
     }
+    fn retains_handle(&mut self, handle: &SnapshotHandle) -> Result<bool, BackendError> {
+        self.ask(|r| Command::RetainsHandle(handle.clone(), r))
+    }
     fn capture_child_page(
         &mut self,
         target: &SnapshotHandle,
@@ -1148,9 +1152,12 @@ impl LinuxBackend {
             Ok(extents) => extents,
             // A retained reference the backend can no longer resolve is exactly a stale target:
             // there is nothing left to revalidate, so nothing may be sent.
-            Err(BackendError::Operation {
-                operation, message, ..
-            }) if operation == RESOLVE_HANDLE => {
+            Err(
+                BackendError::Operation {
+                    operation, message, ..
+                }
+                | BackendError::StaleHandle { operation, message },
+            ) if operation == RESOLVE_HANDLE => {
                 return Err(stale(format!(
                     "the resolved element can no longer be reached: {message}"
                 )));
@@ -1325,6 +1332,26 @@ impl BackgroundPixelInput for LinuxBackend {
     }
 }
 
+fn retained_object<'a>(
+    retained: &'a HashMap<String, Vec<ObjectRefOwned>>,
+    handle: &SnapshotHandle,
+) -> Result<&'a ObjectRefOwned, BackendError> {
+    let (snapshot, index) = handle
+        .0
+        .split_once(':')
+        .ok_or_else(|| operation(RESOLVE_HANDLE, "malformed handle"))?;
+    let index: usize = index
+        .parse()
+        .map_err(|_| operation(RESOLVE_HANDLE, "malformed handle"))?;
+    retained
+        .get(snapshot)
+        .and_then(|refs| refs.get(index))
+        .ok_or_else(|| BackendError::StaleHandle {
+            operation: RESOLVE_HANDLE.into(),
+            message: "stale or evicted AT-SPI reference".into(),
+        })
+}
+
 struct Actor {
     connection: zbus::Connection,
     /// The session bus, kept past bus discovery because `org.a11y.Status` lives there and is what
@@ -1400,6 +1427,9 @@ impl Actor {
                 }
                 Command::Capture(q, bounds, r) => {
                     let _ = r.send(self.capture(q, bounds).await);
+                }
+                Command::RetainsHandle(h, r) => {
+                    let _ = r.send(Ok(self.object(&h).is_ok()));
                 }
                 Command::CaptureChildPage(h, request, r) => {
                     let _ = r.send(self.capture_child_page(&h, request).await);
@@ -1887,17 +1917,7 @@ impl Actor {
         })
     }
     fn object(&self, handle: &SnapshotHandle) -> Result<&ObjectRefOwned, BackendError> {
-        let (snapshot, index) = handle
-            .0
-            .split_once(':')
-            .ok_or_else(|| operation(RESOLVE_HANDLE, "malformed handle"))?;
-        let index: usize = index
-            .parse()
-            .map_err(|_| operation(RESOLVE_HANDLE, "malformed handle"))?;
-        self.retained
-            .get(snapshot)
-            .and_then(|r| r.get(index))
-            .ok_or_else(|| operation(RESOLVE_HANDLE, "stale or evicted AT-SPI reference"))
+        retained_object(&self.retained, handle)
     }
     async fn invoke(&self, h: &SnapshotHandle, requested: &str) -> Result<(), BackendError> {
         let object = self.object(h)?.clone();
@@ -2583,6 +2603,42 @@ mod tests {
 
     fn real(path: &'static str) -> ObjectRefOwned {
         ObjectRefOwned::from_static_str_unchecked(":1.7", path)
+    }
+
+    #[test]
+    fn retains_handle_requires_exact_native_snapshot_and_index() {
+        let object = real("/org/a11y/atspi/accessible/target");
+        let mut retained = HashMap::from([("current".into(), vec![object.clone()])]);
+        assert_eq!(
+            retained_object(&retained, &SnapshotHandle("current:0".into())).unwrap(),
+            &object
+        );
+        for handle in ["previous:0", "current:1", "current:18446744073709551615"] {
+            assert!(
+                matches!(
+                    retained_object(&retained, &SnapshotHandle(handle.into())),
+                    Err(BackendError::StaleHandle { .. })
+                ),
+                "{handle}"
+            );
+        }
+        for handle in ["current", "current:no-index", "current:-1"] {
+            assert!(
+                retained_object(&retained, &SnapshotHandle(handle.into())).is_err(),
+                "{handle}"
+            );
+        }
+        retained.clear();
+        retained.insert("page".into(), vec![object.clone()]);
+        assert!(matches!(
+            retained_object(&retained, &SnapshotHandle("current:0".into())),
+            Err(BackendError::StaleHandle { .. })
+        ));
+        assert_eq!(
+            retained_object(&retained, &SnapshotHandle("page:0".into())).unwrap(),
+            &object
+        );
+        assert_eq!(retained.len(), 1);
     }
 
     fn null() -> ObjectRefOwned {

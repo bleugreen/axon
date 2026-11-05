@@ -107,6 +107,11 @@ pub enum BackendError {
         reason: String,
         diagnostic: Option<String>,
     },
+    /// A handle has no native object in the current capture cache. Kept distinct from
+    /// operational failures so paging can recover from cache replacement without hiding errors.
+    /// Its display remains the existing operation-error representation on the wire.
+    #[error("operation {operation} failed: {message}")]
+    StaleHandle { operation: String, message: String },
     #[error("operation {operation} failed: {message}")]
     Operation {
         operation: String,
@@ -200,6 +205,18 @@ pub trait PlatformBackend {
         }
         Ok(snapshot)
     }
+    /// Whether a captured handle still has a native object in the backend's current cache.
+    ///
+    /// Paging can continue beyond a full-app capture's limits only through its active page
+    /// handles. This query does not prove element liveness or authorize action dispatch: paging
+    /// still rereads native children, and actions still resolve against fresh evidence.
+    /// Uncertain ownership must return false; operational failures must remain errors.
+    fn retains_handle(&mut self, _handle: &SnapshotHandle) -> Result<bool, BackendError> {
+        Ok(false)
+    }
+    /// Rereads children from a captured native object. If its cache entry disappeared, return
+    /// `StaleHandle`, including when ownership changed after `retains_handle` returned true.
+    /// Provider, permission, and transport failures remain their original operational errors.
     fn capture_child_page(
         &mut self,
         _target: &SnapshotHandle,

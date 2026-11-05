@@ -110,7 +110,7 @@ fn cost(elements: usize) -> (usize, usize) {
 
     let mut registry = SemanticNameRegistry::default();
     let before = (allocated(), live());
-    registry.register(&snapshot);
+    registry.register(&snapshot, axon_core::SemanticRegistrationCoverage::Complete);
     let spent = allocated() - before.0;
     let retained = live() - before.1;
 
