@@ -20,37 +20,94 @@
 # The log is optional because not every daemon under test has one: a probe passes the file it
 # redirected `serve` to, or the macOS probe the job's StandardErrorPath.
 #
+# `--launchd-label` names the gui-domain job that started the daemon. Liveness is then launchd's
+# answer, read fresh on every iteration, rather than `kill -0` on a pid captured once: a pid read
+# while launchd is still spawning the job is not proof of anything either way, and launchd's record
+# is also what explains a death. A single read that no longer names the pid is read again before
+# it is called an exit. Every failure then prints scripts/launchd-job-evidence for the label while
+# it is still loaded, because a daemon that dies before writing to its log leaves nothing else.
+#
 # `<daemon-binary>` is any Axon CLI that can ask for `status --json`; it reaches whichever endpoint
 # AXON_SOCKET_PATH names, so a probe serving a private socket exports that first.
 #
-# Usage: scripts/assert-daemon-under-test <daemon-binary> <pid> [daemon-log]
+# Usage: scripts/assert-daemon-under-test [--launchd-label LABEL] <daemon-binary> <pid> [daemon-log]
 set -euo pipefail
 
-if [[ $# -lt 2 || $# -gt 3 ]]; then
-  printf 'usage: %s <daemon-binary> <pid> [daemon-log]\n' "$0" >&2
+usage() {
+  printf 'usage: %s [--launchd-label LABEL] <daemon-binary> <pid> [daemon-log]\n' "$0" >&2
   exit 2
+}
+
+LABEL=""
+if [[ "${1:-}" == --launchd-label ]]; then
+  [[ $# -ge 2 && -n "$2" ]] || usage
+  LABEL="$2"
+  shift 2
+fi
+if [[ $# -lt 2 || $# -gt 3 ]]; then
+  usage
 fi
 
 DAEMON="$1"
 EXPECTED_PID="$2"
 LOG="${3:-}"
+SCRIPTS="$(cd "$(dirname "$0")" && pwd)"
 
 fail() {
   printf '::error::%s\n' "$1"
-  if [[ -n "$LOG" && -f "$LOG" ]]; then
+  if [[ -n "$LABEL" ]]; then
+    if [[ -n "$LOG" ]]; then
+      "$SCRIPTS/launchd-job-evidence" --pid "$EXPECTED_PID" "$LABEL" "$LOG" || true
+    else
+      "$SCRIPTS/launchd-job-evidence" --pid "$EXPECTED_PID" "$LABEL" || true
+    fi
+  elif [[ -n "$LOG" && -f "$LOG" ]]; then
     printf -- '--- %s ---\n' "$LOG"
     cat "$LOG"
   fi
   exit 1
 }
 
+launchd_pid() {
+  launchctl print "gui/$(id -u)/$LABEL" 2>/dev/null | awk '/^[[:space:]]*pid = / { print $3; exit }' || true
+}
+
+# Sets `current` to what was observed, for the message when it is not the daemon under test.
+alive() {
+  if [[ -n "$LABEL" ]]; then
+    current="$(launchd_pid)"
+    [[ "$current" == "$EXPECTED_PID" ]]
+  else
+    current=""
+    kill -0 "$EXPECTED_PID" 2>/dev/null
+  fi
+}
+
+exited() {
+  if [[ -z "$LABEL" ]]; then
+    fail "the daemon under test (pid $EXPECTED_PID) exited instead of serving the socket"
+  elif [[ -z "$current" ]]; then
+    fail "the daemon under test (pid $EXPECTED_PID) exited instead of serving the socket; launchd no longer runs $LABEL"
+  else
+    fail "the daemon under test (pid $EXPECTED_PID) exited instead of serving the socket; launchd now runs $LABEL as pid $current"
+  fi
+}
+
 # The daemon binds its socket only after the accessibility backend finishes starting, so a probe's
 # first request has to wait for it.
 status=""
+current=""
+missed=false
 for _ in {1..80}; do
-  if ! kill -0 "$EXPECTED_PID" 2>/dev/null; then
-    fail "the daemon under test (pid $EXPECTED_PID) exited instead of serving the socket"
+  if ! alive; then
+    if [[ "$missed" == true ]]; then
+      exited
+    fi
+    missed=true
+    sleep 0.25
+    continue
   fi
+  missed=false
   status="$("$DAEMON" status --json 2>/dev/null || true)"
   if printf '%s' "$status" | jq -e '.daemon.running and .daemon.ready' >/dev/null 2>&1; then
     break
@@ -59,6 +116,9 @@ for _ in {1..80}; do
   sleep 0.25
 done
 
+if [[ -z "$status" && "$missed" == true ]]; then
+  exited
+fi
 if [[ -z "$status" ]]; then
   fail "the daemon under test (pid $EXPECTED_PID) never became ready"
 fi
