@@ -1281,10 +1281,14 @@ not yet opened its log, so the only account of the death is launchd's, and that
 is gone once the restore step boots the label out. So every failure between the
 candidate's bootstrap and its first answer runs `scripts/launchd-job-evidence`
 while the label is still loaded. It prints the job as launchd records it (state,
-last exit code or terminating signal, spawn errors), `launchctl error` for that
-code, whether each log exists, the unified log for the label and the believed
-pid over the last 30 seconds, and any crash report written in the last ten
-minutes. The candidate's logs sit in a directory of the run's own under `/tmp`,
+last exit code or terminating signal, spawn errors), including any exit-status
+annotation launchd supplies, whether each log exists, the unified log for the
+label and the believed pid over the last 30 seconds, and any crash report written
+in the last ten minutes. It does not pass a program's exit status to `launchctl
+error`, which interprets errno or launchd error-domain values instead. A
+non-administrator account cannot read the local unified log store; on bgsrv-mac
+the lane's runner user gets `Could not open local log store: Operation not
+permitted`. That is an account-level evidence gap, not a second job failure. The candidate's logs sit in a directory of the run's own under `/tmp`,
 which the probe creates, not in the runner's temporary directory. The park step
 also waits for the desktop daemon's process to exit after `shutdown` stops it
 answering, so the candidate never starts beside one that is still tearing down.

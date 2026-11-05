@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Prints what this machine knows about why a launchd gui-domain job is not doing what it should:
-# launchd's own record of the job, the meaning of its last exit code, whether each of its logs
+# launchd's own record of the job (including its exit status), whether each of its logs
 # exists, what the unified log says about the label and its process, and any fresh crash report.
 #
 # A job that dies before writing a byte to its log leaves only launchd's account behind -- its
@@ -15,6 +15,9 @@
 # `--pid` names the process the caller believed launchd started, so the unified log can be asked
 # about that process too: a spawn that fails in launchd's trampoline logs under the job's pid, not
 # under launchd's subsystem.
+# `log show` is refused for a non-administrator account with `Could not open local log store:
+# Operation not permitted`. The lane's runner user on bgsrv-mac has this limitation; it is an
+# account-level evidence gap, not a second failure of the job.
 #
 # Usage: scripts/launchd-job-evidence [--pid PID] <label> [log]...
 set -uo pipefail
@@ -41,14 +44,8 @@ if [[ "$print_status" != 0 ]]; then
   printf '(launchctl print exited %s: %s is not loaded in this domain)\n' "$print_status" "$label"
 fi
 
-# `last exit code = 78: EX_CONFIG`, or `(never exited)` for a job still running. Only a number is
-# something `launchctl error` can explain.
-exit_code="$(printf '%s\n' "$printed" | awk '/^[[:space:]]*last exit code = / { sub(/^[^=]*= /, ""); sub(/:.*/, ""); print; exit }')"
-if [[ "$exit_code" =~ ^-?[0-9]+$ ]]; then
-  printf -- '--- launchctl error %s ---\n' "$exit_code"
-  launchctl error "$exit_code" 2>&1 || true
-fi
-
+# Keep any exit-status annotation from launchd's print output. A program's exit status is not an
+# errno or launchd error-domain value, so passing it to `launchctl error` would misdescribe it.
 for log in "$@"; do
   if [[ -e "$log" ]]; then
     printf -- '--- %s (%s bytes) ---\n' "$log" "$(wc -c < "$log" | tr -d ' ')"

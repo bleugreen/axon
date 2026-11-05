@@ -384,38 +384,6 @@ def axn_action_count(text):
     return len(re.findall(r"^- id: ", text[match.end():], re.M))
 
 
-def swift_tree(response):
-    """The DSL tree string anywhere in a Swift look result (SnapshotObservation.swift at v0.3.6)."""
-    def find(value):
-        if isinstance(value, dict):
-            if isinstance(value.get("tree"), str):
-                return value["tree"]
-            for child in value.values():
-                found = find(child)
-                if found:
-                    return found
-        return None
-    return find((response or {}).get("result")) or ""
-
-
-def swift_calculator_names(tree):
-    """Semantic names from Swift's DSL: `  <name>: button "1" [click]` (live.yml's macOS job)."""
-    line_shape = re.compile(r'^\s*(?P<name>\S.*?): (?P<role>[\w ]+?) "(?P<text>[^"]*)"')
-    buttons = []
-    for line in tree.splitlines():
-        match = line_shape.match(line)
-        if match and match.group("role") == "button":
-            buttons.append((match.group("text"), match.group("name")))
-    found = {}
-    for key, labels in CALC_KEYS.items():
-        for label in labels:
-            name = next((name for text, name in buttons if text == label), None)
-            if name:
-                found[key] = name
-                break
-    return found
-
-
 def swift_snapshot_nodes(response):
     """Every node of a Swift daemon look answered over the socket (SnapshotObservation.swift at v0.3.6).
 
@@ -1720,17 +1688,10 @@ def self_test():
           and designated_requirement("# " + requirement) is not None)
     check("axn: action count", axn_action_count("version: 2\nargs: []\nactions:\n- id: a1\n  tool: invoke\n  expects:\n  - id: a1.changed.0\n- id: a2\n") == 2
           and axn_action_count("version: 2\nargs: []\nactions: []\n") == 0 and axn_action_count("version: 1\n") is None)
-    tree = ('window "Calculator"\n  button-ac: button "All Clear" [click]\n  button-1: button "1" [click]\n'
-            '  button-add: button "Add" [click]\n  button-2: button "2" [click]\n  button-eq: button "Equals" [click]\n'
-            '  display: text "0"\n')
-    names = swift_calculator_names(tree)
-    check("calculator: Swift DSL names", names.get("1") == "button-1" and names.get("+") == "button-add"
-          and names.get("=") == "button-eq" and names.get("clear") == "button-ac")
     socket_look = {"result": {"snapshot": {"indexedNodes": [
         {"role": "AXButton", "name": "keypad/1", "description": "1"}], "windows": [{"role": "AXWindow", "children": [
         {"role": "AXButton", "name": "keypad/add", "description": "Add"}, {"role": "AXButton", "description": "2"}]}]}}}
     check("calculator: Swift socket snapshot names", swift_snapshot_names(socket_look) == {"1": "keypad/1", "+": "keypad/add"})
-    check("calculator: tree found anywhere in a Swift result", swift_tree({"result": {"observation": {"tree": tree}}}) == tree)
     snapshot = {"app": {"name": "Calculator", "windows": [{"root": {"role": "AXWindow", "name": "window", "children": [
         {"role": "AXButton", "name": "one", "label": "1", "frame": {"x": 10, "y": 20, "width": 40, "height": 30}},
         {"role": "AXButton", "name": "plus", "label": "Add"},
