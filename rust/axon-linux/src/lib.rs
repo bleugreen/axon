@@ -2698,11 +2698,18 @@ mod tests {
 
     #[test]
     fn coverage_registration_page_operational_errors_do_not_retry() {
-        for query_failure in [true, false] {
+        for (query_failure, evict, stale_pages) in [
+            (true, false, 0), (false, false, 0),
+            (false, true, 0), (false, false, 1),
+        ] {
             let mut router = coverage_router();
             let name = coverage_leaf_name(&mut router);
             router.backend.retention_failure = query_failure;
             router.backend.page_failure = !query_failure;
+            router.backend.stale_pages_remaining = stale_pages;
+            if evict {
+                router.backend.captured_snapshots.borrow_mut().clear();
+            }
             let captures = router.backend.capture_queries.borrow().len();
             let response = router
                 .request(request(
@@ -2719,10 +2726,13 @@ mod tests {
             } else {
                 "injected page failure"
             }));
-            assert_eq!(router.backend.capture_queries.borrow().len(), captures);
+            assert_eq!(
+                router.backend.capture_queries.borrow().len(),
+                captures + usize::from(evict || stale_pages > 0)
+            );
             assert_eq!(
                 router.backend.child_requests.borrow().len(),
-                usize::from(!query_failure)
+                usize::from(!query_failure) + stale_pages
             );
         }
     }
