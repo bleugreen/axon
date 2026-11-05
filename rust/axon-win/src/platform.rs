@@ -1619,6 +1619,8 @@ impl UiaState {
         let capture_root = self
             .wait_for_root_web_area(&window, Duration::from_secs(2))
             .unwrap_or_else(|| window.clone());
+        // A failed rebuild must not associate partial native entries with the previous snapshot.
+        self.snapshot = None;
         self.elements.clear();
         let cache = self.capture_cache_request()?;
         let capture_root = unsafe { capture_root.BuildUpdatedCache(&cache) }
@@ -1861,6 +1863,8 @@ impl UiaState {
         let cache = self.capture_cache_request()?;
         let parent_element = unsafe { element.BuildUpdatedCache(&cache) }
             .map_err(|e| operation("cache child page parent", e))?;
+        // A failed rebuild must not associate partial native entries with the previous snapshot.
+        self.snapshot = None;
         self.elements.clear();
         let mut parent_count = 0;
         let mut parent = self.capture_node(&parent_element, &cache, 0, 0, &mut parent_count)?;
