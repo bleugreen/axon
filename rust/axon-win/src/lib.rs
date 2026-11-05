@@ -2099,6 +2099,7 @@ mod tests {
         snapshot: Snapshot,
         capture_queries: Rc<RefCell<Vec<AppQuery>>>,
         fresh_capture_ids: bool,
+        active_snapshot: Option<Snapshot>,
         capture_serial: usize,
         invoked: Vec<(SnapshotHandle, String)>,
         child_page_requests: Vec<(SnapshotHandle, axon_core::ChildPageRequest)>,
@@ -2145,6 +2146,28 @@ mod tests {
         pending_until_quiesce: Rc<RefCell<Vec<axon_core::RecordedInputEvent>>>,
         observer_starts: Rc<RefCell<usize>>,
         observer_stops: Rc<RefCell<usize>>,
+    }
+
+    impl FakeBackend {
+        fn require_active_handle(&self, handle: &SnapshotHandle) -> Result<(), BackendError> {
+            if !self.fresh_capture_ids {
+                return Ok(());
+            }
+            let valid = self.active_snapshot.as_ref().is_some_and(|snapshot| {
+                handle.0.rsplit_once(':').is_some_and(|(id, index)| {
+                    id == snapshot.id.0 && index.parse().ok().and_then(|index| snapshot.node(index)).is_some()
+                })
+            });
+            if valid {
+                Ok(())
+            } else {
+                Err(BackendError::Operation {
+                    operation: "resolve-handle".into(),
+                    message: format!("stale or absent handle: {}", handle.0),
+                    diagnostic: None,
+                })
+            }
+        }
     }
 
     impl ObserverQuiescence for FakeBackend {
@@ -2347,6 +2370,7 @@ mod tests {
                 self.capture_serial += 1;
                 snapshot.id = axon_core::SnapshotId(format!("capture-{}", self.capture_serial));
             }
+            self.active_snapshot = Some(snapshot.clone());
             Ok(snapshot)
         }
         fn capture_bounded(
@@ -2369,6 +2393,7 @@ mod tests {
                     trim(&mut window.root, depth);
                 }
             }
+            self.active_snapshot = Some(snapshot.clone());
             Ok(snapshot)
         }
         fn capture_child_page(
@@ -2376,13 +2401,19 @@ mod tests {
             target: &SnapshotHandle,
             request: axon_core::ChildPageRequest,
         ) -> Result<axon_core::ChildPageCapture, BackendError> {
+            self.require_active_handle(target)?;
             self.child_page_requests.push((target.clone(), request));
             let index = target.0.rsplit_once(':').unwrap().1.parse().unwrap();
             let parent = self.snapshot.node(index).unwrap().clone();
             assert!(parent.children.is_empty(), "this fake pages leaves only");
             self.capture_serial += 1;
+            let snapshot = axon_core::SnapshotId(format!("page-{}", self.capture_serial));
+            let mut active = self.snapshot.clone();
+            active.id = snapshot.clone();
+            active.app.windows[0].root = parent.clone();
+            self.active_snapshot = Some(active);
             Ok(axon_core::ChildPageCapture {
-                snapshot: axon_core::SnapshotId(format!("page-{}", self.capture_serial)),
+                snapshot,
                 parent,
                 offset: request.offset,
                 limit: request.limit.unwrap_or(100),
@@ -2391,6 +2422,7 @@ mod tests {
             })
         }
         fn invoke(&mut self, target: &SnapshotHandle, action: &str) -> Result<(), BackendError> {
+            self.require_active_handle(target)?;
             self.invoked.push((target.clone(), action.into()));
             Ok(())
         }
@@ -2500,6 +2532,7 @@ mod tests {
         FakeBackend {
             capture_queries: Rc::new(RefCell::new(vec![])),
             fresh_capture_ids: false,
+            active_snapshot: None,
             capture_serial: 0,
             invoked: vec![],
             child_page_requests: vec![],
@@ -2603,6 +2636,7 @@ mod tests {
     }
 
     fn coverage_invoke(router: &mut Router<FakeBackend>, name: &str) {
+        let before = router.backend.invoked.len();
         let result = coverage_request(
             router,
             "invoke",
@@ -2610,8 +2644,8 @@ mod tests {
         );
         assert_eq!(result["resolution"]["status"], "unique", "{result}");
         assert_eq!(result["dispatch"]["success"], true);
-        assert_eq!(router.backend.invoked.len(), 1);
-        let (handle, action) = &router.backend.invoked[0];
+        assert_eq!(router.backend.invoked.len(), before + 1);
+        let (handle, action) = router.backend.invoked.last().unwrap();
         assert_eq!(action, "Invoke");
         assert_eq!(handle.0.rsplit_once(':').unwrap().1, "2");
         assert_eq!(
@@ -2815,6 +2849,15 @@ mod tests {
             assert_eq!(failure.error.data.unwrap()["status"], "missing");
             assert!(router.backend.invoked.is_empty());
         }
+    }
+
+    #[test]
+    fn coverage_page_refreshes_handle_after_an_intervening_action() {
+        let mut router = coverage_router();
+        let name = coverage_name(&mut router);
+        coverage_invoke(&mut router, &name);
+        coverage_page(&mut router, &name, "4242");
+        coverage_invoke(&mut router, &name);
     }
 
     fn validated_params(tool: &str, arguments: Value) -> Map<String, Value> {
