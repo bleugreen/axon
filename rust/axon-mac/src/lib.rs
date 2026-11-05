@@ -3724,6 +3724,7 @@ mod tests {
                     "target":target,"offset":0,"limit":1,"direct":true
                 }),
             );
+            assert_eq!(result["children"]["parent"], target);
             assert_eq!(result["children"]["total"], 0);
             assert_eq!(result["children"]["tree"], "[]");
             assert_eq!(router.backend.page_handles.len(), 1);
@@ -3802,16 +3803,16 @@ mod tests {
 
         #[test]
         fn semantic_coverage_partial_intent_and_native_truncation_retain_names() {
-            for explicit_bound in [true, false] {
+            for child_depth in [Some(0), Some(1), Some(100), None] {
                 let mut router = router(NativeFake::new());
                 let target = observed_save(&mut router);
                 let original = router.backend.snapshot.clone();
                 let root = &mut router.backend.snapshot.app.windows[0].root;
                 root.children.clear();
                 let mut params = json!({"app":"TextEdit","screenshot":false});
-                if explicit_bound {
+                if let Some(depth) = child_depth {
                     // The backend returns no marker: capture intent alone still makes it partial.
-                    params["childDepth"] = json!(0);
+                    params["childDepth"] = json!(depth);
                 } else {
                     // A marker below the root must be noticed even without a request bound.
                     let mut child = original.app.windows[0].root.children[0].clone();
