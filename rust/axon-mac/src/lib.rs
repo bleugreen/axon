@@ -3222,6 +3222,9 @@ mod tests {
             capture_queries: Vec<AppQuery>,
             last_capture: Option<Snapshot>,
             page_handles: Vec<SnapshotHandle>,
+            deep_paging: bool,
+            fail_handle_query: bool,
+            fail_page: bool,
             point_owner: Option<i32>,
             window_origin: (f64, f64),
             target_alive: bool,
@@ -3285,6 +3288,9 @@ mod tests {
                     capture_queries: Vec::new(),
                     last_capture: None,
                     page_handles: Vec::new(),
+                    deep_paging: false,
+                    fail_handle_query: false,
+                    fail_page: false,
                     point_owner: Some(TEXTEDIT),
                     window_origin: (0.0, 0.0),
                     target_alive: true,
@@ -3353,8 +3359,21 @@ mod tests {
                 let mut snapshot = self.snapshot.clone();
                 snapshot.id =
                     axon_core::SnapshotId(format!("mac-capture-{}", self.capture_sequence));
+                if self.deep_paging {
+                    let boundary = &mut snapshot.app.windows[0].root.children[1];
+                    boundary.children.clear();
+                    boundary.truncation_reason = Some("native app depth cap".into());
+                }
                 self.last_capture = Some(snapshot.clone());
                 Ok(snapshot)
+            }
+            fn retains_handle(&mut self, target: &SnapshotHandle) -> Result<bool, axon_core::BackendError> {
+                if self.fail_handle_query {
+                    return Err(operation_failure());
+                }
+                Ok(self.last_capture.as_ref().is_some_and(|active| {
+                    active.index_for_handle(target).ok().is_some_and(|index| active.node(index).is_some())
+                }))
             }
             fn capture_child_page(
                 &mut self,
@@ -3365,26 +3384,40 @@ mod tests {
                     .last_capture
                     .as_ref()
                     .expect("paging needs an active capture");
-                assert_eq!(
-                    active
-                        .index_for_handle(target)
-                        .expect("paging must reject stale cache handles"),
-                    BUTTON,
-                    "page must address Save, not another node"
-                );
+                let index = active.index_for_handle(target).expect("paging must reject stale cache handles");
+                let title = active.node(index).expect("paging needs valid native index").title.clone();
+                fn find<'a>(node: &'a axon_core::Node, title: &Option<String>) -> Option<&'a axon_core::Node> {
+                    if &node.title == title { return Some(node); }
+                    node.children.iter().find_map(|child| find(child, title))
+                }
+                let mut parent = find(&self.snapshot.app.windows[0].root, &title).unwrap().clone();
+                let mut children = parent.children.clone();
+                if !request.include_descendants {
+                    for child in &mut children {
+                        if !child.children.is_empty() {
+                            child.truncation_reason = Some("page-local depth cap".into());
+                            child.children.clear();
+                        }
+                    }
+                }
+                parent.children.clear();
                 self.page_handles.push(target.clone());
+                if self.fail_page {
+                    return Err(operation_failure());
+                }
                 self.capture_sequence += 1;
                 let page = axon_core::ChildPageCapture {
                     snapshot: axon_core::SnapshotId(format!("mac-page-{}", self.capture_sequence)),
-                    parent: self.snapshot.node(BUTTON).unwrap().clone(),
+                    parent,
                     offset: request.offset,
                     limit: request.limit.unwrap_or(1),
-                    total: Some(0),
-                    children: Vec::new(),
+                    total: Some(children.len()),
+                    children,
                 };
                 let mut active = self.snapshot.clone();
                 active.id = page.snapshot.clone();
                 active.app.windows[0].root = page.parent.clone();
+                active.app.windows[0].root.children = page.children.clone();
                 self.last_capture = Some(active);
                 Ok(page)
             }
@@ -3969,6 +4002,64 @@ mod tests {
             // Paging also replaces the active native cache.
             empty_save_page(&mut router, target.clone());
             invoke_observed_save(&mut router, target);
+        }
+
+        fn deep_paging_router() -> Router<NativeFake> {
+            let mut backend = NativeFake::new();
+            backend.deep_paging = true;
+            let mut child = node("AXGroup", Some("Deep"), &[], rect(1.0, 1.0, 10.0, 10.0));
+            child.children.push(node("AXButton", Some("End"), &["AXPress"], rect(2.0, 2.0, 5.0, 5.0)));
+            backend.snapshot.app.windows[0].root.children[1].children.push(child);
+            router(backend)
+        }
+
+        fn page_deep_child(router: &mut Router<NativeFake>, target: Value) -> Value {
+            let page = ok(router, "look", json!({"target":target,"direct":true,"offset":0,"limit":1}));
+            let children: Value = serde_json::from_str(page["children"]["tree"].as_str().unwrap()).unwrap();
+            assert_eq!(page["children"]["total"], 1);
+            assert_eq!(children[0]["title"], "Deep");
+            json!({"app":"TextEdit","name":children[0]["name"]})
+        }
+
+        #[test]
+        fn semantic_coverage_active_page_only_child_stays_pageable_without_full_capture() {
+            let mut router = deep_paging_router();
+            let target = observed_save(&mut router);
+            assert!(router.backend.last_capture.as_ref().unwrap().node(BUTTON).unwrap().children.is_empty());
+            let deep = page_deep_child(&mut router, target);
+            let captures = router.backend.capture_queries.len();
+            let result = ok(&mut router, "look", json!({"target":deep,"direct":true}));
+            let children: Value = serde_json::from_str(result["children"]["tree"].as_str().unwrap()).unwrap();
+            assert_eq!(children[0]["title"], "End");
+            assert_eq!(router.backend.capture_queries.len(), captures, "active page must not require full-app visibility");
+        }
+
+        #[test]
+        fn semantic_coverage_invalidated_page_only_name_is_missing_not_stale() {
+            let mut router = deep_paging_router();
+            let target = observed_save(&mut router);
+            let deep = page_deep_child(&mut router, target);
+            ok(&mut router, "look", json!({"app":"TextEdit","screenshot":false}));
+            let pages = router.backend.page_handles.len();
+            let error = call(&mut router, "look", json!({"target":deep,"direct":true})).unwrap_err();
+            assert_eq!(error.code, -32002);
+            assert_eq!(error.data.unwrap()["status"], "missing");
+            assert_eq!(router.backend.page_handles.len(), pages);
+        }
+
+        #[test]
+        fn semantic_coverage_paging_operational_errors_are_not_retried() {
+            for query_failure in [true, false] {
+                let mut router = router(NativeFake::new());
+                let target = observed_save(&mut router);
+                router.backend.fail_handle_query = query_failure;
+                router.backend.fail_page = !query_failure;
+                let captures = router.backend.capture_queries.len();
+                let error = call(&mut router, "look", json!({"target":target,"direct":true})).unwrap_err();
+                assert!(error.message.contains("recognize screen text"));
+                assert_eq!(router.backend.capture_queries.len(), captures);
+                assert_eq!(router.backend.page_handles.len(), usize::from(!query_failure));
+            }
         }
 
         fn also_refused(result: &Value) -> String {
