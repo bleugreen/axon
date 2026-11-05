@@ -3671,7 +3671,10 @@ mod tests {
                 &mut self,
                 handle: &SnapshotHandle,
             ) -> Result<Option<Vec<String>>, axon_core::BackendError> {
-                let snapshot = self.last_capture.as_ref().expect("an active native capture");
+                let snapshot = self
+                    .last_capture
+                    .as_ref()
+                    .expect("an active native capture");
                 let index = snapshot.index_for_handle(handle).unwrap();
                 if index == POPUP {
                     return Ok(Some(vec!["AXPress".into(), "AXShowMenu".into()]));
