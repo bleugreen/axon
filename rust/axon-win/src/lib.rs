@@ -1103,7 +1103,12 @@ impl<
                         });
                     }
                 };
-                context.recorded_handle().ok_or_else(|| rpc_error(-32002, "semantic target has no live retained capture; call look for its app first"))?;
+                context.recorded_handle().ok_or_else(|| {
+                    rpc_error(
+                        -32002,
+                        "semantic target has no live retained capture; call look for its app first",
+                    )
+                })?;
                 let (handle, _) = self.resolve(params)?;
                 let page = self
                     .backend
@@ -2156,7 +2161,12 @@ mod tests {
             }
             let valid = self.active_snapshot.as_ref().is_some_and(|snapshot| {
                 handle.0.rsplit_once(':').is_some_and(|(id, index)| {
-                    id == snapshot.id.0 && index.parse().ok().and_then(|index| snapshot.node(index)).is_some()
+                    id == snapshot.id.0
+                        && index
+                            .parse()
+                            .ok()
+                            .and_then(|index| snapshot.node(index))
+                            .is_some()
                 })
             });
             if valid {
@@ -2676,7 +2686,10 @@ mod tests {
         assert_eq!(result["children"]["parent"]["app"], app);
         assert_eq!(router.backend.child_page_requests.len(), 1);
         let (handle, request) = &router.backend.child_page_requests[0];
-        assert_eq!(handle.0, format!("capture-{}:2", router.backend.capture_serial - 1));
+        assert_eq!(
+            handle.0,
+            format!("capture-{}:2", router.backend.capture_serial - 1)
+        );
         let queries = router.backend.capture_queries.borrow();
         let query = queries.last().unwrap();
         assert_eq!(query.process_id, Some(4242));
