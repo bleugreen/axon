@@ -200,6 +200,15 @@ pub trait PlatformBackend {
         }
         Ok(snapshot)
     }
+    /// Whether a captured handle still has a native object in the backend's current cache.
+    ///
+    /// Paging can continue beyond a full-app capture's limits only through its active page
+    /// handles. This query does not prove element liveness or authorize action dispatch: paging
+    /// still rereads native children, and actions still resolve against fresh evidence.
+    /// Uncertain ownership must return false; operational failures must remain errors.
+    fn retains_handle(&mut self, _handle: &SnapshotHandle) -> Result<bool, BackendError> {
+        Ok(false)
+    }
     fn capture_child_page(
         &mut self,
         _target: &SnapshotHandle,
