@@ -3727,7 +3727,7 @@ mod tests {
             assert_eq!(result["children"]["parent"], target);
             assert_eq!(result["children"]["total"], 0);
             assert_eq!(result["children"]["tree"], "[]");
-            assert_eq!(router.backend.page_handles.len(), 1);
+            assert_eq!(router.backend.page_handles, [SnapshotHandle("mac-capture-1:2".into())]);
         }
 
         #[test]
