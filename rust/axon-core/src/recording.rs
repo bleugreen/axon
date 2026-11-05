@@ -437,7 +437,8 @@ impl UserActionRecorder {
         let Some(snapshot) = provider.capture_snapshot(&evidence.app)? else {
             return Ok(point_target(&evidence.app, evidence.point));
         };
-        let names = self.registry.register(&snapshot);
+        let coverage = crate::SemanticRegistrationCoverage::for_capture(&snapshot, None);
+        let names = self.registry.register(&snapshot, coverage);
         for candidate in &evidence.candidates {
             for name in &names {
                 let Some(node) = snapshot.node(name.source_index) else {

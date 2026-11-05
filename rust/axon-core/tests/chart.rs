@@ -340,7 +340,7 @@ fn cold_resolution_records_outcomes_and_retained_evidence_bypasses_chart() {
     );
 
     let mut retained = SemanticNameRegistry::default();
-    retained.register(&observed);
+    retained.register(&observed, axon_core::SemanticRegistrationCoverage::Complete);
     let before = store.chart("com.example.app").entries.clone();
     let _ = ChartSeededResolver::new(&retained, &mut store).resolve(
         &WireElementTarget {

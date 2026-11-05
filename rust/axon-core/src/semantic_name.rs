@@ -630,7 +630,7 @@ impl SemanticNameRegistry {
         for window in &snapshot.app.windows {
             walk_context(&window.root, &[], window.title.as_deref(), &mut contexts)
         }
-        let records = names
+        let records: Vec<Record> = names
             .iter()
             .filter_map(|name| {
                 contexts
@@ -1001,14 +1001,14 @@ mod tests {
     fn assert_retained_descendant_after(mut partial: Snapshot) {
         let mut registry = SemanticNameRegistry::default();
         let original = hierarchical_capture("original");
-        let name = registry.register(&original).into_iter()
+        let name = registry.register(&original, SemanticRegistrationCoverage::Complete).into_iter()
             .find(|name| name.label == "Save").unwrap().name;
         let target = target("pid:41", name);
         let SemanticSelection::Selected(before) = registry.select(&target) else {
             panic!("original evidence missing");
         };
         partial.app.process_id = Some(41);
-        registry.register(&partial);
+        registry.register(&partial, SemanticRegistrationCoverage::Partial);
         let SemanticSelection::Selected(after) = registry.select(&target) else {
             panic!("partial observation revoked uncovered descendant");
         };
@@ -1040,7 +1040,7 @@ mod tests {
         let mut registry = SemanticNameRegistry::default();
         let observed = snapshot("old", vec![button("Save", Some("save"))]);
         let name = registry
-            .register(&observed)
+            .register(&observed, SemanticRegistrationCoverage::Complete)
             .into_iter()
             .find(|n| n.label == "Save")
             .unwrap()
@@ -1083,7 +1083,7 @@ mod tests {
             }],
         );
         let name = registry
-            .register(&observed)
+            .register(&observed, SemanticRegistrationCoverage::Complete)
             .into_iter()
             .find(|name| name.role == "text")
             .unwrap()
@@ -1163,7 +1163,7 @@ mod tests {
         let mut registry = SemanticNameRegistry::default();
         let observed = snapshot("old", vec![button("Share", None), button("Share", None)]);
         let name = registry
-            .register(&observed)
+            .register(&observed, SemanticRegistrationCoverage::Complete)
             .into_iter()
             .find(|n| n.label == "Share")
             .unwrap()
@@ -1191,7 +1191,7 @@ mod tests {
         app_a.app.name = "App A".into();
         app_a.app.identifier = Some("com.example.a".into());
         let name = registry
-            .register(&app_a)
+            .register(&app_a, SemanticRegistrationCoverage::Complete)
             .into_iter()
             .find(|name| name.label == "Save")
             .unwrap()
@@ -1200,7 +1200,7 @@ mod tests {
         let mut app_b = snapshot("b-new", vec![button("Save", Some("b-save"))]);
         app_b.app.name = "App B".into();
         app_b.app.identifier = Some("com.example.b".into());
-        registry.register(&app_b);
+        registry.register(&app_b, SemanticRegistrationCoverage::Complete);
 
         let mut live_a = snapshot("a-live", vec![button("Save", Some("a-save"))]);
         live_a.app = app_a.app.clone();
@@ -1232,13 +1232,13 @@ mod tests {
         let mut registry = SemanticNameRegistry::default();
         let one = with_pid(snapshot("one", vec![button("Save", Some("one"))]), 41);
         let name = registry
-            .register(&one)
+            .register(&one, SemanticRegistrationCoverage::Complete)
             .into_iter()
             .find(|n| n.label == "Save")
             .unwrap()
             .name;
         let two = with_pid(snapshot("two", vec![button("Save", Some("two"))]), 42);
-        registry.register(&two);
+        registry.register(&two, SemanticRegistrationCoverage::Complete);
 
         for alias in ["41", "pid:41"] {
             let SemanticSelection::Selected(context) =
@@ -1255,13 +1255,13 @@ mod tests {
         let mut registry = SemanticNameRegistry::default();
         let old = with_pid(snapshot("old", vec![button("Save", Some("old"))]), 41);
         let name = registry
-            .register_with_liveness(&old, |_| true)
+            .register_with_liveness(&old, SemanticRegistrationCoverage::Complete, |_| true)
             .into_iter()
             .find(|n| n.label == "Save")
             .unwrap()
             .name;
         let new = with_pid(snapshot("new", vec![button("Save", Some("new"))]), 42);
-        registry.register_with_liveness(&new, |pid| pid == 41);
+        registry.register_with_liveness(&new, SemanticRegistrationCoverage::Complete, |pid| pid == 41);
 
         let SemanticSelection::Selected(by_name) = registry.select(&target("App", name.clone()))
         else {
@@ -1282,7 +1282,7 @@ mod tests {
             41,
         );
         let name = registry
-            .register_with_liveness(&sibling, |_| true)
+            .register_with_liveness(&sibling, SemanticRegistrationCoverage::Complete, |_| true)
             .into_iter()
             .find(|n| n.label == "Save")
             .unwrap()
@@ -1296,7 +1296,7 @@ mod tests {
                 ),
                 42,
             );
-            registry.register_with_liveness(&current, |_| true);
+            registry.register_with_liveness(&current, SemanticRegistrationCoverage::Complete, |_| true);
         }
 
         let SemanticSelection::Selected(context) = registry.select(&target("41", name)) else {
@@ -1310,7 +1310,7 @@ mod tests {
         let mut registry = SemanticNameRegistry::default();
         let old = with_pid(snapshot("old", vec![button("Save", Some("old"))]), 41);
         let name = registry
-            .register(&old)
+            .register(&old, SemanticRegistrationCoverage::Complete)
             .into_iter()
             .find(|n| n.label == "Save")
             .unwrap()
@@ -1319,7 +1319,7 @@ mod tests {
         unrelated.app.name = "Other".into();
         unrelated.app.identifier = Some("com.example.other".into());
         let other_name = registry
-            .register(&unrelated)
+            .register(&unrelated, SemanticRegistrationCoverage::Complete)
             .into_iter()
             .find(|n| n.label == "Save")
             .unwrap()
@@ -1328,7 +1328,7 @@ mod tests {
             snapshot("replacement", vec![button("Save", Some("new"))]),
             42,
         );
-        registry.register_with_liveness(&replacement, |_| false);
+        registry.register_with_liveness(&replacement, SemanticRegistrationCoverage::Complete, |_| false);
 
         assert!(matches!(
             registry.select(&target("41", name)),
@@ -1345,7 +1345,7 @@ mod tests {
         let mut registry = SemanticNameRegistry::default();
         let observed = with_pid(snapshot("old", vec![button("Save", Some("save"))]), 41);
         let name = registry
-            .register(&observed)
+            .register(&observed, SemanticRegistrationCoverage::Complete)
             .into_iter()
             .find(|n| n.label == "Save")
             .unwrap()
