@@ -540,6 +540,7 @@ enum ProcessKey {
 #[derive(Clone)]
 struct ProcessEntry {
     app: RecordedApp,
+    // Complete evidence survives partial pressure, including refreshes of the same name.
     baseline: HashMap<String, NameGroup>,
     partial: HashMap<String, NameGroup>,
     partial_order: VecDeque<u64>,
@@ -696,6 +697,7 @@ impl SemanticNameRegistry {
                 }
             }
         }
+        // Process observation recency is independent of the freshness of each emitted name.
         self.order.retain(|old| old != &key);
         self.order.push_back(key);
         while self.order.len() > self.max_processes {
@@ -796,7 +798,7 @@ impl SemanticNameRegistry {
             return RetainedSemanticSelection::Selected(SemanticSelection::Ambiguous {
                 target: target.clone(),
                 candidates: latest
-                    .into_iter()
+                    .iter()
                     .map(|record| SemanticCandidate {
                         name: record.target.name.clone(),
                         candidate_label: record.candidate_label.clone(),
@@ -1015,6 +1017,8 @@ mod tests {
         assert_eq!(after.process_id(), Some(41));
         assert_eq!(after.locator(), before.locator());
         assert_eq!(after.recorded_handle(), before.recorded_handle());
+        assert_eq!(after.recorded_snapshot_id, Some(original.id.clone()));
+        assert!(Arc::ptr_eq(after.captured.as_ref().unwrap(), before.captured.as_ref().unwrap()));
         let fresh = hierarchical_capture("fresh");
         match after.resolve(&fresh) {
             SemanticLookup::Unique { handle, .. } => assert_eq!(handle, fresh.handle(2)),
