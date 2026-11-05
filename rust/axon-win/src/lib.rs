@@ -3153,16 +3153,27 @@ mod tests {
             if race {
                 router.backend.stale_pages_remaining = 1;
             } else {
-                coverage_request(&mut router, "look", json!({"app":"App","childDepth":0,"screenshot":false}));
+                coverage_request(
+                    &mut router,
+                    "look",
+                    json!({"app":"App","childDepth":0,"screenshot":false}),
+                );
             }
             let captures = router.backend.capture_queries.borrow().len();
             router.backend.page_failure = true;
-            let response = router.request(request("look", json!({"target":{"app":"App","name":name}}))).unwrap();
-            let JsonRpcResponse::Failure(failure) = response else { panic!("fallback page operation must fail"); };
+            let response = router
+                .request(request("look", json!({"target":{"app":"App","name":name}})))
+                .unwrap();
+            let JsonRpcResponse::Failure(failure) = response else {
+                panic!("fallback page operation must fail");
+            };
             assert_eq!(failure.error.code, -32000);
             assert!(failure.error.message.contains("provider failed"));
             assert_eq!(router.backend.capture_queries.borrow().len(), captures + 1);
-            assert_eq!(router.backend.child_page_requests.len(), 1 + usize::from(race));
+            assert_eq!(
+                router.backend.child_page_requests.len(),
+                1 + usize::from(race)
+            );
             assert_eq!(router.backend.retain_queries.len(), 1);
         }
     }
@@ -3171,10 +3182,18 @@ mod tests {
     fn coverage_false_cache_query_then_stale_fallback_returns_missing() {
         let mut router = coverage_router();
         let name = coverage_name(&mut router);
-        coverage_request(&mut router, "look", json!({"app":"App","childDepth":0,"screenshot":false}));
+        coverage_request(
+            &mut router,
+            "look",
+            json!({"app":"App","childDepth":0,"screenshot":false}),
+        );
         router.backend.stale_pages_remaining = 1;
-        let response = router.request(request("look", json!({"target":{"app":"App","name":name}}))).unwrap();
-        let JsonRpcResponse::Failure(failure) = response else { panic!("stale fallback must miss"); };
+        let response = router
+            .request(request("look", json!({"target":{"app":"App","name":name}})))
+            .unwrap();
+        let JsonRpcResponse::Failure(failure) = response else {
+            panic!("stale fallback must miss");
+        };
         assert_eq!(failure.error.code, -32002);
         assert_eq!(failure.error.data.unwrap()["status"], "missing");
         assert_eq!(router.backend.capture_queries.borrow().len(), 3);
