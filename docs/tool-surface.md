@@ -401,8 +401,12 @@ siblings and uncertain liveness are not treated as dead. An expired name returns
 the existing semantic-name not-found error: observe the app again to obtain a
 current name. Retention guarantees neither that the element still exists nor that
 live resolution is unique; actions still resolve against fresh evidence in the
-selected process. Child paging likewise resolves the retained target afresh before
-capturing its children, rather than trusting the original capture's handle.
+selected process. Child paging uses a captured handle only while the backend confirms
+it is still retained, otherwise resolving the target afresh in the selected process.
+Names issued by a child page for nodes beyond an app capture's native limits remain
+pageable only while their issuing capture is active. After an intervening capture
+invalidates that page chain, the caller must re-walk the pages; a full-app fallback
+that cannot reach the target returns the existing not-found error.
 
 `click` accepts semantic-name targets, point targets, and text locations.
 `drag` accepts the same pointer target vocabulary for `from` and `to`, though no
