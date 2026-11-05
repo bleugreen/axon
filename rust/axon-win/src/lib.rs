@@ -2107,6 +2107,11 @@ mod tests {
         capture_queries: Rc<RefCell<Vec<AppQuery>>>,
         fresh_capture_ids: bool,
         active_snapshot: Option<Snapshot>,
+        full_capture_depth: Option<usize>,
+        cache_query_failure: bool,
+        page_failure: bool,
+        stale_pages_remaining: usize,
+        retain_queries: Vec<SnapshotHandle>,
         capture_serial: usize,
         invoked: Vec<(SnapshotHandle, String)>,
         child_page_requests: Vec<(SnapshotHandle, axon_core::ChildPageRequest)>,
@@ -2156,6 +2161,31 @@ mod tests {
     }
 
     impl FakeBackend {
+        fn trim_node(node: &mut Node, depth: usize) {
+            if depth == 0 {
+                if !node.children.is_empty() {
+                    node.truncation_reason = Some("depth".into());
+                }
+                node.children.clear();
+            } else {
+                for child in &mut node.children {
+                    Self::trim_node(child, depth - 1);
+                }
+            }
+        }
+
+        fn full_node(&self, identifier: &str) -> Node {
+            fn find(node: &Node, identifier: &str) -> Option<Node> {
+                if node.identifier.as_deref() == Some(identifier) {
+                    Some(node.clone())
+                } else {
+                    node.children.iter().find_map(|child| find(child, identifier))
+                }
+            }
+            self.snapshot.app.windows.iter()
+                .find_map(|window| find(&window.root, identifier)).unwrap()
+        }
+
         fn require_active_handle(&self, handle: &SnapshotHandle) -> Result<(), BackendError> {
             if !self.fresh_capture_ids {
                 return Ok(());
@@ -2173,10 +2203,9 @@ mod tests {
             if valid {
                 Ok(())
             } else {
-                Err(BackendError::Operation {
+                Err(BackendError::StaleHandle {
                     operation: "resolve-handle".into(),
                     message: format!("stale or absent handle: {}", handle.0),
-                    diagnostic: None,
                 })
             }
         }
@@ -2382,6 +2411,11 @@ mod tests {
                 self.capture_serial += 1;
                 snapshot.id = axon_core::SnapshotId(format!("capture-{}", self.capture_serial));
             }
+            if let Some(depth) = self.full_capture_depth {
+                for window in &mut snapshot.app.windows {
+                    Self::trim_node(&mut window.root, depth);
+                }
+            }
             self.active_snapshot = Some(snapshot.clone());
             Ok(snapshot)
         }
@@ -2408,29 +2442,61 @@ mod tests {
             self.active_snapshot = Some(snapshot.clone());
             Ok(snapshot)
         }
+        fn retains_handle(&mut self, handle: &SnapshotHandle) -> Result<bool, BackendError> {
+            self.retain_queries.push(handle.clone());
+            if self.cache_query_failure {
+                return Err(BackendError::Operation {
+                    operation: "retains-handle".into(),
+                    message: "query failed".into(),
+                    diagnostic: None,
+                });
+            }
+            Ok(self.require_active_handle(handle).is_ok())
+        }
         fn capture_child_page(
             &mut self,
             target: &SnapshotHandle,
             request: axon_core::ChildPageRequest,
         ) -> Result<axon_core::ChildPageCapture, BackendError> {
-            self.require_active_handle(target)?;
             self.child_page_requests.push((target.clone(), request));
+            if self.stale_pages_remaining > 0 {
+                self.stale_pages_remaining -= 1;
+                self.active_snapshot = None;
+            }
+            self.require_active_handle(target)?;
+            if self.page_failure {
+                return Err(BackendError::Operation {
+                    operation: "child-page".into(),
+                    message: "provider failed".into(),
+                    diagnostic: None,
+                });
+            }
             let index = target.0.rsplit_once(':').unwrap().1.parse().unwrap();
-            let parent = self.snapshot.node(index).unwrap().clone();
-            assert!(parent.children.is_empty(), "this fake pages leaves only");
+            let observed = self.active_snapshot.as_ref().unwrap().node(index).unwrap();
+            let mut parent = self.full_node(observed.identifier.as_deref().unwrap());
+            let total = parent.children.len();
+            let children = parent.children.iter().skip(request.offset)
+                .take(request.limit.unwrap_or(usize::MAX)).cloned()
+                .map(|mut child| {
+                    Self::trim_node(&mut child, if request.include_descendants { 1 } else { 0 });
+                    child
+                }).collect::<Vec<_>>();
+            parent.children.clear();
+            parent.truncation_reason = None;
             self.capture_serial += 1;
             let snapshot = axon_core::SnapshotId(format!("page-{}", self.capture_serial));
             let mut active = self.snapshot.clone();
             active.id = snapshot.clone();
             active.app.windows[0].root = parent.clone();
+            active.app.windows[0].root.children = children.clone();
             self.active_snapshot = Some(active);
             Ok(axon_core::ChildPageCapture {
                 snapshot,
                 parent,
                 offset: request.offset,
                 limit: request.limit.unwrap_or(100),
-                total: Some(0),
-                children: vec![],
+                total: Some(total),
+                children,
             })
         }
         fn invoke(&mut self, target: &SnapshotHandle, action: &str) -> Result<(), BackendError> {
@@ -2545,6 +2611,11 @@ mod tests {
             capture_queries: Rc::new(RefCell::new(vec![])),
             fresh_capture_ids: false,
             active_snapshot: None,
+            full_capture_depth: None,
+            cache_query_failure: false,
+            page_failure: false,
+            stale_pages_remaining: 0,
+            retain_queries: vec![],
             capture_serial: 0,
             invoked: vec![],
             child_page_requests: vec![],
@@ -2878,6 +2949,100 @@ mod tests {
         coverage_invoke(&mut router, &name);
         coverage_page(&mut router, &name, "4242");
         coverage_invoke(&mut router, &name);
+    }
+
+    fn coverage_deep_router() -> Router<FakeBackend> {
+        let mut branch = node("Branch");
+        let mut deep = node("Deep");
+        deep.children = vec![node("Leaf")];
+        deep.child_count = Some(1);
+        branch.children = vec![deep];
+        branch.child_count = Some(1);
+        let mut backend = backend(vec![branch], None);
+        backend.snapshot.app.process_id = Some(4242);
+        backend.fresh_capture_ids = true;
+        backend.full_capture_depth = Some(1);
+        Router::new(backend)
+    }
+
+    fn coverage_deep_name(router: &mut Router<FakeBackend>) -> String {
+        let full = coverage_request(router, "look", json!({"app":"App","screenshot":false}));
+        let branch = full.pointer("/app/windows/0/root/children/0/name").unwrap().as_str().unwrap();
+        let page = coverage_request(router, "look", json!({"target":{"app":"App","name":branch},"direct":true,"format":"debug","tree":true}));
+        let children: Value = serde_json::from_str(page["children"]["tree"].as_str().unwrap()).unwrap();
+        children[0]["name"].as_str().unwrap().to_owned()
+    }
+
+    #[test]
+    fn coverage_current_page_handle_reaches_beyond_full_capture_cap() {
+        let mut router = coverage_deep_router();
+        let deep = coverage_deep_name(&mut router);
+        let captures = router.backend.capture_queries.borrow().len();
+        let page = coverage_request(&mut router, "look", json!({"target":{"app":"App","name":deep},"direct":true}));
+        assert_eq!(page["children"]["total"], 1);
+        assert_eq!(router.backend.capture_queries.borrow().len(), captures);
+        assert_eq!(captures, 1, "current handles page without any full recapture");
+    }
+
+    #[test]
+    fn coverage_expired_deep_page_returns_missing_not_stale() {
+        let mut router = coverage_deep_router();
+        let deep = coverage_deep_name(&mut router);
+        coverage_request(&mut router, "look", json!({"app":"App","screenshot":false}));
+        let pages = router.backend.child_page_requests.len();
+        let response = router.request(request("look", json!({"target":{"app":"App","name":deep}}))).unwrap();
+        let JsonRpcResponse::Failure(failure) = response else { panic!("expired deep-only target must miss"); };
+        assert_eq!(failure.error.code, -32002);
+        assert_eq!(failure.error.data.unwrap()["status"], "missing");
+        assert_eq!(router.backend.child_page_requests.len(), pages);
+    }
+
+    #[test]
+    fn coverage_query_and_page_operational_failures_do_not_retry() {
+        for query_failure in [true, false] {
+            let mut router = coverage_router();
+            let name = coverage_name(&mut router);
+            router.backend.cache_query_failure = query_failure;
+            router.backend.page_failure = !query_failure;
+            let response = router.request(request("look", json!({"target":{"app":"App","name":name}}))).unwrap();
+            let JsonRpcResponse::Failure(failure) = response else { panic!("operational error must propagate"); };
+            assert_eq!(failure.error.code, -32000);
+            assert!(failure.error.message.contains(if query_failure { "query failed" } else { "provider failed" }));
+            assert_eq!(router.backend.capture_queries.borrow().len(), 1, "do not recapture on operational error");
+            assert_eq!(router.backend.child_page_requests.len(), usize::from(!query_failure));
+        }
+    }
+
+    #[test]
+    fn coverage_cache_race_retries_once_then_returns_missing() {
+        for stale_pages in [1, 2] {
+            let mut router = coverage_router();
+            let name = coverage_name(&mut router);
+            router.backend.stale_pages_remaining = stale_pages;
+            let response = router.request(request("look", json!({"target":{"app":"App","name":name}}))).unwrap();
+            if stale_pages == 1 {
+                assert!(matches!(response, JsonRpcResponse::Success(_)), "{response:?}");
+            } else {
+                let JsonRpcResponse::Failure(failure) = response else { panic!("second stale page must miss"); };
+                assert_eq!(failure.error.code, -32002);
+                assert_eq!(failure.error.data.unwrap()["status"], "missing");
+            }
+            assert_eq!(router.backend.child_page_requests.len(), 2);
+            assert_eq!(router.backend.capture_queries.borrow().len(), 2);
+        }
+    }
+
+    #[test]
+    fn coverage_deep_cache_race_returns_missing_without_stale_page_retry() {
+        let mut router = coverage_deep_router();
+        let deep = coverage_deep_name(&mut router);
+        router.backend.stale_pages_remaining = 1;
+        let response = router.request(request("look", json!({"target":{"app":"App","name":deep}}))).unwrap();
+        let JsonRpcResponse::Failure(failure) = response else { panic!("deep target beyond fresh cap must miss"); };
+        assert_eq!(failure.error.code, -32002);
+        assert_eq!(failure.error.data.unwrap()["status"], "missing");
+        assert_eq!(router.backend.child_page_requests.len(), 2);
+        assert_eq!(router.backend.capture_queries.borrow().len(), 2);
     }
 
     fn validated_params(tool: &str, arguments: Value) -> Map<String, Value> {
