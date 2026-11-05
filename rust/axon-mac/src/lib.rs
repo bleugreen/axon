@@ -7,10 +7,9 @@ use axon_core::{
     JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, PointSpace, PointTarget,
     PointerContract, ResolutionStatus, RunEnvelope, SemanticElementName, SemanticLookup,
     SemanticNameRegistry, SemanticRegistrationCoverage, SemanticSelection, SinceToken, Snapshot,
-    SnapshotHandle,
-    TextLocationResolver, TextLocationSource, TextLocationTarget, TextRecognitionProvider,
-    ToolDispatcher, classify_semantic_diff, dispatch_in_foreground, goal_success,
-    look_since_response, pointer_target_is_point, prepare_run, select_delivery,
+    SnapshotHandle, TextLocationResolver, TextLocationSource, TextLocationTarget,
+    TextRecognitionProvider, ToolDispatcher, classify_semantic_diff, dispatch_in_foreground,
+    goal_success, look_since_response, pointer_target_is_point, prepare_run, select_delivery,
 };
 use serde_json::{Map, Value, json};
 use std::{
@@ -3345,11 +3344,15 @@ mod tests {
                     .collect())
             }
             fn capture(&mut self, app: &AppQuery) -> Result<Snapshot, axon_core::BackendError> {
-                assert!(self.find(app).is_some(), "capture must select the intended process");
+                assert!(
+                    self.find(app).is_some(),
+                    "capture must select the intended process"
+                );
                 self.capture_queries.push(app.clone());
                 self.capture_sequence += 1;
                 let mut snapshot = self.snapshot.clone();
-                snapshot.id = axon_core::SnapshotId(format!("mac-capture-{}", self.capture_sequence));
+                snapshot.id =
+                    axon_core::SnapshotId(format!("mac-capture-{}", self.capture_sequence));
                 self.last_capture = Some(snapshot.clone());
                 Ok(snapshot)
             }
@@ -3358,7 +3361,10 @@ mod tests {
                 target: &SnapshotHandle,
                 request: axon_core::ChildPageRequest,
             ) -> Result<axon_core::ChildPageCapture, axon_core::BackendError> {
-                assert!(target.0.ends_with(":2"), "page must address Save, not another node");
+                assert!(
+                    target.0.ends_with(":2"),
+                    "page must address Save, not another node"
+                );
                 self.page_handles.push(target.clone());
                 self.capture_sequence += 1;
                 Ok(axon_core::ChildPageCapture {
@@ -3684,8 +3690,10 @@ mod tests {
 
         fn observed_save(router: &mut Router<NativeFake>) -> Value {
             let result = ok(router, "look", json!({"app":"TextEdit","screenshot":false}));
-            let name = result.pointer("/app/windows/0/root/children/1/name")
-                .and_then(Value::as_str).expect("full look emits Save's semantic name");
+            let name = result
+                .pointer("/app/windows/0/root/children/1/name")
+                .and_then(Value::as_str)
+                .expect("full look emits Save's semantic name");
             json!({"app":"TextEdit","name":name})
         }
 
@@ -3696,14 +3704,26 @@ mod tests {
             assert_eq!(router.backend.invokes, ["AXPress"]);
             assert_eq!(router.backend.invoked_handles.len(), 1);
             let fresh = router.backend.last_capture.as_ref().unwrap();
-            assert_eq!(fresh.index_for_handle(&router.backend.invoked_handles[0]).unwrap(), BUTTON);
-            assert_eq!(router.backend.capture_queries.last().unwrap().process_id, Some(TEXTEDIT as u32));
+            assert_eq!(
+                fresh
+                    .index_for_handle(&router.backend.invoked_handles[0])
+                    .unwrap(),
+                BUTTON
+            );
+            assert_eq!(
+                router.backend.capture_queries.last().unwrap().process_id,
+                Some(TEXTEDIT as u32)
+            );
         }
 
         fn empty_save_page(router: &mut Router<NativeFake>, target: Value) {
-            let result = ok(router, "look", json!({
-                "target":target,"offset":0,"limit":1,"direct":true
-            }));
+            let result = ok(
+                router,
+                "look",
+                json!({
+                    "target":target,"offset":0,"limit":1,"direct":true
+                }),
+            );
             assert_eq!(result["children"]["total"], 0);
             assert_eq!(result["children"]["tree"], "[]");
             assert_eq!(router.backend.page_handles.len(), 1);
@@ -3713,9 +3733,13 @@ mod tests {
         fn semantic_coverage_shallow_look_retains_original_name() {
             let mut router = router(NativeFake::new());
             let target = observed_save(&mut router);
-            ok(&mut router, "look", json!({
-                "app":"TextEdit","screenshot":false,"depth":0,"childDepth":0,"frames":false
-            }));
+            ok(
+                &mut router,
+                "look",
+                json!({
+                    "app":"TextEdit","screenshot":false,"depth":0,"childDepth":0,"frames":false
+                }),
+            );
             invoke_observed_save(&mut router, target);
         }
 
@@ -3732,9 +3756,13 @@ mod tests {
             for alias in ["4242", "com.apple.TextEdit"] {
                 let mut router = router(NativeFake::new());
                 let target = observed_save(&mut router);
-                ok(&mut router, "look", json!({
-                    "app":"TextEdit","screenshot":false,"depth":0,"childDepth":0,"frames":false
-                }));
+                ok(
+                    &mut router,
+                    "look",
+                    json!({
+                        "app":"TextEdit","screenshot":false,"depth":0,"childDepth":0,"frames":false
+                    }),
+                );
                 let mut alias_target = target.clone();
                 alias_target["app"] = json!(alias);
                 empty_save_page(&mut router, alias_target);
@@ -3761,7 +3789,12 @@ mod tests {
                 params["app"] = json!("TextEdit");
                 params["screenshot"] = json!(false);
                 ok(&mut router, "look", params);
-                let error = call(&mut router, "invoke", json!({"target":target,"name":"AXPress"})).unwrap_err();
+                let error = call(
+                    &mut router,
+                    "invoke",
+                    json!({"target":target,"name":"AXPress"}),
+                )
+                .unwrap_err();
                 assert_eq!(error.code, -32002);
                 assert!(router.backend.invokes.is_empty());
             }
@@ -3789,9 +3822,21 @@ mod tests {
                 router.backend.snapshot = original;
                 invoke_observed_save(&mut router, target.clone());
                 router.backend.snapshot.app.windows[0].root.children.clear();
-                ok(&mut router, "look", json!({"app":"TextEdit","screenshot":false}));
-                let error = call(&mut router, "invoke", json!({"target":target,"name":"AXPress"})).unwrap_err();
-                assert_eq!(error.code, -32002, "a later complete capture revokes the retained name");
+                ok(
+                    &mut router,
+                    "look",
+                    json!({"app":"TextEdit","screenshot":false}),
+                );
+                let error = call(
+                    &mut router,
+                    "invoke",
+                    json!({"target":target,"name":"AXPress"}),
+                )
+                .unwrap_err();
+                assert_eq!(
+                    error.code, -32002,
+                    "a later complete capture revokes the retained name"
+                );
                 assert_eq!(router.backend.invokes.len(), 1);
             }
         }
@@ -3805,15 +3850,24 @@ mod tests {
                 let root = &mut router.backend.snapshot.app.windows[0].root;
                 root.children.clear();
                 root.truncation_reason = truncated.then(|| "native safety limit".into());
-                let result = ok(&mut router, "wait_for_stability", json!({
-                    "app":"TextEdit","stableMs":0,"timeoutMs":100,"intervalMs":10
-                }));
+                let result = ok(
+                    &mut router,
+                    "wait_for_stability",
+                    json!({
+                        "app":"TextEdit","stableMs":0,"timeoutMs":100,"intervalMs":10
+                    }),
+                );
                 assert_eq!(result["wait"]["success"], true);
                 router.backend.snapshot = original;
                 if truncated {
                     invoke_observed_save(&mut router, target);
                 } else {
-                    let error = call(&mut router, "invoke", json!({"target":target,"name":"AXPress"})).unwrap_err();
+                    let error = call(
+                        &mut router,
+                        "invoke",
+                        json!({"target":target,"name":"AXPress"}),
+                    )
+                    .unwrap_err();
                     assert_eq!(error.code, -32002);
                     assert!(router.backend.invokes.is_empty());
                 }
