@@ -1248,7 +1248,12 @@ impl<
                         });
                     }
                 };
-                context.recorded_handle().ok_or_else(|| rpc_error(-32002, "semantic target has no live retained capture; call look for its app first"))?;
+                context.recorded_handle().ok_or_else(|| {
+                    rpc_error(
+                        -32002,
+                        "semantic target has no live retained capture; call look for its app first",
+                    )
+                })?;
                 let (handle, _) = self.resolve(params)?;
                 let page = self
                     .backend
@@ -2371,7 +2376,14 @@ mod tests {
     }
 
     fn coverage_empty_page(router: &mut Router<FakeBackend>, app: &str, name: &str) {
-        let previous_id = router.backend.captured_snapshots.borrow().last().unwrap().id.clone();
+        let previous_id = router
+            .backend
+            .captured_snapshots
+            .borrow()
+            .last()
+            .unwrap()
+            .id
+            .clone();
         let captures_before = router.backend.capture_queries.borrow().len();
         let page = coverage_call(
             router,
@@ -2805,10 +2817,15 @@ mod tests {
             self.child_requests
                 .borrow_mut()
                 .push((target.clone(), request));
-            let parent = self.captured_snapshots.borrow().last().and_then(|snapshot| {
-                let index = snapshot.index_for_handle(target).ok()?;
-                snapshot.node(index).cloned()
-            }).expect("paging must use a handle from the active capture");
+            let parent = self
+                .captured_snapshots
+                .borrow()
+                .last()
+                .and_then(|snapshot| {
+                    let index = snapshot.index_for_handle(target).ok()?;
+                    snapshot.node(index).cloned()
+                })
+                .expect("paging must use a handle from the active capture");
             let total = parent.children.len();
             let limit = request.limit.unwrap_or(total);
             let mut children: Vec<_> = parent
@@ -2835,14 +2852,21 @@ mod tests {
                 id: page.snapshot.clone(),
                 app: self.snapshot.app.clone(),
             };
-            active.app.windows = vec![Window { title: None, root: page.parent.clone() }];
+            active.app.windows = vec![Window {
+                title: None,
+                root: page.parent.clone(),
+            }];
             active.app.windows[0].root.children = page.children.clone();
             *self.captured_snapshots.borrow_mut() = vec![active];
             Ok(page)
         }
         fn invoke(&mut self, handle: &SnapshotHandle, action: &str) -> Result<(), BackendError> {
-            self.captured_snapshots.borrow().last().expect("invoke requires active capture")
-                .index_for_handle(handle).expect("invoke requires fresh handle");
+            self.captured_snapshots
+                .borrow()
+                .last()
+                .expect("invoke requires active capture")
+                .index_for_handle(handle)
+                .expect("invoke requires fresh handle");
             self.invoked_handles.borrow_mut().push(handle.clone());
             self.invokes.borrow_mut().push(action.into());
             Ok(())
