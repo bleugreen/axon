@@ -2429,6 +2429,16 @@ mod tests {
     }
 
     #[test]
+    fn coverage_registration_paging_after_action_and_prior_page_refreshes_handle() {
+        let mut router = coverage_router();
+        let name = coverage_leaf_name(&mut router);
+        coverage_invoke(&mut router, &name);
+        coverage_empty_page(&mut router, "4101", &name);
+        coverage_empty_page(&mut router, APP_IDENTITY, &name);
+        coverage_invoke(&mut router, &name);
+    }
+
+    #[test]
     fn coverage_registration_explicit_bound_without_truncation_retains_names() {
         let mut router = coverage_router();
         let name = coverage_leaf_name(&mut router);
@@ -2772,7 +2782,7 @@ mod tests {
         fn capture(&mut self, query: &AppQuery) -> Result<Snapshot, BackendError> {
             self.capture_queries.borrow_mut().push(query.clone());
             let snapshot = Snapshot::new(self.snapshot.app.clone());
-            self.captured_snapshots.borrow_mut().push(snapshot.clone());
+            *self.captured_snapshots.borrow_mut() = vec![snapshot.clone()];
             Ok(snapshot)
         }
         fn capture_child_page(
@@ -2783,14 +2793,10 @@ mod tests {
             self.child_requests
                 .borrow_mut()
                 .push((target.clone(), request));
-            let captures = self.captured_snapshots.borrow();
-            let parent = captures
-                .iter()
-                .find_map(|snapshot| {
-                    let index = snapshot.index_for_handle(target).ok()?;
-                    snapshot.node(index).cloned()
-                })
-                .expect("paging must use an issued capture handle");
+            let parent = self.captured_snapshots.borrow().last().and_then(|snapshot| {
+                let index = snapshot.index_for_handle(target).ok()?;
+                snapshot.node(index).cloned()
+            }).expect("paging must use a handle from the active capture");
             let total = parent.children.len();
             let limit = request.limit.unwrap_or(total);
             let mut children: Vec<_> = parent
@@ -2805,14 +2811,22 @@ mod tests {
                     child.children.clear();
                 }
             }
-            Ok(axon_core::ChildPageCapture {
+            let page = axon_core::ChildPageCapture {
                 snapshot: axon_core::SnapshotId::fresh(),
                 parent,
                 offset: request.offset,
                 limit,
                 total: Some(total),
                 children,
-            })
+            };
+            let mut active = Snapshot {
+                id: page.snapshot.clone(),
+                app: self.snapshot.app.clone(),
+            };
+            active.app.windows = vec![Window { title: None, root: page.parent.clone() }];
+            active.app.windows[0].root.children = page.children.clone();
+            *self.captured_snapshots.borrow_mut() = vec![active];
+            Ok(page)
         }
         fn invoke(&mut self, handle: &SnapshotHandle, action: &str) -> Result<(), BackendError> {
             self.invoked_handles.borrow_mut().push(handle.clone());
