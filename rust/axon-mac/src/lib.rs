@@ -3886,12 +3886,17 @@ mod tests {
         }
 
         #[test]
-        fn semantic_coverage_display_depth_keeps_captured_descendants_and_app_list_does_not_register() {
+        fn semantic_coverage_display_depth_keeps_captured_descendants_and_app_list_does_not_register()
+         {
             let mut router = router(NativeFake::new());
             let target = observed_save(&mut router);
-            ok(&mut router, "look", json!({
-                "app":"TextEdit","screenshot":false,"depth":0,"frames":false
-            }));
+            ok(
+                &mut router,
+                "look",
+                json!({
+                    "app":"TextEdit","screenshot":false,"depth":0,"frames":false
+                }),
+            );
             let capture_count = router.backend.capture_sequence;
             ok(&mut router, "look", json!({}));
             assert_eq!(router.backend.capture_sequence, capture_count);
@@ -3915,7 +3920,12 @@ mod tests {
                 if bounded {
                     invoke_observed_save(&mut router, target);
                 } else {
-                    let error = call(&mut router, "invoke", json!({"target":target,"name":"AXPress"})).unwrap_err();
+                    let error = call(
+                        &mut router,
+                        "invoke",
+                        json!({"target":target,"name":"AXPress"}),
+                    )
+                    .unwrap_err();
                     assert_eq!(error.code, -32002);
                     assert!(router.backend.invokes.is_empty());
                 }
