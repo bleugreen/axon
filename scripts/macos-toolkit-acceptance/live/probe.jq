@@ -11,7 +11,8 @@ def full:
   and ([.result.content[]? | select(.type == "image" and .mimeType == "image/png"
     and (.data | type == "string" and length > 0))] | length == 1)
   and ([named_button("All Clear")] | length == 1)
-  and ([named_button("1")] | length == 1);
+  and ([named_button("1")] | length == 1)
+  and ([named_button("All Clear").name, named_button("1").name] | unique | length == 2);
 def app_name: observation.app.name | select(type == "string" and length > 0);
 def button_name($label):
   [named_button($label)] | select(length == 1) | .[0].name;

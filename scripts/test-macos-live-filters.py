@@ -123,6 +123,32 @@ class Filters(unittest.TestCase):
         replace_display(value)
         self.assertEqual(query("display_one", value).returncode, 1)
 
+    def test_names_must_be_nonempty_unique_and_distinct(self):
+        def buttons(node):
+            if isinstance(node, dict):
+                if node.get("role") == "AXButton" and node.get("label") in ("All Clear", "1"):
+                    yield node
+                for child in node.values():
+                    yield from buttons(child)
+            elif isinstance(node, list):
+                for child in node:
+                    yield from buttons(child)
+
+        for mutation in ("missing", "empty", "same-name", "duplicate"):
+            value = response("look-full")
+            clear, one = list(buttons(value))
+            if mutation == "missing":
+                del clear["name"]
+            elif mutation == "empty":
+                one["name"] = ""
+            elif mutation == "same-name":
+                one["name"] = clear["name"]
+            else:
+                value["result"]["structuredContent"]["app"]["windows"].append(
+                    {"root": copy.deepcopy(clear)})
+            with self.subTest(mutation=mutation):
+                self.assertEqual(query("full", value).returncode, 1)
+
     def test_old_swift_tree_path_mutation_is_rejected(self):
         source = (MODULE / "probe.jq").read_text()
         anchor = 'def nodes: observation.app | objects | .windows[]?.root | .. | objects;'
