@@ -697,7 +697,10 @@ impl MacBackend {
         self.handles
             .get(handle)
             .map(|v| v.0)
-            .ok_or_else(|| op("resolve", "snapshot handle is stale or unknown"))
+            .ok_or_else(|| BackendError::StaleHandle {
+                operation: "resolve".into(),
+                message: "snapshot handle is stale or unknown".into(),
+            })
     }
     fn set_attribute(
         &self,
@@ -918,6 +921,9 @@ impl PlatformBackend for MacBackend {
             .map(|(i, element)| (snapshot.handle(i), element))
             .collect();
         Ok(snapshot)
+    }
+    fn retains_handle(&mut self, handle: &SnapshotHandle) -> Result<bool, BackendError> {
+        Ok(self.handles.contains_key(handle))
     }
     fn capture_child_page(
         &mut self,
