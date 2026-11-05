@@ -152,7 +152,8 @@ and `limit` fields from the returned continuation to page broad sibling lists.
 `direct: true` returns only direct children, and `all: true` includes every
 direct child. Child pages use the same DSL tree format as app observations.
 `childDepth: 0` on an app observation retains top-level windows without walking
-descendants so callers can page children by semantic name.
+descendants so callers can page children by semantic name. Narrower captures and
+child pages follow the [semantic-name lifetime contract](#semantic-name-lifetime).
 
 `look(since: snapshot)` recaptures the app for a retained snapshot and reports
 whether the coarse app/window surface changed by comparing a fresh summary with
@@ -372,6 +373,35 @@ target:
   app: Safari
   name: checkout/submit
 ```
+
+#### Semantic-name lifetime
+
+A complete app observation, with no capture bound or native truncation, supersedes
+all previously issued names for that process; only names reissued by it remain
+usable. Partial observations refresh emitted names without discarding uncovered
+names from the last complete capture while the process entry remains retained.
+Explicit `childDepth` bounds (including zero), native capture truncation, and all
+child pages are partial. Display `depth` and hiding screenshots, frames, or the
+rendered tree do not by themselves make a capture partial.
+
+Each process retains at most 32 **referenced partial capture provenance objects**,
+releasing the least recently refreshed first. Superseded evidence with no remaining
+name references releases its slot promptly; empty partial captures need no slot.
+Partial-only names expire when their supporting provenance is released. The last
+complete capture remains protected: if a partial refresh of one of its names
+expires, that name falls back to the complete capture's evidence. This bound is
+neither elapsed time nor a count of all tool calls.
+
+The daemon retains eight observed process entries by default, evicting the least
+recently observed first, including all of that entry's complete and partial
+evidence. Every registration, including an empty partial observation, refreshes
+process recency. Observing a replacement process also removes evidence for a
+different PID of the same app identity when that old process is proven dead; live
+siblings and uncertain liveness are not treated as dead. An expired name returns
+the existing semantic-name not-found error: observe the app again to obtain a
+current name. Retention guarantees neither that the element still exists nor that
+live resolution is unique; actions still resolve against fresh evidence in the
+selected process.
 
 `click` accepts semantic-name targets, point targets, and text locations.
 `drag` accepts the same pointer target vocabulary for `from` and `to`, though no
