@@ -3361,9 +3361,14 @@ mod tests {
                 target: &SnapshotHandle,
                 request: axon_core::ChildPageRequest,
             ) -> Result<axon_core::ChildPageCapture, axon_core::BackendError> {
-                let active = self.last_capture.as_ref().expect("paging needs an active capture");
+                let active = self
+                    .last_capture
+                    .as_ref()
+                    .expect("paging needs an active capture");
                 assert_eq!(
-                    active.index_for_handle(target).expect("paging must reject stale cache handles"),
+                    active
+                        .index_for_handle(target)
+                        .expect("paging must reject stale cache handles"),
                     BUTTON,
                     "page must address Save, not another node"
                 );
@@ -3388,8 +3393,11 @@ mod tests {
                 target: &SnapshotHandle,
                 action: &str,
             ) -> Result<(), axon_core::BackendError> {
-                self.last_capture.as_ref().expect("invoke needs active capture")
-                    .index_for_handle(target).expect("invoke must reject stale cache handles");
+                self.last_capture
+                    .as_ref()
+                    .expect("invoke needs active capture")
+                    .index_for_handle(target)
+                    .expect("invoke must reject stale cache handles");
                 self.invoked_handles.push(target.clone());
                 self.invokes.push(action.into());
                 Ok(())
@@ -3741,7 +3749,10 @@ mod tests {
                 router.backend.page_handles.last(),
                 Some(&SnapshotHandle(format!("mac-capture-{}:2", before + 1)))
             );
-            assert_eq!(router.backend.capture_queries.last().unwrap().process_id, Some(TEXTEDIT as u32));
+            assert_eq!(
+                router.backend.capture_queries.last().unwrap().process_id,
+                Some(TEXTEDIT as u32)
+            );
             assert_eq!(router.backend.capture_sequence, before + 2);
         }
 
