@@ -1223,6 +1223,20 @@ impl PointerTargetVerifier for MacBackend {
 mod tests {
     use super::*;
     #[test]
+    fn semantic_coverage_retains_only_exact_native_cache_members() {
+        let mut backend = MacBackend::new().unwrap();
+        let handle = SnapshotHandle("cache-one:3".into());
+        // Cache ownership is independent of querying a live Accessibility element.
+        backend.handles.insert(handle.clone(), cfstr("owned native reference").unwrap());
+        assert!(backend.retains_handle(&handle).unwrap());
+        for absent in ["cache-one:2", "cache-one:999", "cache-two:3", "malformed"] {
+            assert!(!backend.retains_handle(&SnapshotHandle(absent.into())).unwrap());
+        }
+        backend.handles.clear();
+        assert!(!backend.retains_handle(&handle).unwrap());
+    }
+
+    #[test]
     fn mirrors_swift_role_tables() {
         assert!(editable("AXTextField"));
         assert_eq!(inferred_actions("AXCheckBox"), vec!["AXPress"]);

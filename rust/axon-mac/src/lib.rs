@@ -3225,6 +3225,7 @@ mod tests {
             deep_paging: bool,
             fail_handle_query: bool,
             fail_page: bool,
+            stale_page_failures: usize,
             point_owner: Option<i32>,
             window_origin: (f64, f64),
             target_alive: bool,
@@ -3291,6 +3292,7 @@ mod tests {
                     deep_paging: false,
                     fail_handle_query: false,
                     fail_page: false,
+                    stale_page_failures: 0,
                     point_owner: Some(TEXTEDIT),
                     window_origin: (0.0, 0.0),
                     target_alive: true,
@@ -3380,6 +3382,14 @@ mod tests {
                 target: &SnapshotHandle,
                 request: axon_core::ChildPageRequest,
             ) -> Result<axon_core::ChildPageCapture, axon_core::BackendError> {
+                if self.stale_page_failures > 0 {
+                    self.stale_page_failures -= 1;
+                    self.last_capture = None;
+                    self.page_handles.push(target.clone());
+                    return Err(axon_core::BackendError::StaleHandle {
+                        operation: "captureChildPage".into(), message: "injected cache replacement".into()
+                    });
+                }
                 let active = self
                     .last_capture
                     .as_ref()
@@ -4060,6 +4070,40 @@ mod tests {
                 assert_eq!(router.backend.capture_queries.len(), captures);
                 assert_eq!(router.backend.page_handles.len(), usize::from(!query_failure));
             }
+        }
+
+        #[test]
+        fn semantic_coverage_query_page_race_retries_once_and_never_leaks_stale() {
+            for failures in [1, 2] {
+                let mut router = router(NativeFake::new());
+                let target = observed_save(&mut router);
+                router.backend.stale_page_failures = failures;
+                let captures = router.backend.capture_queries.len();
+                let result = call(&mut router, "look", json!({"target":target,"direct":true}));
+                if failures == 1 {
+                    assert_eq!(result.unwrap()["children"]["total"], 0);
+                } else {
+                    let error = result.unwrap_err();
+                    assert_eq!(error.code, -32002);
+                    assert_eq!(error.data.unwrap()["status"], "missing");
+                }
+                assert_eq!(router.backend.capture_queries.len(), captures + 1);
+                assert_eq!(router.backend.page_handles.len(), 2);
+                assert_eq!(router.backend.capture_queries.last().unwrap().process_id, Some(TEXTEDIT as u32));
+            }
+        }
+
+        #[test]
+        fn semantic_coverage_deep_page_race_returns_missing_without_stale_dispatch() {
+            let mut router = deep_paging_router();
+            let target = observed_save(&mut router);
+            let deep = page_deep_child(&mut router, target);
+            router.backend.stale_page_failures = 1;
+            let pages = router.backend.page_handles.len();
+            let error = call(&mut router, "look", json!({"target":deep,"direct":true})).unwrap_err();
+            assert_eq!(error.code, -32002);
+            assert_eq!(error.data.unwrap()["status"], "missing");
+            assert_eq!(router.backend.page_handles.len(), pages + 1);
         }
 
         fn also_refused(result: &Value) -> String {
