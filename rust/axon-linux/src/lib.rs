@@ -2600,10 +2600,10 @@ mod tests {
     fn coverage_registration_page_only_target_continues_without_full_recapture() {
         let (mut router, name) = coverage_deep_page();
         let captures = router.backend.capture_queries.borrow().len();
-        assert_eq!(captures, 1);
         let page = coverage_call(&mut router, "look",
             json!({"target":{"app":APP_IDENTITY,"name":name},"direct":true,"limit":1}));
         assert_eq!(router.backend.capture_queries.borrow().len(), captures);
+        assert_eq!(captures, 1);
         let children: Value = serde_json::from_str(page["children"]["tree"].as_str().unwrap()).unwrap();
         assert_eq!(page["children"]["total"], 1);
         assert!(children[0]["name"].as_str().unwrap().contains("tip"));
@@ -2643,6 +2643,44 @@ mod tests {
         }
     }
 
+
+    #[test]
+    fn coverage_registration_page_cache_race_retries_stale_once() {
+        for stale_pages in [1, 2] {
+            let mut router = coverage_router();
+            let name = coverage_leaf_name(&mut router);
+            router.backend.stale_pages_remaining = stale_pages;
+            let response = router.request(request("look",
+                json!({"target":{"app":"4101","name":name},"direct":true}))).unwrap();
+            if stale_pages == 1 {
+                let JsonRpcResponse::Success(success) = response else { panic!("one stale cache race must recover") };
+                assert_eq!(success.result["children"]["total"], 0);
+            } else {
+                let JsonRpcResponse::Failure(failure) = response else { panic!("second stale page must stop retrying") };
+                assert_eq!(failure.error.code, -32002);
+                assert_eq!(failure.error.data.unwrap()["status"], "missing");
+            }
+            assert_eq!(router.backend.retention_queries.borrow().len(), 1);
+            assert_eq!(router.backend.capture_queries.borrow().len(), 2);
+            assert_eq!(router.backend.capture_queries.borrow().last().unwrap().process_id, Some(4101));
+            assert_eq!(router.backend.child_requests.borrow().len(), 2);
+        }
+    }
+
+    #[test]
+    fn coverage_registration_page_only_cache_race_returns_semantic_missing() {
+        let (mut router, name) = coverage_deep_page();
+        router.backend.stale_pages_remaining = 1;
+        let pages = router.backend.child_requests.borrow().len();
+        let response = router.request(request("look",
+            json!({"target":{"app":"4101","name":name},"direct":true}))).unwrap();
+        let JsonRpcResponse::Failure(failure) = response else { panic!("full app cannot resolve page-only name") };
+        assert_eq!(failure.error.code, -32002);
+        assert_eq!(failure.error.data.unwrap()["status"], "missing");
+        assert_eq!(router.backend.child_requests.borrow().len(), pages + 1);
+        assert_eq!(router.backend.capture_queries.borrow().last().unwrap().process_id, Some(4101));
+    }
+
     #[test]
     fn coverage_registration_app_list_does_not_revoke_names() {
         let mut router = coverage_router();
@@ -2657,6 +2695,7 @@ mod tests {
         captured_snapshots: Rc<RefCell<Vec<Snapshot>>>,
         full_capture_depth: Option<usize>,
         retention_failure: bool,
+        stale_pages_remaining: usize,
         page_failure: bool,
         retention_queries: Rc<RefCell<Vec<SnapshotHandle>>>,
         invoked_handles: Rc<RefCell<Vec<SnapshotHandle>>>,
@@ -2930,6 +2969,11 @@ mod tests {
                     snapshot.node(index).cloned()
                 })
                 .expect("paging must use a handle from the active capture");
+            if self.stale_pages_remaining > 0 {
+                self.stale_pages_remaining -= 1;
+                self.captured_snapshots.borrow_mut().clear();
+                return Err(BackendError::StaleHandle { operation: "resolve handle".into(), message: "injected cache race".into() });
+            }
             if self.page_failure {
                 return Err(BackendError::Operation { operation: "child page".into(), message: "injected page failure".into(), diagnostic: None });
             }
@@ -3126,6 +3170,7 @@ mod tests {
             captured_snapshots: Default::default(),
             full_capture_depth: None,
             retention_failure: false,
+            stale_pages_remaining: 0,
             page_failure: false,
             retention_queries: Default::default(),
             invoked_handles: Default::default(),
