@@ -2289,7 +2289,11 @@ mod tests {
         let mut group = node("Panel");
         group.children = vec![node("Leaf")];
         group.child_count = Some(1);
-        let mut fake = backend(vec![group], None);
+        let mut sibling = node("OtherPanel");
+        sibling.children = vec![node("Leaf")];
+        sibling.child_count = Some(1);
+        let mut fake = backend(vec![group, sibling], None);
+        fake.snapshot.app.windows[0].root.child_count = Some(2);
         fake.snapshot.app.process_id = Some(4101);
         Router::new(fake)
     }
@@ -2303,8 +2307,10 @@ mod tests {
 
     fn coverage_leaf_name(router: &mut Router<FakeBackend>) -> String {
         let full = coverage_call(router, "look", json!({"app":"App","screenshot":false}));
-        full.pointer("/app/windows/0/root/children/0/children/0/name")
-            .and_then(Value::as_str).expect("full look issues leaf name").to_owned()
+        let name = full.pointer("/app/windows/0/root/children/0/children/0/name")
+            .and_then(Value::as_str).expect("full look issues leaf name").to_owned();
+        assert!(name.contains("Panel"), "duplicate leaf labels require ancestry: {name}");
+        name
     }
 
     fn coverage_invoke(router: &mut Router<FakeBackend>, name: &str) {
