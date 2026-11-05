@@ -1233,10 +1233,16 @@ mod tests {
         let mut backend = MacBackend::new().unwrap();
         let handle = SnapshotHandle("cache-one:3".into());
         // Cache ownership is independent of querying a live Accessibility element.
-        backend.handles.insert(handle.clone(), cfstr("owned native reference").unwrap());
+        backend
+            .handles
+            .insert(handle.clone(), cfstr("owned native reference").unwrap());
         assert!(backend.retains_handle(&handle).unwrap());
         for absent in ["cache-one:2", "cache-one:999", "cache-two:3", "malformed"] {
-            assert!(!backend.retains_handle(&SnapshotHandle(absent.into())).unwrap());
+            assert!(
+                !backend
+                    .retains_handle(&SnapshotHandle(absent.into()))
+                    .unwrap()
+            );
         }
         backend.handles.clear();
         assert!(!backend.retains_handle(&handle).unwrap());

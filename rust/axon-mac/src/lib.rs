@@ -1584,7 +1584,11 @@ impl<
             };
             // Page-local captures can expose nodes beyond full-app capture limits. Reuse only
             // backend-confirmed active handles, not the router's last displayed snapshot.
-            let retained_page = if self.backend.retains_handle(recorded).map_err(backend_error)? {
+            let retained_page = if self
+                .backend
+                .retains_handle(recorded)
+                .map_err(backend_error)?
+            {
                 match self.backend.capture_child_page(recorded, page_request()) {
                     Ok(page) => Some(page),
                     Err(axon_core::BackendError::StaleHandle { .. }) => None,
@@ -1599,17 +1603,22 @@ impl<
                 // Another capture may invalidate the handle even after the ownership query.
                 // Retry once against fresh process-pinned evidence; never retry operational errors.
                 let (handle, _) = self.resolve(params)?;
-                self.backend.capture_child_page(&handle, page_request()).map_err(|error| {
-                    if matches!(error, axon_core::BackendError::StaleHandle { .. }) {
-                        JsonRpcError {
-                            code: -32002,
-                            message: format!("semantic name not found: {} / {}", target.app, target.name),
-                            data: Some(json!({"status":"missing","query":target})),
+                self.backend
+                    .capture_child_page(&handle, page_request())
+                    .map_err(|error| {
+                        if matches!(error, axon_core::BackendError::StaleHandle { .. }) {
+                            JsonRpcError {
+                                code: -32002,
+                                message: format!(
+                                    "semantic name not found: {} / {}",
+                                    target.app, target.name
+                                ),
+                                data: Some(json!({"status":"missing","query":target})),
+                            }
+                        } else {
+                            backend_error(error)
                         }
-                    } else {
-                        backend_error(error)
-                    }
-                })?
+                    })?
             };
             let mut parent = page.parent.clone();
             parent.children = page.children.clone();
@@ -3389,12 +3398,18 @@ mod tests {
                 self.last_capture = Some(snapshot.clone());
                 Ok(snapshot)
             }
-            fn retains_handle(&mut self, target: &SnapshotHandle) -> Result<bool, axon_core::BackendError> {
+            fn retains_handle(
+                &mut self,
+                target: &SnapshotHandle,
+            ) -> Result<bool, axon_core::BackendError> {
                 if self.fail_handle_query {
                     return Err(operation_failure());
                 }
                 Ok(self.last_capture.as_ref().is_some_and(|active| {
-                    active.index_for_handle(target).ok().is_some_and(|index| active.node(index).is_some())
+                    active
+                        .index_for_handle(target)
+                        .ok()
+                        .is_some_and(|index| active.node(index).is_some())
                 }))
             }
             fn capture_child_page(
@@ -3407,20 +3422,34 @@ mod tests {
                     self.last_capture = None;
                     self.page_handles.push(target.clone());
                     return Err(axon_core::BackendError::StaleHandle {
-                        operation: "captureChildPage".into(), message: "injected cache replacement".into()
+                        operation: "captureChildPage".into(),
+                        message: "injected cache replacement".into(),
                     });
                 }
                 let active = self
                     .last_capture
                     .as_ref()
                     .expect("paging needs an active capture");
-                let index = active.index_for_handle(target).expect("paging must reject stale cache handles");
-                let title = active.node(index).expect("paging needs valid native index").title.clone();
-                fn find<'a>(node: &'a axon_core::Node, title: &Option<String>) -> Option<&'a axon_core::Node> {
-                    if &node.title == title { return Some(node); }
+                let index = active
+                    .index_for_handle(target)
+                    .expect("paging must reject stale cache handles");
+                let title = active
+                    .node(index)
+                    .expect("paging needs valid native index")
+                    .title
+                    .clone();
+                fn find<'a>(
+                    node: &'a axon_core::Node,
+                    title: &Option<String>,
+                ) -> Option<&'a axon_core::Node> {
+                    if &node.title == title {
+                        return Some(node);
+                    }
                     node.children.iter().find_map(|child| find(child, title))
                 }
-                let mut parent = find(&self.snapshot.app.windows[0].root, &title).unwrap().clone();
+                let mut parent = find(&self.snapshot.app.windows[0].root, &title)
+                    .unwrap()
+                    .clone();
                 let mut children = parent.children.clone();
                 if !request.include_descendants {
                     for child in &mut children {
@@ -3798,7 +3827,10 @@ mod tests {
 
         fn empty_save_page(router: &mut Router<NativeFake>, target: Value) {
             let before = router.backend.capture_sequence;
-            let context = match router.semantic_names.select(&serde_json::from_value(target.clone()).unwrap()) {
+            let context = match router
+                .semantic_names
+                .select(&serde_json::from_value(target.clone()).unwrap())
+            {
                 SemanticSelection::Selected(context) => context,
                 _ => panic!("page target must remain registered"),
             };
@@ -3815,13 +3847,26 @@ mod tests {
             assert_eq!(result["children"]["parent"], target);
             assert_eq!(result["children"]["total"], 0);
             assert_eq!(result["children"]["tree"], "[]");
-            let expected = if retained { recorded } else { SnapshotHandle(format!("mac-capture-{}:2", before + 1)) };
+            let expected = if retained {
+                recorded
+            } else {
+                SnapshotHandle(format!("mac-capture-{}:2", before + 1))
+            };
             assert_eq!(router.backend.page_handles.last(), Some(&expected));
-            assert_eq!(router.backend.capture_queries.len(), captures + usize::from(!retained));
+            assert_eq!(
+                router.backend.capture_queries.len(),
+                captures + usize::from(!retained)
+            );
             if !retained {
-                assert_eq!(router.backend.capture_queries.last().unwrap().process_id, Some(TEXTEDIT as u32));
+                assert_eq!(
+                    router.backend.capture_queries.last().unwrap().process_id,
+                    Some(TEXTEDIT as u32)
+                );
             }
-            assert_eq!(router.backend.capture_sequence, before + 1 + usize::from(!retained));
+            assert_eq!(
+                router.backend.capture_sequence,
+                before + 1 + usize::from(!retained)
+            );
         }
 
         #[test]
@@ -4043,14 +4088,26 @@ mod tests {
             let mut backend = NativeFake::new();
             backend.deep_paging = true;
             let mut child = node("AXGroup", Some("Deep"), &[], rect(1.0, 1.0, 10.0, 10.0));
-            child.children.push(node("AXButton", Some("End"), &["AXPress"], rect(2.0, 2.0, 5.0, 5.0)));
-            backend.snapshot.app.windows[0].root.children[1].children.push(child);
+            child.children.push(node(
+                "AXButton",
+                Some("End"),
+                &["AXPress"],
+                rect(2.0, 2.0, 5.0, 5.0),
+            ));
+            backend.snapshot.app.windows[0].root.children[1]
+                .children
+                .push(child);
             router(backend)
         }
 
         fn page_deep_child(router: &mut Router<NativeFake>, target: Value) -> Value {
-            let page = ok(router, "look", json!({"target":target,"direct":true,"offset":0,"limit":1}));
-            let children: Value = serde_json::from_str(page["children"]["tree"].as_str().unwrap()).unwrap();
+            let page = ok(
+                router,
+                "look",
+                json!({"target":target,"direct":true,"offset":0,"limit":1}),
+            );
+            let children: Value =
+                serde_json::from_str(page["children"]["tree"].as_str().unwrap()).unwrap();
             assert_eq!(page["children"]["total"], 1);
             assert_eq!(children[0]["title"], "Deep");
             json!({"app":"TextEdit","name":children[0]["name"]})
@@ -4060,13 +4117,28 @@ mod tests {
         fn semantic_coverage_active_page_only_child_stays_pageable_without_full_capture() {
             let mut router = deep_paging_router();
             let target = observed_save(&mut router);
-            assert!(router.backend.last_capture.as_ref().unwrap().node(BUTTON).unwrap().children.is_empty());
+            assert!(
+                router
+                    .backend
+                    .last_capture
+                    .as_ref()
+                    .unwrap()
+                    .node(BUTTON)
+                    .unwrap()
+                    .children
+                    .is_empty()
+            );
             let deep = page_deep_child(&mut router, target);
             let captures = router.backend.capture_queries.len();
             let result = ok(&mut router, "look", json!({"target":deep,"direct":true}));
-            let children: Value = serde_json::from_str(result["children"]["tree"].as_str().unwrap()).unwrap();
+            let children: Value =
+                serde_json::from_str(result["children"]["tree"].as_str().unwrap()).unwrap();
             assert_eq!(children[0]["title"], "End");
-            assert_eq!(router.backend.capture_queries.len(), captures, "active page must not require full-app visibility");
+            assert_eq!(
+                router.backend.capture_queries.len(),
+                captures,
+                "active page must not require full-app visibility"
+            );
         }
 
         #[test]
@@ -4074,9 +4146,14 @@ mod tests {
             let mut router = deep_paging_router();
             let target = observed_save(&mut router);
             let deep = page_deep_child(&mut router, target);
-            ok(&mut router, "look", json!({"app":"TextEdit","screenshot":false}));
+            ok(
+                &mut router,
+                "look",
+                json!({"app":"TextEdit","screenshot":false}),
+            );
             let pages = router.backend.page_handles.len();
-            let error = call(&mut router, "look", json!({"target":deep,"direct":true})).unwrap_err();
+            let error =
+                call(&mut router, "look", json!({"target":deep,"direct":true})).unwrap_err();
             assert_eq!(error.code, -32002);
             assert_eq!(error.data.unwrap()["status"], "missing");
             assert_eq!(router.backend.page_handles.len(), pages);
@@ -4090,10 +4167,14 @@ mod tests {
                 router.backend.fail_handle_query = query_failure;
                 router.backend.fail_page = !query_failure;
                 let captures = router.backend.capture_queries.len();
-                let error = call(&mut router, "look", json!({"target":target,"direct":true})).unwrap_err();
+                let error =
+                    call(&mut router, "look", json!({"target":target,"direct":true})).unwrap_err();
                 assert!(error.message.contains("recognize screen text"));
                 assert_eq!(router.backend.capture_queries.len(), captures);
-                assert_eq!(router.backend.page_handles.len(), usize::from(!query_failure));
+                assert_eq!(
+                    router.backend.page_handles.len(),
+                    usize::from(!query_failure)
+                );
             }
         }
 
@@ -4114,7 +4195,10 @@ mod tests {
                 }
                 assert_eq!(router.backend.capture_queries.len(), captures + 1);
                 assert_eq!(router.backend.page_handles.len(), 2);
-                assert_eq!(router.backend.capture_queries.last().unwrap().process_id, Some(TEXTEDIT as u32));
+                assert_eq!(
+                    router.backend.capture_queries.last().unwrap().process_id,
+                    Some(TEXTEDIT as u32)
+                );
             }
         }
 
@@ -4125,7 +4209,8 @@ mod tests {
             let deep = page_deep_child(&mut router, target);
             router.backend.stale_page_failures = 1;
             let pages = router.backend.page_handles.len();
-            let error = call(&mut router, "look", json!({"target":deep,"direct":true})).unwrap_err();
+            let error =
+                call(&mut router, "look", json!({"target":deep,"direct":true})).unwrap_err();
             assert_eq!(error.code, -32002);
             assert_eq!(error.data.unwrap()["status"], "missing");
             assert_eq!(router.backend.page_handles.len(), pages + 1);
