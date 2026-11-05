@@ -5,7 +5,8 @@ use axon_core::{
     DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung, DeliverySelection,
     DiffPolicy, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId,
     JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, PointerContract,
-    ResolutionStatus, RunEnvelope, SemanticLookup, SemanticNameRegistry, SemanticSelection,
+    ResolutionStatus, RunEnvelope, SemanticLookup, SemanticNameRegistry, SemanticRegistrationCoverage,
+    SemanticSelection,
     Snapshot, SnapshotHandle, TextLocationResolver, TextLocationSource, TextLocationTarget,
     TextRecognitionProvider, ToolDispatcher, classify_semantic_diff, dispatch_in_foreground,
     goal_success, prepare_run, select_delivery,
@@ -452,9 +453,9 @@ impl<
         })
     }
 
-    fn register_snapshot(&mut self, snapshot: &Snapshot) -> Vec<axon_core::SemanticElementName> {
+    fn register_snapshot(&mut self, snapshot: &Snapshot, coverage: SemanticRegistrationCoverage) -> Vec<axon_core::SemanticElementName> {
         let live_processes = self.backend.live_process_ids().ok();
-        self.semantic_names.register_with_liveness(snapshot, |pid| {
+        self.semantic_names.register_with_liveness(snapshot, coverage, |pid| {
             live_processes
                 .as_ref()
                 .is_none_or(|processes| processes.contains(&pid))
@@ -1114,16 +1115,16 @@ impl<
                 let snapshot = Snapshot {
                     id: page.snapshot.clone(),
                     app: axon_core::Application {
-                        name: target.app.clone(),
+                        name: context.app_name().to_owned(),
                         process_id: context.process_id(),
-                        identifier: None,
+                        identifier: context.app_identifier().map(str::to_owned),
                         windows: vec![axon_core::Window {
                             title: None,
                             root: parent,
                         }],
                     },
                 };
-                let names = self.register_snapshot(&snapshot);
+                let names = self.register_snapshot(&snapshot, SemanticRegistrationCoverage::Partial);
                 let rendered = axon_core::render_semantic_names(&snapshot, &names);
                 self.snapshot = Some(snapshot);
                 Ok(json!({
@@ -1144,7 +1145,8 @@ impl<
                     .backend
                     .capture_bounded(&app, axon_core::CaptureBounds { child_depth })
                     .map_err(backend_error)?;
-                let names = self.register_snapshot(&snapshot);
+                let coverage = SemanticRegistrationCoverage::for_capture(&snapshot, child_depth);
+                let names = self.register_snapshot(&snapshot, coverage);
                 let rendered = axon_core::render_semantic_names(&snapshot, &names);
                 let mut value = axon_core::format_snapshot(&rendered, &request.display);
                 let wants_screenshot = axon_core::screenshot_requested(
@@ -1310,7 +1312,8 @@ impl<
         }
         let started = Instant::now();
         let first = self.backend.capture(&app).map_err(backend_error)?;
-        let first_names = self.register_snapshot(&first);
+        let coverage = SemanticRegistrationCoverage::for_capture(&first, None);
+        let first_names = self.register_snapshot(&first, coverage);
         if params
             .get(axon_core::SINGLE_STABILITY_CAPTURE)
             .and_then(Value::as_bool)
@@ -1325,7 +1328,8 @@ impl<
         let mut stable_since = Instant::now();
         loop {
             let snapshot = self.backend.capture(&app).map_err(backend_error)?;
-            let names = self.register_snapshot(&snapshot);
+            let coverage = SemanticRegistrationCoverage::for_capture(&snapshot, None);
+            let names = self.register_snapshot(&snapshot, coverage);
             let changed_from_last = !matches!(
                 classify_semantic_diff(
                     &last,
@@ -1951,7 +1955,7 @@ mod tests {
         backend.snapshot.app.process_id = Some(4101);
         let queries = backend.capture_queries.clone();
         let mut router = Router::new(backend);
-        let names = router.register_snapshot(&router.backend.snapshot.clone());
+        let names = router.register_snapshot(&router.backend.snapshot.clone(), SemanticRegistrationCoverage::Complete);
         let name = names
             .into_iter()
             .find(|name| name.label == "Save")
@@ -1982,7 +1986,7 @@ mod tests {
         backend.snapshot.app.identifier = Some("com.example.shared".into());
         let queries = backend.capture_queries.clone();
         let mut router = Router::new(backend);
-        let names = router.register_snapshot(&router.backend.snapshot.clone());
+        let names = router.register_snapshot(&router.backend.snapshot.clone(), SemanticRegistrationCoverage::Complete);
         let name = names
             .into_iter()
             .find(|name| name.label == "Save")
@@ -1999,7 +2003,7 @@ mod tests {
             }],
         });
         newer.id = axon_core::SnapshotId("newer".into());
-        router.semantic_names.register(&newer);
+        router.semantic_names.register(&newer, SemanticRegistrationCoverage::Complete);
 
         let result = router.resolve(
             json!({"target":{"app":"Shared","name":name}})
@@ -2047,7 +2051,7 @@ mod tests {
     #[test]
     fn save_exports_durable_locators_for_semantic_click_and_type() {
         let mut router = Router::new(backend(vec![node("Field")], Some("before")));
-        let name = router.register_snapshot(&router.backend.snapshot.clone())[0]
+        let name = router.register_snapshot(&router.backend.snapshot.clone(), SemanticRegistrationCoverage::Complete)[0]
             .name
             .clone();
         for (method, extra) in [("click", json!({})), ("type", json!({"value":"after"}))] {
@@ -3820,7 +3824,7 @@ mod tests {
         let captures = backend.capture_queries.clone();
         let mut router = Router::new(backend);
         let name = router
-            .register_snapshot(&router.backend.snapshot.clone())
+            .register_snapshot(&router.backend.snapshot.clone(), SemanticRegistrationCoverage::Complete)
             .into_iter()
             .find(|name| name.label == "save")
             .unwrap()
@@ -3859,7 +3863,7 @@ mod tests {
         let backend = backend(vec![node("save")], None);
         let mut router = Router::new(backend);
         let name = router
-            .register_snapshot(&router.backend.snapshot.clone())
+            .register_snapshot(&router.backend.snapshot.clone(), SemanticRegistrationCoverage::Complete)
             .into_iter()
             .find(|name| name.label == "save")
             .unwrap()
@@ -3890,7 +3894,7 @@ mod tests {
         let backend = backend(vec![node("save")], None);
         let mut router = Router::new(backend);
         let name = router
-            .register_snapshot(&router.backend.snapshot.clone())
+            .register_snapshot(&router.backend.snapshot.clone(), SemanticRegistrationCoverage::Complete)
             .into_iter()
             .find(|name| name.label == "save")
             .unwrap()
