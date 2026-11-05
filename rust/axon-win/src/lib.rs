@@ -2077,6 +2077,10 @@ mod tests {
     struct FakeBackend {
         snapshot: Snapshot,
         capture_queries: Rc<RefCell<Vec<AppQuery>>>,
+        fresh_capture_ids: bool,
+        capture_serial: usize,
+        invoked: Vec<(SnapshotHandle, String)>,
+        child_page_requests: Vec<(SnapshotHandle, axon_core::ChildPageRequest)>,
         pointer_target_matches: bool,
         verified_handles: Rc<RefCell<Vec<SnapshotHandle>>>,
         value: Rc<RefCell<Option<String>>>,
@@ -2317,9 +2321,56 @@ mod tests {
         }
         fn capture(&mut self, query: &AppQuery) -> Result<Snapshot, BackendError> {
             self.capture_queries.borrow_mut().push(query.clone());
-            Ok(self.snapshot.clone())
+            let mut snapshot = self.snapshot.clone();
+            if self.fresh_capture_ids {
+                self.capture_serial += 1;
+                snapshot.id = axon_core::SnapshotId(format!("capture-{}", self.capture_serial));
+            }
+            Ok(snapshot)
         }
-        fn invoke(&mut self, _: &SnapshotHandle, _: &str) -> Result<(), BackendError> {
+        fn capture_bounded(
+            &mut self,
+            query: &AppQuery,
+            bounds: axon_core::CaptureBounds,
+        ) -> Result<Snapshot, BackendError> {
+            let mut snapshot = self.capture(query)?;
+            fn trim(node: &mut Node, depth: usize) {
+                if depth == 0 {
+                    node.children.clear();
+                } else {
+                    for child in &mut node.children {
+                        trim(child, depth - 1);
+                    }
+                }
+            }
+            if let Some(depth) = bounds.child_depth {
+                for window in &mut snapshot.app.windows {
+                    trim(&mut window.root, depth);
+                }
+            }
+            Ok(snapshot)
+        }
+        fn capture_child_page(
+            &mut self,
+            target: &SnapshotHandle,
+            request: axon_core::ChildPageRequest,
+        ) -> Result<axon_core::ChildPageCapture, BackendError> {
+            self.child_page_requests.push((target.clone(), request));
+            let index = target.0.rsplit_once(':').unwrap().1.parse().unwrap();
+            let parent = self.snapshot.node(index).unwrap().clone();
+            assert!(parent.children.is_empty(), "this fake pages leaves only");
+            self.capture_serial += 1;
+            Ok(axon_core::ChildPageCapture {
+                snapshot: axon_core::SnapshotId(format!("page-{}", self.capture_serial)),
+                parent,
+                offset: request.offset,
+                limit: request.limit.unwrap_or(100),
+                total: Some(0),
+                children: vec![],
+            })
+        }
+        fn invoke(&mut self, target: &SnapshotHandle, action: &str) -> Result<(), BackendError> {
+            self.invoked.push((target.clone(), action.into()));
             Ok(())
         }
         fn read_value(&self, _: &SnapshotHandle) -> Result<Option<String>, BackendError> {
@@ -2427,6 +2478,10 @@ mod tests {
         };
         FakeBackend {
             capture_queries: Rc::new(RefCell::new(vec![])),
+            fresh_capture_ids: false,
+            capture_serial: 0,
+            invoked: vec![],
+            child_page_requests: vec![],
             snapshot: Snapshot::new(Application {
                 process_id: None,
                 name: "App".into(),
@@ -2486,6 +2541,86 @@ mod tests {
     fn request(method: &str, params: Value) -> JsonRpcRequest {
         JsonRpcRequest::new(Some(JsonRpcId::Integer(1)), method, Some(params))
     }
+    fn coverage_router() -> Router<FakeBackend> {
+        let mut backend = backend(vec![node("Save"), node("Save")], None);
+        backend.snapshot.app.process_id = Some(4242);
+        backend.snapshot.app.identifier = Some("com.example.app".into());
+        backend.snapshot.app.windows[0].root.children[0].identifier = Some("left".into());
+        backend.snapshot.app.windows[0].root.children[1].identifier = Some("right".into());
+        backend.fresh_capture_ids = true;
+        Router::new(backend)
+    }
+
+    fn coverage_request(router: &mut Router<FakeBackend>, method: &str, params: Value) -> Value {
+        match router.request(request(method, params)).unwrap() {
+            JsonRpcResponse::Success(success) => success.result,
+            response => panic!("{method} failed: {response:?}"),
+        }
+    }
+
+    fn coverage_name(router: &mut Router<FakeBackend>) -> String {
+        let result = coverage_request(router, "look", json!({"app":"App","screenshot":false,"format":"debug","tree":true}));
+        let name = result.pointer("/observation/app/windows/0/root/children/0/name")
+            .and_then(Value::as_str).expect("first response emits a descendant name").to_owned();
+        assert_ne!(name, "Save", "must use the emitted semantic name");
+        name
+    }
+
+    fn coverage_invoke(router: &mut Router<FakeBackend>, name: &str) {
+        let result = coverage_request(router, "invoke", json!({"target":{"app":"App","name":name},"name":"Invoke"}));
+        assert_eq!(result["resolution"]["status"], "unique", "{result}");
+        assert_eq!(result["dispatch"]["success"], true);
+        assert_eq!(router.backend.invoked.len(), 1);
+        let (handle, action) = &router.backend.invoked[0];
+        assert_eq!(action, "Invoke");
+        assert_eq!(handle.0.rsplit_once(':').unwrap().1, "1");
+        assert_eq!(handle.0, format!("capture-{}:1", router.backend.capture_serial));
+        assert_eq!(router.backend.capture_queries.borrow().last().unwrap().process_id, Some(4242));
+    }
+
+    fn coverage_page(router: &mut Router<FakeBackend>, name: &str, app: &str) {
+        let result = coverage_request(router, "look", json!({"target":{"app":app,"name":name},"offset":0,"limit":1,"direct":true,"format":"debug","tree":true}));
+        assert_eq!(result["children"]["total"], 0);
+        assert_eq!(result["children"]["tree"], "[]");
+        assert_eq!(result["children"]["parent"]["app"], app);
+        assert_eq!(router.backend.child_page_requests.len(), 1);
+        let (_, request) = &router.backend.child_page_requests[0];
+        assert_eq!(request.offset, 0);
+        assert_eq!(request.limit, Some(1));
+        assert!(!request.include_descendants);
+    }
+
+    #[test]
+    fn coverage_retains_name_after_depth_zero_capture() {
+        let mut router = coverage_router();
+        let name = coverage_name(&mut router);
+        coverage_request(&mut router, "look", json!({"app":"App","screenshot":false,"depth":0,"childDepth":0,"frames":false}));
+        coverage_invoke(&mut router, &name);
+    }
+
+    #[test]
+    fn coverage_retains_hierarchical_name_after_empty_leaf_page() {
+        let mut router = coverage_router();
+        let name = coverage_name(&mut router);
+        coverage_page(&mut router, &name, "App");
+        coverage_invoke(&mut router, &name);
+    }
+
+    #[test]
+    fn coverage_combined_alias_page_preserves_canonical_identity() {
+        for alias in ["4242", "com.example.app"] {
+            let mut router = coverage_router();
+            let name = coverage_name(&mut router);
+            coverage_request(&mut router, "look", json!({"app":"App","childDepth":0,"screenshot":false}));
+            coverage_page(&mut router, &name, alias);
+            let page = router.snapshot.as_ref().unwrap();
+            assert_eq!(page.app.name, "App");
+            assert_eq!(page.app.identifier.as_deref(), Some("com.example.app"));
+            assert_eq!(page.app.process_id, Some(4242));
+            coverage_invoke(&mut router, &name);
+        }
+    }
+
     fn validated_params(tool: &str, arguments: Value) -> Map<String, Value> {
         axon_core::validate_tool_arguments(axon_core::ToolBackend::Windows, tool, arguments)
             .unwrap()
