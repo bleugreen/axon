@@ -270,7 +270,9 @@ baseline and bounded partial name-group overlays. Routers explicitly classify
 capture coverage before display formatting; a display depth is not a capture
 bound. Each group shares the original capture's identity skeleton, so persistence
 minimizes its locator against the evidence that issued the name, not against a
-later page. Name freshness and process eviction recency are independent. The
+later page. Name freshness and process eviction recency are independent. PID-bearing entries
+are keyed by PID; PID-less captures use isolated normalized app-identity entries
+within the same process capacity. The
 [lifetime contract](tool-surface.md#semantic-name-lifetime) defines the bounds.
 
 Child paging is the deliberate exception to whole-app recapture: page-local

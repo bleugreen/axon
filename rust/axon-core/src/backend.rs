@@ -217,6 +217,9 @@ pub trait PlatformBackend {
     fn retains_handle(&mut self, _handle: &SnapshotHandle) -> Result<bool, BackendError> {
         Ok(false)
     }
+    /// Rereads children from a captured native object. If its cache entry disappeared, return
+    /// `StaleHandle`, including when ownership changed after `retains_handle` returned true.
+    /// Provider, permission, and transport failures remain their original operational errors.
     fn capture_child_page(
         &mut self,
         _target: &SnapshotHandle,
