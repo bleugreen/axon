@@ -1248,24 +1248,42 @@ impl<
                         });
                     }
                 };
-                context.recorded_handle().ok_or_else(|| {
+                let recorded = context.recorded_handle().ok_or_else(|| {
                     rpc_error(
                         -32002,
                         "semantic target has no live retained capture; call look for its app first",
                     )
                 })?;
-                let (handle, _) = self.resolve(params)?;
-                let page = self
-                    .backend
-                    .capture_child_page(
-                        &handle,
-                        axon_core::ChildPageRequest {
-                            offset,
-                            limit,
-                            include_descendants: !direct,
-                        },
-                    )
-                    .map_err(backend_error)?;
+                let page_request = axon_core::ChildPageRequest {
+                    offset,
+                    limit,
+                    include_descendants: !direct,
+                };
+                let cached_page = if self.backend.retains_handle(recorded).map_err(backend_error)? {
+                    match self.backend.capture_child_page(recorded, page_request) {
+                        Ok(page) => Some(page),
+                        Err(axon_core::BackendError::StaleHandle { .. }) => None,
+                        Err(error) => return Err(backend_error(error)),
+                    }
+                } else {
+                    None
+                };
+                let page = match cached_page {
+                    Some(page) => page,
+                    None => {
+                        let (handle, _) = self.resolve(params)?;
+                        self.backend.capture_child_page(&handle, page_request).map_err(|error| {
+                            match error {
+                                axon_core::BackendError::StaleHandle { .. } => JsonRpcError {
+                                    code: -32002,
+                                    message: format!("semantic name not found: {} / {}", target.app, target.name),
+                                    data: Some(json!({"status":"missing","query":target})),
+                                },
+                                error => backend_error(error),
+                            }
+                        })?
+                    }
+                };
                 let mut parent = page.parent.clone();
                 parent.children = page.children.clone();
                 let snapshot = Snapshot {

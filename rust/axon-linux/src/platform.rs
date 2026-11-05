@@ -125,6 +125,7 @@ enum Command {
     Identity(AppQuery, Reply<Option<String>>),
     Capture(AppQuery, CaptureBounds, Reply<Snapshot>),
     CaptureChildPage(SnapshotHandle, ChildPageRequest, Reply<ChildPageCapture>),
+    RetainsHandle(SnapshotHandle, Reply<bool>),
     AccessibilityEnabled(Reply<Option<bool>>),
     Invoke(SnapshotHandle, String, Reply<()>),
     Read(SnapshotHandle, Reply<Option<String>>),
@@ -713,6 +714,9 @@ impl PlatformBackend for LinuxBackend {
         bounds: CaptureBounds,
     ) -> Result<Snapshot, BackendError> {
         self.ask(|r| Command::Capture(app.clone(), bounds, r))
+    }
+    fn retains_handle(&mut self, handle: &SnapshotHandle) -> Result<bool, BackendError> {
+        self.ask(|r| Command::RetainsHandle(handle.clone(), r))
     }
     fn capture_child_page(
         &mut self,
@@ -1325,6 +1329,21 @@ impl BackgroundPixelInput for LinuxBackend {
     }
 }
 
+fn retained_object<'a>(
+    retained: &'a HashMap<String, Vec<ObjectRefOwned>>,
+    handle: &SnapshotHandle,
+) -> Result<&'a ObjectRefOwned, BackendError> {
+    let (snapshot, index) = handle.0.split_once(':')
+        .ok_or_else(|| operation(RESOLVE_HANDLE, "malformed handle"))?;
+    let index: usize = index.parse()
+        .map_err(|_| operation(RESOLVE_HANDLE, "malformed handle"))?;
+    retained.get(snapshot).and_then(|refs| refs.get(index))
+        .ok_or_else(|| BackendError::StaleHandle {
+            operation: RESOLVE_HANDLE.into(),
+            message: "stale or evicted AT-SPI reference".into(),
+        })
+}
+
 struct Actor {
     connection: zbus::Connection,
     /// The session bus, kept past bus discovery because `org.a11y.Status` lives there and is what
@@ -1400,6 +1419,9 @@ impl Actor {
                 }
                 Command::Capture(q, bounds, r) => {
                     let _ = r.send(self.capture(q, bounds).await);
+                }
+                Command::RetainsHandle(h, r) => {
+                    let _ = r.send(Ok(self.object(&h).is_ok()));
                 }
                 Command::CaptureChildPage(h, request, r) => {
                     let _ = r.send(self.capture_child_page(&h, request).await);
@@ -1887,17 +1909,7 @@ impl Actor {
         })
     }
     fn object(&self, handle: &SnapshotHandle) -> Result<&ObjectRefOwned, BackendError> {
-        let (snapshot, index) = handle
-            .0
-            .split_once(':')
-            .ok_or_else(|| operation(RESOLVE_HANDLE, "malformed handle"))?;
-        let index: usize = index
-            .parse()
-            .map_err(|_| operation(RESOLVE_HANDLE, "malformed handle"))?;
-        self.retained
-            .get(snapshot)
-            .and_then(|r| r.get(index))
-            .ok_or_else(|| operation(RESOLVE_HANDLE, "stale or evicted AT-SPI reference"))
+        retained_object(&self.retained, handle)
     }
     async fn invoke(&self, h: &SnapshotHandle, requested: &str) -> Result<(), BackendError> {
         let object = self.object(h)?.clone();
