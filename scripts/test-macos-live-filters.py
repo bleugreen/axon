@@ -137,7 +137,7 @@ class Filters(unittest.TestCase):
 
 
 class Workflow(unittest.TestCase):
-    def test_recorded_retention_failure_reaches_precise_diagnostic(self):
+    def run_probe(self, captures):
         # Extract the workflow rather than keeping a second copy of its shell logic.
         helper = runpy.run_path(str(REPO / "scripts/test-macos-live-recovery"))
         body = helper["run_block"](helper["job_lines"](
@@ -149,20 +149,15 @@ class Workflow(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             cli = root / "axon"
+            # Each scenario assembles individual captures, not a real successful session.
             cli.write_text("""#!/usr/bin/env python3
 import json, os, pathlib, sys
 request = json.load(sys.stdin)
-args = request["params"]["arguments"]
-with open(os.environ["REQUESTS"], "a") as stream:
+log = pathlib.Path(os.environ["REQUESTS"])
+index = len(log.read_text().splitlines()) if log.exists() else 0
+with log.open("a") as stream:
     stream.write(json.dumps(request) + "\\n")
-if request["params"]["name"] == "invoke":
-    name = "invoke-clear-after-full"
-elif "target" in args:
-    name = "child-page-after-full"
-elif args.get("childDepth") == 0:
-    name = "look-shallow"
-else:
-    name = "look-full"
+name = json.loads(os.environ["CAPTURES"])[index]
 print(json.dumps(json.loads((pathlib.Path(os.environ["FIXTURES"]) / (name + ".json")).read_text())["response"]))
 """)
             cli.chmod(0o755)
@@ -171,19 +166,53 @@ print(json.dumps(json.loads((pathlib.Path(os.environ["FIXTURES"]) / (name + ".js
             result = subprocess.run(["bash", "-c", script], cwd=REPO, text=True,
                 capture_output=True, timeout=30,
                 env={**os.environ, "cli": str(cli), "REQUESTS": str(log),
-                     "FIXTURES": str(LIVE / "responses")})
-            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-            self.assertIn("a name issued by the earlier full look no longer resolves after a narrower look",
-                          result.stdout)
-            self.assertNotIn("jq: error", result.stderr)
+                     "FIXTURES": str(LIVE / "responses"), "CAPTURES": json.dumps(captures)})
             requests = [json.loads(line) for line in log.read_text().splitlines()]
-            self.assertEqual([r["params"]["name"] for r in requests],
-                             ["look", "look", "look", "invoke"])
-            args = [r["params"]["arguments"] for r in requests]
-            self.assertEqual(args[1]["childDepth"], 0)
-            self.assertTrue(args[2]["direct"])
-            self.assertEqual(args[3]["target"],
-                             FIXTURES["invoke-clear-after-full"]["request"]["params"]["arguments"]["target"])
+            return result, requests
+
+    def test_recorded_retention_failure_reaches_precise_diagnostic(self):
+        for captures in [
+            ["look-full", "look-shallow", "child-page-after-full", "invoke-clear-after-full"],
+            ["look-full", "look-shallow", "invoke-clear-after-full"],
+        ]:
+            with self.subTest(captures=captures):
+                result, requests = self.run_probe(captures)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("a name issued by the earlier full look no longer resolves after a narrower look",
+                              result.stdout)
+                self.assertNotIn("jq: error", result.stderr)
+                self.assertEqual(len(requests), len(captures))
+                args = [r["params"]["arguments"] for r in requests]
+                self.assertEqual(args[1]["childDepth"], 0)
+                self.assertTrue(args[2]["direct"])
+                self.assertEqual(args[-1]["target"],
+                    FIXTURES["invoke-clear-after-full"]["request"]["params"]["arguments"]["target"])
+
+    def test_successful_responses_preserve_retention_and_change_check_order(self):
+        result, requests = self.run_probe([
+            "look-full", "look-shallow", "child-page-after-full",
+            "invoke-clear-directly-after-full", "invoke-clear-directly-after-full",
+            "look-after-one", "look-after-one", "since-settle-0",
+            "invoke-clear-directly-after-full", "since-changed-0", "look-screentext",
+        ])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Calculator display verified", result.stdout)
+        self.assertIn("screenText recognized", result.stdout)
+        self.assertEqual([r["params"]["name"] for r in requests],
+            ["look", "look", "look", "invoke", "invoke", "look", "look", "look",
+             "invoke", "look", "look"])
+        args = [r["params"]["arguments"] for r in requests]
+        self.assertEqual(args[1], FIXTURES["look-shallow"]["request"]["params"]["arguments"])
+        self.assertEqual(args[2], FIXTURES["child-page-after-full"]["request"]["params"]["arguments"])
+        prefix = "main-sidebarnavigationsplitview/calculatorkeypadview/"
+        self.assertEqual(args[3]["target"], {"app": "Calculator", "name": prefix + "all-clear"})
+        self.assertEqual(args[4]["target"], {"app": "Calculator", "name": prefix + "1"})
+        self.assertEqual(args[8]["target"], {"app": "Calculator", "name": prefix + "clear"})
+        self.assertEqual(args[7]["since"],
+                         response("look-after-one")["result"]["structuredContent"]["since"])
+        self.assertEqual(args[9]["since"],
+                         response("since-settle-0")["result"]["structuredContent"]["since"])
+        self.assertEqual(args[10], FIXTURES["look-screentext"]["request"]["params"]["arguments"])
 
 
 if __name__ == "__main__":
