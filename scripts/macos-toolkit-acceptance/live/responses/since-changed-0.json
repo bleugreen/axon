@@ -1,0 +1,50 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 15,
+    "method": "tools/call",
+    "params": {
+      "name": "look",
+      "arguments": {
+        "app": "Calculator",
+        "since": "obs-636f6d2e6170706c652e63616c63756c61746f72.733130.6"
+      }
+    }
+  },
+  "response": {
+    "id": 15,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": "<418 chars; mirrors structuredContent>",
+          "type": "text"
+        }
+      ],
+      "isError": false,
+      "structuredContent": {
+        "app": "Calculator",
+        "diff": {
+          "added": [
+            {
+              "label": "‎0",
+              "name": "calculatorkeypadview/edit-field/0",
+              "role": "AXStaticText"
+            },
+            {
+              "label": "All Clear",
+              "name": "main-sidebarnavigationsplitview/calculatorkeypadview/all-clear",
+              "role": "AXButton"
+            }
+          ],
+          "changed": [],
+          "removed": [
+            "calculatorkeypadview/edit-field/11",
+            "main-sidebarnavigationsplitview/calculatorkeypadview/clear"
+          ]
+        },
+        "since": "obs-636f6d2e6170706c652e63616c63756c61746f72.733133.8"
+      }
+    }
+  }
+}

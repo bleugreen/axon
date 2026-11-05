@@ -1,0 +1,560 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 15,
+    "method": "tools/call",
+    "params": {
+      "name": "look",
+      "arguments": {
+        "app": "Calculator",
+        "screenshot": false,
+        "screenText": true
+      }
+    }
+  },
+  "response": {
+    "id": 15,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": "<7785 chars; mirrors structuredContent>",
+          "type": "text"
+        }
+      ],
+      "isError": false,
+      "structuredContent": {
+        "app": {
+          "identifier": "com.apple.calculator",
+          "name": "Calculator",
+          "windows": [
+            {
+              "root": {
+                "actions": [],
+                "childCount": 5,
+                "children": [
+                  {
+                    "actions": [],
+                    "childCount": 1,
+                    "children": [
+                      {
+                        "actions": [],
+                        "childCount": 1,
+                        "children": [
+                          {
+                            "actions": [],
+                            "childCount": 1,
+                            "children": [
+                              {
+                                "actions": [],
+                                "childCount": 21,
+                                "children": [
+                                  {
+                                    "actions": [],
+                                    "childCount": 1,
+                                    "children": [
+                                      {
+                                        "actions": [],
+                                        "childCount": 0,
+                                        "children": [],
+                                        "editable": false,
+                                        "enabled": true,
+                                        "name": "calculatorkeypadview/edit-field/0",
+                                        "role": "AXStaticText",
+                                        "value": "‎0"
+                                      }
+                                    ],
+                                    "editable": false,
+                                    "focused": false,
+                                    "identifier": "StandardInputView",
+                                    "label": "Edit field",
+                                    "name": "main-sidebarnavigationsplitview/calculatorkeypadview/edit-field",
+                                    "role": "AXScrollArea"
+                                  },
+                                  {
+                                    "actions": [
+                                      "AXPress"
+                                    ],
+                                    "childCount": 0,
+                                    "children": [],
+                                    "description": "Delete the last digit or operation entered (long press to delete all)",
+                                    "editable": false,
+                                    "enabled": true,
+                                    "focused": false,
+                                    "identifier": "Delete",
+                                    "label": "Delete",
+                                    "name": "main-sidebarnavigationsplitview/calculatorkeypadview/delete",
+                                    "role": "AXButton"
+                                  },
+                                  {
+                                    "actions": [
+                                      "AXPress"
+                                    ],
+                                    "childCount": 0,
+                                    "children": [],
+                                    "description": "",
+                                    "editable": false,
+                                    "enabled": true,
+                                    "focused": false,
+                                    "identifier": "AllClear",
+                                    "label": "All Clear",
+                                    "name": "main-sidebarnavigationsplitview/calculatorkeypadview/all-clear",
+                                    "role": "AXButton"
+                                  },
+                                  {
+                                    "actions": [
+                                      "AXPress"
+                                    ],
+                                    "childCount": 0,
+                                    "children": [],
+                                    "description": "",
+                                    "editable": false,
+                                    "enabled": true,
+                                    "focused": false,
+                                    "identifier": "Percent",
+                                    "label": "Percent",
+                                    "name": "main-sidebarnavigationsplitview/calculatorkeypadview/percent",
+                                    "role": "AXButton"
+                                  },
+                                  {
+                                    "actions": [
+                                      "AXPress"
+                                    ],
+                                    "childCount": 0,
+                                    "children": [],
+                                    "description": "",
+                                    "editable": false,
+                                    "enabled": true,
+                                    "focused": false,
+                                    "identifier": "Divide",
+                                    "label": "Divide",
+                                    "name": "main-sidebarnavigationsplitview/calculatorkeypadview/divide",
+                                    "role": "AXButton"
+                                  },
+                                  {
+                                    "actions": [
+                                      "AXPress"
+                                    ],
+                                    "childCount": 0,
+                                    "children": [],
+                                    "description": "",
+                                    "editable": false,
+                                    "enabled": true,
+                                    "focused": false,
+                                    "identifier": "Seven",
+                                    "label": "7",
+                                    "name": "main-sidebarnavigationsplitview/calculatorkeypadview/7",
+                                    "role": "AXButton"
+                                  },
+                                  {
+                                    "actions": [
+                                      "AXPress"
+                                    ],
+                                    "childCount": 0,
+                                    "children": [],
+                                    "description": "",
+                                    "editable": false,
+                                    "enabled": true,
+                                    "focused": false,
+                                    "identifier": "Eight",
+                                    "label": "8",
+                                    "name": "main-sidebarnavigationsplitview/calculatorkeypadview/8",
+                                    "role": "AXButton"
+                                  },
+                                  {
+                                    "actions": [
+                                      "AXPress"
+                                    ],
+                                    "childCount": 0,
+                                    "children": [],
+                                    "description": "",
+                                    "editable": false,
+                                    "enabled": true,
+                                    "focused": false,
+                                    "identifier": "Nine",
+                                    "label": "9",
+                                    "name": "main-sidebarnavigationsplitview/calculatorkeypadview/9",
+                                    "role": "AXButton"
+                                  },
+                                  {
+                                    "actions": [
+                                      "AXPress"
+                                    ],
+                                    "childCount": 0,
+                                    "children": [],
+                                    "description": "",
+                                    "editable": false,
+                                    "enabled": true,
+                                    "focused": false,
+                                    "identifier": "Multiply",
+                                    "label": "Multiply",
+                                    "name": "main-sidebarnavigationsplitview/calculatorkeypadview/multiply",
+                                    "role": "AXButton"
+                                  },
+                                  {
+                                    "actions": [
+                                      "AXPress"
+                                    ],
+                                    "childCount": 0,
+                                    "children": [],
+                                    "description": "",
+                                    "editable": false,
+                                    "enabled": true,
+                                    "focused": false,
+                                    "identifier": "Four",
+                                    "label": "4",
+                                    "name": "main-sidebarnavigationsplitview/calculatorkeypadview/4",
+                                    "role": "AXButton"
+                                  },
+                                  {
+                                    "actions": [
+                                      "AXPress"
+                                    ],
+                                    "childCount": 0,
+                                    "children": [],
+                                    "description": "",
+                                    "editable": false,
+                                    "enabled": true,
+                                    "focused": false,
+                                    "identifier": "Five",
+                                    "label": "5",
+                                    "name": "main-sidebarnavigationsplitview/calculatorkeypadview/5",
+                                    "role": "AXButton"
+                                  },
+                                  {
+                                    "actions": [
+                                      "AXPress"
+                                    ],
+                                    "childCount": 0,
+                                    "children": [],
+                                    "description": "",
+                                    "editable": false,
+                                    "enabled": true,
+                                    "focused": false,
+                                    "identifier": "Six",
+                                    "label": "6",
+                                    "name": "main-sidebarnavigationsplitview/calculatorkeypadview/6",
+                                    "role": "AXButton"
+                                  },
+                                  {
+                                    "actions": [
+                                      "AXPress"
+                                    ],
+                                    "childCount": 0,
+                                    "children": [],
+                                    "description": "",
+                                    "editable": false,
+                                    "enabled": true,
+                                    "focused": false,
+                                    "identifier": "Subtract",
+                                    "label": "Subtract",
+                                    "name": "main-sidebarnavigationsplitview/calculatorkeypadview/subtract",
+                                    "role": "AXButton"
+                                  },
+                                  {
+                                    "actions": [
+                                      "AXPress"
+                                    ],
+                                    "childCount": 0,
+                                    "children": [],
+                                    "description": "",
+                                    "editable": false,
+                                    "enabled": true,
+                                    "focused": false,
+                                    "identifier": "One",
+                                    "label": "1",
+                                    "name": "main-sidebarnavigationsplitview/calculatorkeypadview/1",
+                                    "role": "AXButton"
+                                  },
+                                  {
+                                    "actions": [
+                                      "AXPress"
+                                    ],
+                                    "childCount": 0,
+                                    "children": [],
+                                    "description": "",
+                                    "editable": false,
+                                    "enabled": true,
+                                    "focused": false,
+                                    "identifier": "Two",
+                                    "label": "2",
+                                    "name": "main-sidebarnavigationsplitview/calculatorkeypadview/2",
+                                    "role": "AXButton"
+                                  },
+                                  {
+                                    "actions": [
+                                      "AXPress"
+                                    ],
+                                    "childCount": 0,
+                                    "children": [],
+                                    "description": "",
+                                    "editable": false,
+                                    "enabled": true,
+                                    "focused": false,
+                                    "identifier": "Three",
+                                    "label": "3",
+                                    "name": "main-sidebarnavigationsplitview/calculatorkeypadview/3",
+                                    "role": "AXButton"
+                                  },
+                                  {
+                                    "actions": [
+                                      "AXPress"
+                                    ],
+                                    "childCount": 0,
+                                    "children": [],
+                                    "description": "",
+                                    "editable": false,
+                                    "enabled": true,
+                                    "focused": false,
+                                    "identifier": "Add",
+                                    "label": "Add",
+                                    "name": "main-sidebarnavigationsplitview/calculatorkeypadview/add",
+                                    "role": "AXButton"
+                                  },
+                                  {
+                                    "actions": [
+                                      "AXPress"
+                                    ],
+                                    "childCount": 0,
+                                    "children": [],
+                                    "description": "Change sign of a value",
+                                    "editable": false,
+                                    "enabled": true,
+                                    "focused": false,
+                                    "identifier": "Negate",
+                                    "label": "Change Sign",
+                                    "name": "main-sidebarnavigationsplitview/calculatorkeypadview/change-sign",
+                                    "role": "AXButton"
+                                  },
+                                  {
+                                    "actions": [
+                                      "AXPress"
+                                    ],
+                                    "childCount": 0,
+                                    "children": [],
+                                    "description": "",
+                                    "editable": false,
+                                    "enabled": true,
+                                    "focused": false,
+                                    "identifier": "Zero",
+                                    "label": "0",
+                                    "name": "main-sidebarnavigationsplitview/calculatorkeypadview/0",
+                                    "role": "AXButton"
+                                  },
+                                  {
+                                    "actions": [
+                                      "AXPress"
+                                    ],
+                                    "childCount": 0,
+                                    "children": [],
+                                    "description": "",
+                                    "editable": false,
+                                    "enabled": true,
+                                    "focused": false,
+                                    "identifier": "Decimal",
+                                    "label": "Point",
+                                    "name": "main-sidebarnavigationsplitview/calculatorkeypadview/point",
+                                    "role": "AXButton"
+                                  },
+                                  {
+                                    "actions": [
+                                      "AXPress"
+                                    ],
+                                    "childCount": 0,
+                                    "children": [],
+                                    "description": "",
+                                    "editable": false,
+                                    "enabled": true,
+                                    "focused": false,
+                                    "identifier": "Equals",
+                                    "label": "Equals",
+                                    "name": "main-sidebarnavigationsplitview/calculatorkeypadview/equals",
+                                    "role": "AXButton"
+                                  }
+                                ],
+                                "editable": false,
+                                "enabled": true,
+                                "focused": true,
+                                "identifier": "CalculatorKeypadView",
+                                "name": "calculator/main-sidebarnavigationsplitview/calculatorkeypadview",
+                                "role": "AXGroup"
+                              }
+                            ],
+                            "editable": false,
+                            "focused": false,
+                            "role": "AXGroup",
+                            "subrole": "AXHostingView"
+                          }
+                        ],
+                        "editable": false,
+                        "focused": false,
+                        "identifier": "main, SidebarNavigationSplitView",
+                        "name": "calculator/main-sidebarnavigationsplitview",
+                        "role": "AXSplitGroup"
+                      }
+                    ],
+                    "editable": false,
+                    "focused": false,
+                    "role": "AXGroup",
+                    "subrole": "AXHostingView"
+                  },
+                  {
+                    "actions": [],
+                    "childCount": 2,
+                    "children": [
+                      {
+                        "actions": [
+                          "AXPress"
+                        ],
+                        "childCount": 0,
+                        "children": [],
+                        "editable": false,
+                        "enabled": true,
+                        "focused": false,
+                        "identifier": "",
+                        "label": "Show Sidebar",
+                        "name": "calculator/show-sidebar",
+                        "role": "AXButton"
+                      },
+                      {
+                        "actions": [
+                          "AXPress"
+                        ],
+                        "childCount": 0,
+                        "children": [],
+                        "editable": false,
+                        "enabled": true,
+                        "focused": false,
+                        "identifier": "Mode: basic; unitConversion: false",
+                        "label": "Mode",
+                        "name": "calculator/mode",
+                        "role": "AXButton"
+                      }
+                    ],
+                    "editable": false,
+                    "focused": false,
+                    "role": "AXToolbar"
+                  },
+                  {
+                    "actions": [
+                      "AXPress"
+                    ],
+                    "childCount": 0,
+                    "children": [],
+                    "editable": false,
+                    "enabled": true,
+                    "focused": false,
+                    "role": "AXButton",
+                    "subrole": "AXCloseButton"
+                  },
+                  {
+                    "actions": [
+                      "AXPress"
+                    ],
+                    "childCount": 1,
+                    "children": [
+                      {
+                        "actions": [],
+                        "childCount": 1,
+                        "children": [
+                          {
+                            "actions": [],
+                            "childCount": 0,
+                            "children": [],
+                            "editable": false,
+                            "focused": false,
+                            "role": "AXGroup"
+                          }
+                        ],
+                        "editable": false,
+                        "focused": false,
+                        "role": "AXGroup"
+                      }
+                    ],
+                    "editable": false,
+                    "enabled": false,
+                    "focused": false,
+                    "role": "AXButton",
+                    "subrole": "AXZoomButton"
+                  },
+                  {
+                    "actions": [
+                      "AXPress"
+                    ],
+                    "childCount": 0,
+                    "children": [],
+                    "editable": false,
+                    "enabled": true,
+                    "focused": false,
+                    "role": "AXButton",
+                    "subrole": "AXMinimizeButton"
+                  }
+                ],
+                "editable": false,
+                "focused": false,
+                "identifier": "main",
+                "name": "calculator",
+                "role": "AXWindow",
+                "subrole": "AXStandardWindow",
+                "title": "Calculator"
+              },
+              "title": "Calculator"
+            }
+          ]
+        },
+        "id": "s12",
+        "screenText": [
+          {
+            "confidence": 1,
+            "text": "••"
+          },
+          {
+            "confidence": 1,
+            "text": "AC"
+          },
+          {
+            "confidence": 1,
+            "text": "%"
+          },
+          {
+            "confidence": 1,
+            "text": "8"
+          },
+          {
+            "confidence": 1,
+            "text": "9"
+          },
+          {
+            "confidence": 0.5,
+            "text": "7"
+          },
+          {
+            "confidence": 0.30000001192092896,
+            "text": "X"
+          },
+          {
+            "confidence": 1,
+            "text": "6"
+          },
+          {
+            "confidence": 1,
+            "text": "4"
+          },
+          {
+            "confidence": 1,
+            "text": "2"
+          },
+          {
+            "confidence": 0.5,
+            "text": "3"
+          },
+          {
+            "confidence": 1,
+            "text": "1"
+          }
+        ],
+        "since": "obs-636f6d2e6170706c652e63616c63756c61746f72.733132.11"
+      }
+    }
+  }
+}

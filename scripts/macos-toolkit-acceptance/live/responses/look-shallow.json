@@ -1,0 +1,55 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "tools/call",
+    "params": {
+      "name": "look",
+      "arguments": {
+        "app": "Calculator",
+        "screenshot": false,
+        "childDepth": 0,
+        "depth": 0,
+        "frames": false
+      }
+    }
+  },
+  "response": {
+    "id": 2,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": "<391 chars; mirrors structuredContent>",
+          "type": "text"
+        }
+      ],
+      "isError": false,
+      "structuredContent": {
+        "app": {
+          "identifier": "com.apple.calculator",
+          "name": "Calculator",
+          "windows": [
+            {
+              "root": {
+                "actions": [],
+                "childCount": 5,
+                "editable": false,
+                "focused": false,
+                "identifier": "main",
+                "name": "calculator",
+                "role": "AXWindow",
+                "subrole": "AXStandardWindow",
+                "title": "Calculator",
+                "truncationReason": "depth limit reached"
+              },
+              "title": "Calculator"
+            }
+          ]
+        },
+        "id": "s2",
+        "since": "obs-636f6d2e6170706c652e63616c63756c61746f72.7332.2"
+      }
+    }
+  }
+}

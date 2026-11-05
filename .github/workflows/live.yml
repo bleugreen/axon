@@ -360,6 +360,12 @@ jobs:
           fi
           echo "the candidate menu is running as pid $menu_pid"
 
+          # The same filters run against recorded Rust responses on hosted CI.
+          probe() {
+            local filter="$1"
+            shift
+            jq -L "$PWD/scripts/macos-toolkit-acceptance/live" "$@" "include \"probe\"; $filter"
+          }
           open -a Calculator
           look=""
           look_error=""
@@ -367,13 +373,7 @@ jobs:
           for _ in {1..40}; do
             if candidate="$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{"app":"Calculator"}}}' | "$cli" mcp 2>&1)"; then
               look="$candidate"
-              if printf '%s' "$look" | jq -e '
-                .result.isError == false
-                and (.result.structuredContent.app | strings | length > 0)
-                and ([.result.content[] | select(.type == "image" and .mimeType == "image/png" and (.data | length > 0))] | length == 1)
-                and ([.result.structuredContent.tree | split("\n")[] | select(test(": button \"All Clear\" \\[click\\]"))] | length == 1)
-                and ([.result.structuredContent.tree | split("\n")[] | select(test(": button \"1\" \\[click\\]"))] | length == 1)
-              ' >/dev/null; then
+              if printf '%s' "$look" | probe full -e >/dev/null; then
                 ready=true
                 break
               fi
@@ -385,58 +385,55 @@ jobs:
           if [[ "$ready" != true ]]; then
             echo '::error::Calculator did not expose uniquely named All Clear and digit 1 buttons before the resolve deadline'
             if [[ -n "$look" ]]; then
-              printf '%s\n' "$look" | jq '{
-                isError: .result.isError,
-                observation: (.result.structuredContent | {app, tree: (.tree | split("\n") | map(select(test(": button "))) | .[0:20])}),
-                error: (.result.structuredContent | {code, message, error})
-              }'
+              printf '%s\n' "$look" | probe diagnostic
             elif [[ -n "$look_error" ]]; then
               printf 'last look error: %.500s\n' "$look_error"
             fi
             exit 1
           fi
-          retained_app="$(printf '%s' "$look" | jq -r '.result.structuredContent.app')"
-          clear_name="$(printf '%s' "$look" | jq -r '[.result.structuredContent.tree | split("\n")[] | select(test(": button \"All Clear\" \\[click\\]")) | capture("^\\s*(?<name>.+): button").name][0]')"
-          one_name="$(printf '%s' "$look" | jq -r '[.result.structuredContent.tree | split("\n")[] | select(test(": button \"1\" \\[click\\]")) | capture("^\\s*(?<name>.+): button").name][0]')"
+          retained_app="$(printf '%s' "$look" | probe app_name -er)"
+          clear_name="$(printf '%s' "$look" | probe 'button_name("All Clear")' -er)"
+          one_name="$(printf '%s' "$look" | probe 'button_name("1")' -er)"
           echo 'Calculator All Clear and digit 1 buttons have retained app-scoped semantic names'
 
           shallow="$(printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"look","arguments":{"app":"Calculator","screenshot":false,"childDepth":0,"depth":0,"frames":false}}}' | "$cli" mcp)"
-          if ! printf '%s' "$shallow" | jq -e '
-            .result.isError == false
-            and ([.result.content[] | select(.type == "image")] | length == 0)
-            and (.result.structuredContent.tree | split("\n") | all((startswith("  ") or test(": window "))))
-          ' >/dev/null; then
+          if ! printf '%s' "$shallow" | probe shallow -e >/dev/null; then
             echo '::error::Calculator shallow look did not honor childDepth, depth, frames, and screenshot controls'
-            printf '%s\n' "$shallow" | jq .
+            printf '%s\n' "$shallow" | probe diagnostic
             exit 1
           fi
 
           child_page="$(jq -cn --arg app "$retained_app" --arg name "$clear_name" '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"look","arguments":{"target":{"app":$app,"name":$name},"offset":0,"limit":1,"direct":true}}}' | "$cli" mcp)"
-          if ! printf '%s' "$child_page" | jq -e '
-            .result.isError == false
-            and .result.structuredContent.children.format == "children"
-            and .result.structuredContent.children.offset == 0
-            and .result.structuredContent.children.limit == 1
-            and .result.structuredContent.children.total >= 0
-            and ([.result.content[] | select(.type == "image")] | length == 0)
-          ' >/dev/null; then
-            echo '::error::Calculator semantic child page did not expose bounded imageless metadata'
-            printf '%s\n' "$child_page" | jq .
+          if ! printf '%s' "$child_page" | probe child_page -e >/dev/null; then
+            if printf '%s' "$child_page" | probe retention_missing -e >/dev/null; then
+              echo '::error::Calculator All Clear: a name issued by the earlier full look no longer resolves after a narrower look (shallow look), while requesting its child page'
+            else
+              echo '::error::Calculator semantic child page did not expose bounded imageless metadata'
+            fi
+            printf '%s\n' "$child_page" | probe diagnostic
             exit 1
           fi
 
           clear_invoked="$(jq -cn --arg app "$retained_app" --arg name "$clear_name" '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"invoke","arguments":{"target":{"app":$app,"name":$name},"name":"AXPress"}}}' | "$cli" mcp)"
-          if ! printf '%s' "$clear_invoked" | jq -e '.result.isError == false and .result.structuredContent.action.success == true and .result.structuredContent.action.targetResolution.status == "unique"' >/dev/null; then
-            echo '::error::Calculator All Clear semantic name did not resolve uniquely and dispatch'
-            printf '%s\n' "$clear_invoked" | jq .
+          if ! printf '%s' "$clear_invoked" | probe invoked -e >/dev/null; then
+            if printf '%s' "$clear_invoked" | probe retention_missing -e >/dev/null; then
+              echo '::error::Calculator All Clear: a name issued by the earlier full look no longer resolves after a narrower look (shallow look and child page)'
+            else
+              echo '::error::Calculator All Clear retained semantic name did not resolve uniquely and dispatch'
+            fi
+            printf '%s\n' "$clear_invoked" | probe diagnostic
             exit 1
           fi
           echo 'Calculator All Clear button pressed'
 
           one_invoked="$(jq -cn --arg app "$retained_app" --arg name "$one_name" '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"invoke","arguments":{"target":{"app":$app,"name":$name},"name":"AXPress"}}}' | "$cli" mcp)"
-          if ! printf '%s' "$one_invoked" | jq -e '.result.isError == false and .result.structuredContent.action.success == true and .result.structuredContent.action.targetResolution.status == "unique"' >/dev/null; then
-            echo '::error::Calculator digit 1 semantic name did not resolve uniquely and dispatch'
-            printf '%s\n' "$one_invoked" | jq .
+          if ! printf '%s' "$one_invoked" | probe invoked -e >/dev/null; then
+            if printf '%s' "$one_invoked" | probe retention_missing -e >/dev/null; then
+              echo '::error::Calculator digit 1: a name issued by the earlier full look no longer resolves after a narrower look (shallow look and child page)'
+            else
+              echo '::error::Calculator digit 1 retained semantic name did not resolve uniquely and dispatch'
+            fi
+            printf '%s\n' "$one_invoked" | probe diagnostic
             exit 1
           fi
           echo 'Calculator digit 1 pressed'
@@ -447,7 +444,7 @@ jobs:
           for _ in {1..20}; do
             if candidate="$(printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"look","arguments":{"app":"Calculator"}}}' | "$cli" mcp 2>&1)"; then
               after="$candidate"
-              if printf '%s' "$after" | jq -e '.result.isError == false and (.result.structuredContent.tree | test(": text \"[^\"]*1[^\"]*\""))' >/dev/null; then
+              if printf '%s' "$after" | probe display_one -e >/dev/null; then
                 verified=true
                 break
               fi
@@ -459,17 +456,18 @@ jobs:
           if [[ "$verified" != true ]]; then
             echo '::error::Calculator display did not show digit 1 after the semantic invocation'
             if [[ -n "$after" ]]; then
-              printf '%s\n' "$after" | jq '{
-                isError: .result.isError,
-                display: [.result.structuredContent.tree | split("\n")[] | select(test(": text "))][0:20],
-                error: (.result.structuredContent | {code, message, error})
-              }'
+              printf '%s\n' "$after" | probe diagnostic
             elif [[ -n "$after_error" ]]; then
               printf 'last look error: %.500s\n' "$after_error"
             fi
             exit 1
           fi
           echo 'Calculator display verified'
+          if ! change_clear_name="$(printf '%s' "$after" | probe 'button_name("Clear")' -er)"; then
+            echo '::error::Calculator look after pressing 1 did not expose a uniquely named Clear key'
+            printf '%s\n' "$after" | probe diagnostic
+            exit 1
+          fi
 
           # `look(since:)`. A change check is only evidence if it can also say "unchanged", so the
           # window is first observed until a check against the previous token reports nothing new
@@ -480,21 +478,22 @@ jobs:
             jq -cn --arg since "$1" '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"look","arguments":{"app":"Calculator","since":$since}}}' | "$cli" mcp
           }
           baseline="$(printf '%s\n' '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"look","arguments":{"app":"Calculator","screenshot":false}}}' | "$cli" mcp)"
-          since_token="$(printf '%s' "$baseline" | jq -r '.result.structuredContent.since // empty')"
+          since_token="$(printf '%s' "$baseline" | probe since_token -r)"
           if [[ -z "$since_token" ]]; then
             echo '::error::a full look at Calculator returned no since token'
-            printf '%s\n' "$baseline" | jq '{isError: .result.isError, keys: (.result.structuredContent | keys?)}'
+            printf '%s\n' "$baseline" | probe diagnostic
             exit 1
           fi
           settled=false
           check=""
           for _ in {1..20}; do
             check="$(since_look "$since_token")"
-            if printf '%s' "$check" | jq -e '.result.isError == false and .result.structuredContent.unchanged == true' >/dev/null; then
+            if printf '%s' "$check" | probe unchanged -e >/dev/null; then
+              since_token="$(printf '%s' "$check" | probe since_token -r)"
               settled=true
               break
             fi
-            since_token="$(printf '%s' "$check" | jq -r '.result.structuredContent.since // empty')"
+            since_token="$(printf '%s' "$check" | probe since_token -r)"
             if [[ -z "$since_token" ]]; then
               break
             fi
@@ -502,14 +501,15 @@ jobs:
           done
           if [[ "$settled" != true ]]; then
             echo '::error::look(since:) never reported an untouched Calculator as unchanged'
-            printf '%s\n' "$check" | jq '{isError: .result.isError, result: (.result.structuredContent | del(.observation))}'
+            printf '%s\n' "$check" | probe diagnostic
             exit 1
           fi
           # Pressed after the settle; the token checked against is the settled one, which the
           # unchanged answer itself carries.
-          if ! jq -cn --arg app "$retained_app" --arg name "$clear_name" '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"invoke","arguments":{"target":{"app":$app,"name":$name},"name":"AXPress"}}}' | "$cli" mcp \
-            | jq -e '.result.isError == false and .result.structuredContent.action.success == true' >/dev/null; then
-            echo '::error::Calculator All Clear did not dispatch for the change check'
+          change_invoked="$(jq -cn --arg app "$retained_app" --arg name "$change_clear_name" '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"invoke","arguments":{"target":{"app":$app,"name":$name},"name":"AXPress"}}}' | "$cli" mcp)"
+          if ! printf '%s' "$change_invoked" | probe invoked -e >/dev/null; then
+            echo '::error::Calculator Clear did not resolve uniquely and dispatch for the change check'
+            printf '%s\n' "$change_invoked" | probe diagnostic
             exit 1
           fi
           changed=false
@@ -518,19 +518,15 @@ jobs:
             # A diff, or the full observation the daemon returns when the diff is too large to be
             # worth sending. A baseline-expired fallback is not a change report: it means the token
             # was forgotten.
-            if printf '%s' "$check" | jq -e '
-              .result.isError == false
-              and (.result.structuredContent.unchanged // false) == false
-              and (.result.structuredContent.diff != null or .result.structuredContent.note == "diff-exceeded-threshold")
-            ' >/dev/null; then
+            if printf '%s' "$check" | probe changed -e >/dev/null; then
               changed=true
               break
             fi
             sleep 0.1
           done
           if [[ "$changed" != true ]]; then
-            echo '::error::look(since:) did not report the change All Clear made to Calculator'
-            printf '%s\n' "$check" | jq '{isError: .result.isError, result: (.result.structuredContent | del(.observation))}'
+            echo '::error::look(since:) did not report the change Clear made to Calculator'
+            printf '%s\n' "$check" | probe diagnostic
             exit 1
           fi
           echo 'look(since:) reported unchanged before the press and a change after it'
@@ -538,15 +534,12 @@ jobs:
           # OCR over the window's own pixels. Calculator always shows digits -- the display and
           # the keypad -- so a recognizer that returns none has not read this window.
           screen="$(printf '%s\n' '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"look","arguments":{"app":"Calculator","screenshot":false,"screenText":true}}}' | "$cli" mcp)"
-          if ! printf '%s' "$screen" | jq -e '
-            .result.isError == false
-            and ([.result.structuredContent.screenText[]?.text | strings | select(test("[0-9]"))] | length > 0)
-          ' >/dev/null; then
+          if ! printf '%s' "$screen" | probe ocr -e >/dev/null; then
             echo '::error::look with screenText did not recognize any Calculator digit'
-            printf '%s\n' "$screen" | jq '{isError: .result.isError, screenText: .result.structuredContent.screenText, screenTextUnavailable: .result.structuredContent.screenTextUnavailable, error: .result.structuredContent.error}'
+            printf '%s\n' "$screen" | probe diagnostic
             exit 1
           fi
-          echo "screenText recognized: $(printf '%s' "$screen" | jq -c '[.result.structuredContent.screenText[]?.text] | .[0:12]')"
+          echo "screenText recognized: $(printf '%s' "$screen" | probe screen_text -c)"
 
           # A recording the production Swift daemon made, replayed by this build: the compatibility
           # promise the flip from Swift to Rust rests on. Skipped until the qualification commits

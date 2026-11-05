@@ -1177,8 +1177,29 @@ loaded. Its `launchctl` stub keeps a file-backed set of loaded jobs, and its
 a scenario checks the state the desktop is left in rather than only the calls
 made. The stub can also report a job running once and exited afterwards, which
 is how the evidence a dead candidate's failure prints is rehearsed. It runs on
-the macOS runner rather than a hosted
-one so that the shell interpreting it is the same `bash` 3.2 the live lane gets.
+both hosted Linux and the macOS runner; the latter also checks the same
+`bash` 3.2 the live lane gets. Candidate cleanup waits up to ten seconds per
+launchd label after bootout, before sweeping processes. The stub models delayed
+unload and a successful bootout whose label never disappears, so asynchronous
+teardown is tolerated without accepting a genuinely stuck job.
+
+The hosted macOS live-contract job also runs
+`scripts/test-macos-live-filters.py` against recorded Rust MCP request/response
+pairs under `scripts/macos-toolkit-acceptance/live/responses`. The live workflow
+and tests import the same `probe.jq`: app observations traverse
+`app.windows[].root`, invocations assert unique resolution and dispatch rather
+than an undeclared postcondition, and diagnostics accept both observations and
+structured errors. A mutation restoring the Swift-only top-level tree path must
+fail against the captures. Child-page limits describe the effective native
+range, so a leaf returns zero even when the requested bound was one.
+
+The Calculator probe deliberately uses names from its initial full observation
+after a depth-zero observation and a child page. It must report a retained name
+that no longer resolves, not refresh the names to hide that product failure.
+After pressing 1 it reads the display by role and value, then takes the renamed
+Clear key from that observation for the change check. The recorded missing-name
+response remains a negative fixture; assembled workflow simulations verify
+ordering and diagnostics, not live desktop success.
 
 The `Test` workflow's Windows job does the same for the Windows lane, whose
 stages live in `.github/scripts/windows-live-probe.ps1` rather than in the

@@ -60,6 +60,14 @@ for argument in "$@"; do
   if [[ "$expect_label" == true ]]; then
     expect_label=false
     launchctl bootout "gui/$uid/$argument" >/dev/null 2>&1 || true
+    # bootout can return before launchd finishes unloading the job and stopping its process.
+    # Give it ten seconds before the fallback sweep, with a final check after the last sleep.
+    for _ in {1..40}; do
+      if ! launchctl print "gui/$uid/$argument" >/dev/null 2>&1; then
+        break
+      fi
+      sleep 0.25
+    done
     if launchctl print "gui/$uid/$argument" >/dev/null 2>&1; then
       printf '::error::%s is still loaded after launchctl bootout\n' "$argument"
       failed=true

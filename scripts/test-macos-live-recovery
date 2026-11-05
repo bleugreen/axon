@@ -148,6 +148,8 @@ STUBS = {
     # its plist's file name, which is how both the desktop's and the lane's plists are named, and
     # takes the pid it reports from STUB_PID_<label with dots as underscores>. STUB_BOOTOUT_STICKY
     # and STUB_BOOTSTRAP_FAILS name labels whose bootout or bootstrap fails and changes nothing.
+    # STUB_BOOTOUT_DELAY_<label>=N keeps a successfully booted-out job loaded for N prints;
+    # STUB_BOOTOUT_NEVER_UNLOAD names jobs whose bootout succeeds but never unloads them.
     # STUB_DIES_<label> is a job that launchd reports running once and that has then exited with
     # that code -- the shape of a candidate that dies before it can open its log.
     "launchctl": """
@@ -166,6 +168,17 @@ STUBS = {
         case "$1" in
           print)
             label="$(label_of "$2")"
+            echo "launchctl print $label" >> "$STUB_LOG"
+            pending="$STUB_STATE/bootout-$label"
+            if [ -f "$pending" ]; then
+              remaining="$(cat "$pending")"
+              if [ "$remaining" -eq 0 ]; then
+                rm -f "$state/$label" "$pending"
+                echo "launchctl unloaded $label" >> "$STUB_LOG"
+              else
+                echo "$((remaining - 1))" > "$pending"
+              fi
+            fi
             [ -f "$state/$label" ] || exit 113
             pid="$(cat "$state/$label")"
             meta="$STUB_STATE/launchd-meta"
@@ -194,6 +207,12 @@ STUBS = {
             echo "launchctl bootout $label" >> "$STUB_LOG"
             if listed "$label" "${STUB_BOOTOUT_STICKY:-}"; then exit 5; fi
             [ -f "$state/$label" ] || exit 3
+            if listed "$label" "${STUB_BOOTOUT_NEVER_UNLOAD:-}"; then exit 0; fi
+            delay="STUB_BOOTOUT_DELAY_$(printf '%s' "$label" | tr '.-' '__')"
+            if [ -n "${!delay:-}" ]; then
+              printf '%s' "${!delay}" > "$STUB_STATE/bootout-$label"
+              exit 0
+            fi
             rm -f "$state/$label"
             ;;
           bootstrap)
@@ -224,6 +243,16 @@ STUBS = {
     # `stop-probe-app` depends on -- that dependency is verified by reading `man pgrep`, not by
     # this harness.
     "pgrep": """
+        echo "pgrep $*" >> "$STUB_LOG"
+        if [ "$1" = -f ] && [ -n "${STUB_PROCESSES_EXIT_ON_UNLOAD:-}" ]; then
+          loaded=false
+          for label in $STUB_PROCESSES_EXIT_ON_UNLOAD; do
+            if [ -f "$STUB_STATE/launchd/$label" ]; then loaded=true; fi
+          done
+          if [ "$loaded" = false ]; then
+            : > "$STUB_STATE/pgrep_f"
+          fi
+        fi
         case "$1" in
           -f) file="$STUB_STATE/pgrep_f" ;;
           -x) file="$STUB_STATE/pgrep_x_$2" ;;
@@ -255,8 +284,8 @@ STUBS = {
         exit 1
     """,
     "open": 'echo "open $*" >> "$STUB_LOG"; exit ${STUB_OPEN_EXIT:-0}',
-    # Stubbed so the bounded retry loops cost nothing; the loops' bounds are not what is under test.
-    "sleep": "exit 0",
+    # Record retry intervals without delaying the harness, so scenarios can assert their bounds.
+    "sleep": 'echo "sleep $*" >> "$STUB_LOG"',
 }
 
 # The Axon CLI, acting on the stub launchd the way `Supervision` acts on the real one.
@@ -440,8 +469,8 @@ def main() -> int:
     daemon, menu = harness.daemon, harness.menu
     live_daemon, live_menu = harness.live_daemon, harness.live_menu
     failures: list[str] = []
-    passed = {"park": 0, "probe": 0, "restore": 0}
-    totals = {"park": 0, "probe": 0, "restore": 0}
+    passed = {"stop": 0, "park": 0, "probe": 0, "restore": 0}
+    totals = {"stop": 0, "park": 0, "probe": 0, "restore": 0}
 
     def check(step, script, label, want_exit, expect=(), forbid=(), order=(),
               want_loaded=(), want_unloaded=(), inspect=None, **kwargs):
@@ -496,6 +525,55 @@ def main() -> int:
             for line in combined.strip().splitlines()[-15:]:
                 print(f"           {line}")
         return calls
+
+    print("Candidate stop helper")
+    stop = ('scripts/stop-probe-app --launchd-label "$AXON_LIVE_DAEMON_LABEL" '
+            '"$GITHUB_WORKSPACE/$AXON_DIST_MAIN"\n')
+    delay_var = "STUB_BOOTOUT_DELAY_" + live_daemon.replace(".", "_")
+
+    def stop_poll_counts(prints, sleeps):
+        def inspect():
+            calls = (harness.root / "calls.log").read_text().splitlines()
+            problems = []
+            for entry, wanted in ((f"launchctl print {live_daemon}", prints),
+                                  ("sleep 0.25", sleeps)):
+                actual = calls.count(entry)
+                if actual != wanted:
+                    problems.append(f"{entry!r} happened {actual} times, wanted {wanted}")
+            # Every label check, including the final deadline check, precedes the process sweep.
+            sweep = next((i for i, call in enumerate(calls) if call.startswith("pgrep -f ")), None)
+            if sweep is None:
+                problems.append("the process sweep never happened")
+            elif any(call.startswith(("launchctl print ", "sleep ")) for call in calls[sweep:]):
+                problems.append("unload polling continued after the process sweep began")
+            return problems
+        return inspect
+
+    check("stop", stop, "does not wait for an already absent label", 0,
+          forbid=["pkill", "sleep", "still loaded"], inspect=stop_poll_counts(2, 0))
+    check("stop", stop, "waits for delayed unload and process exit before sweeping", 0,
+          loaded={live_daemon: 901}, leftovers="901",
+          STUB_PROCESSES_EXIT_ON_UNLOAD=live_daemon, **{delay_var: 3},
+          order=[f"launchctl bootout {live_daemon}", f"launchctl unloaded {live_daemon}",
+                 "pgrep -f"],
+          forbid=["pkill", "still loaded", "still running"],
+          want_unloaded=[live_daemon], inspect=stop_poll_counts(5, 3))
+    check("stop", stop, "accepts unload on the final check after all forty sleeps", 0,
+          loaded={live_daemon: 901}, leftovers="901",
+          STUB_PROCESSES_EXIT_ON_UNLOAD=live_daemon, **{delay_var: 40},
+          order=[f"launchctl unloaded {live_daemon}", "pgrep -f"],
+          forbid=["pkill", "still loaded", "still running"],
+          want_unloaded=[live_daemon], inspect=stop_poll_counts(41, 40))
+    check("stop", stop, "bounds a successful bootout that never unloads, then sweeps and fails", 1,
+          loaded={live_daemon: 901}, leftovers="901",
+          STUB_BOOTOUT_NEVER_UNLOAD=live_daemon,
+          expect=[f"{live_daemon} is still loaded after launchctl bootout"],
+          order=[f"launchctl bootout {live_daemon}", "pgrep -f", "pkill -TERM"],
+          want_loaded=[live_daemon], inspect=stop_poll_counts(41, 40))
+    check("stop", stop, "preserves failure for a process surviving TERM and KILL", 1,
+          leftovers="901", STUB_PKILL_STICKY="true",
+          expect=["still running as pid(s) 901"],
+          order=["pkill -TERM", "pkill -KILL"])
 
     both = {daemon: 4242, menu: 4343}
 
@@ -711,7 +789,7 @@ def main() -> int:
 
     harness.cleanup()
     print()
-    for step in ("park", "probe", "restore"):
+    for step in ("stop", "park", "probe", "restore"):
         print(f"{step}: {passed[step]}/{totals[step]} scenarios passed")
     if failures:
         print(f"{len(failures)} failure(s)")
