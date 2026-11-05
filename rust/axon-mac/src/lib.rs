@@ -6,7 +6,8 @@ use axon_core::{
     DiffPolicy, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId,
     JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, PointSpace, PointTarget,
     PointerContract, ResolutionStatus, RunEnvelope, SemanticElementName, SemanticLookup,
-    SemanticNameRegistry, SemanticSelection, SinceToken, Snapshot, SnapshotHandle,
+    SemanticNameRegistry, SemanticRegistrationCoverage, SemanticSelection, SinceToken, Snapshot,
+    SnapshotHandle,
     TextLocationResolver, TextLocationSource, TextLocationTarget, TextRecognitionProvider,
     ToolDispatcher, classify_semantic_diff, dispatch_in_foreground, goal_success,
     look_since_response, pointer_target_is_point, prepare_run, select_delivery,
@@ -565,13 +566,18 @@ impl<
         }
     }
 
-    fn register_snapshot(&mut self, snapshot: &Snapshot) -> Vec<axon_core::SemanticElementName> {
+    fn register_snapshot(
+        &mut self,
+        snapshot: &Snapshot,
+        coverage: SemanticRegistrationCoverage,
+    ) -> Vec<axon_core::SemanticElementName> {
         let live_processes = self.backend.live_process_ids().ok();
-        self.semantic_names.register_with_liveness(snapshot, |pid| {
-            live_processes
-                .as_ref()
-                .is_none_or(|processes| processes.contains(&pid))
-        })
+        self.semantic_names
+            .register_with_liveness(snapshot, coverage, |pid| {
+                live_processes
+                    .as_ref()
+                    .is_none_or(|processes| processes.contains(&pid))
+            })
     }
 
     /// Resolves a text location to the point a pointer action aims at, and what stands behind it.
@@ -1591,16 +1597,16 @@ impl<
             let snapshot = Snapshot {
                 id: page.snapshot.clone(),
                 app: axon_core::Application {
-                    name: target.app.clone(),
+                    name: context.app_name().to_owned(),
                     process_id: context.process_id(),
-                    identifier: None,
+                    identifier: context.app_identifier().map(str::to_owned),
                     windows: vec![axon_core::Window {
                         title: None,
                         root: parent,
                     }],
                 },
             };
-            let names = self.register_snapshot(&snapshot);
+            let names = self.register_snapshot(&snapshot, SemanticRegistrationCoverage::Partial);
             let rendered = axon_core::render_semantic_names(&snapshot, &names);
             self.snapshot = Some(snapshot);
             return Ok(json!({
@@ -1636,7 +1642,8 @@ impl<
             .backend
             .capture_bounded(&app, axon_core::CaptureBounds { child_depth })
             .map_err(backend_error)?;
-        let names = self.register_snapshot(&snapshot);
+        let coverage = SemanticRegistrationCoverage::for_capture(&snapshot, child_depth);
+        let names = self.register_snapshot(&snapshot, coverage);
         self.observation_sequence += 1;
         let app_identity = snapshot
             .app
@@ -1854,7 +1861,8 @@ impl<
         }
         let started = Instant::now();
         let first = self.backend.capture(&app).map_err(backend_error)?;
-        let first_names = self.register_snapshot(&first);
+        let coverage = SemanticRegistrationCoverage::for_capture(&first, None);
+        let first_names = self.register_snapshot(&first, coverage);
         if params
             .get(axon_core::SINGLE_STABILITY_CAPTURE)
             .and_then(Value::as_bool)
@@ -1869,7 +1877,8 @@ impl<
         let mut stable_since = Instant::now();
         loop {
             let snapshot = self.backend.capture(&app).map_err(backend_error)?;
-            let names = self.register_snapshot(&snapshot);
+            let coverage = SemanticRegistrationCoverage::for_capture(&snapshot, None);
+            let names = self.register_snapshot(&snapshot, coverage);
             let changed_from_last = !matches!(
                 classify_semantic_diff(
                     &last,
@@ -3662,7 +3671,8 @@ mod tests {
         /// `look` registers it.
         fn element(router: &mut Router<NativeFake>, index: usize) -> Value {
             let snapshot = router.backend.snapshot.clone();
-            let names = router.register_snapshot(&snapshot);
+            let coverage = SemanticRegistrationCoverage::for_capture(&snapshot, None);
+            let names = router.register_snapshot(&snapshot, coverage);
             let name = names
                 .iter()
                 .find(|name| name.source_index == index)
