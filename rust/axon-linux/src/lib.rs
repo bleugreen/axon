@@ -2367,6 +2367,95 @@ mod tests {
         }
     }
 
+
+    #[test]
+    fn coverage_registration_explicit_bound_without_truncation_retains_names() {
+        let mut router = coverage_router();
+        let name = coverage_leaf_name(&mut router);
+        router.backend.snapshot.app.windows[0].root.children.clear();
+        let bounded = coverage_call(&mut router, "look",
+            json!({"app":"App","childDepth":99,"screenshot":false}));
+        assert!(bounded.pointer("/app/windows/0/root/truncationReason").is_none());
+        router.backend.snapshot = coverage_router().backend.snapshot;
+        coverage_invoke(&mut router, &name);
+    }
+
+    #[test]
+    fn coverage_registration_native_descendant_truncation_retains_names() {
+        let mut router = coverage_router();
+        let name = coverage_leaf_name(&mut router);
+        let group = &mut router.backend.snapshot.app.windows[0].root.children[0];
+        group.children.clear();
+        group.truncation_reason = Some("native safety limit".into());
+        coverage_call(&mut router, "look", json!({"app":"App","screenshot":false}));
+        router.backend.snapshot = coverage_router().backend.snapshot;
+        coverage_invoke(&mut router, &name);
+    }
+
+    #[test]
+    fn coverage_registration_display_only_controls_revoke_omitted_names() {
+        for options in [
+            json!({"depth":0}),
+            json!({"frames":false}),
+            json!({"tree":false}),
+            json!({"format":"debug"}),
+            json!({}),
+        ] {
+            let mut router = coverage_router();
+            let name = coverage_leaf_name(&mut router);
+            router.backend.snapshot.app.windows[0].root.children.clear();
+            let mut params = options.as_object().unwrap().clone();
+            params.insert("app".into(), json!("App"));
+            params.insert("screenshot".into(), json!(false));
+            coverage_call(&mut router, "look", Value::Object(params));
+            router.backend.snapshot = coverage_router().backend.snapshot;
+            let response = router.request(request("invoke",
+                json!({"target":{"app":"App","name":name},"name":"Invoke"}))).unwrap();
+            let JsonRpcResponse::Failure(failure) = response else {
+                panic!("complete capture must revoke omitted names");
+            };
+            assert_eq!(failure.error.data.unwrap()["status"], "missing");
+            assert!(router.backend.invoked_handles.borrow().is_empty());
+        }
+    }
+
+    #[test]
+    fn coverage_registration_all_leaf_page_is_still_partial() {
+        let mut router = coverage_router();
+        let name = coverage_leaf_name(&mut router);
+        let page = coverage_call(&mut router, "look",
+            json!({"target":{"app":"4101","name":name},"all":true,"screenshot":false}));
+        assert_eq!(page["children"]["total"], 0);
+        assert_eq!(page["children"]["tree"], "[]");
+        coverage_invoke(&mut router, &name);
+    }
+
+    #[test]
+    fn coverage_registration_stability_classifies_native_truncation() {
+        for single in [true, false] {
+            let mut router = coverage_router();
+            let name = coverage_leaf_name(&mut router);
+            let group = &mut router.backend.snapshot.app.windows[0].root.children[0];
+            group.children.clear();
+            group.truncation_reason = Some("native safety limit".into());
+            let mut params = json!({"app":"App","condition":"stable","stableMs":0,"timeoutMs":100});
+            if single {
+                params[axon_core::SINGLE_STABILITY_CAPTURE] = json!(true);
+            }
+            coverage_call(&mut router, "wait", params);
+            router.backend.snapshot = coverage_router().backend.snapshot;
+            coverage_invoke(&mut router, &name);
+        }
+    }
+
+    #[test]
+    fn coverage_registration_app_list_does_not_revoke_names() {
+        let mut router = coverage_router();
+        let name = coverage_leaf_name(&mut router);
+        coverage_call(&mut router, "look", json!({}));
+        coverage_invoke(&mut router, &name);
+    }
+
     #[derive(Clone)]
     struct FakeBackend {
         snapshot: Snapshot,
