@@ -670,6 +670,24 @@ mod tests {
     }
 
     #[test]
+    fn failed_native_rebuild_cannot_reuse_previous_snapshot_identity() {
+        let mut snapshot: Option<axon_core::Snapshot> = Some(serde_json::from_value(serde_json::json!({
+            "id":"old-cache",
+            "app":{"name":"App","windows":[{"title":null,"root":{"role":"Window","children":[{"role":"Button"}]}}]}
+        })).unwrap());
+        let old_handle = snapshot.as_ref().unwrap().handle(1);
+        let mut native_entries = vec!["old root", "old child"];
+        assert_eq!(super::retained_native_index(snapshot.as_ref(), native_entries.len(), &old_handle), Some(1));
+
+        super::invalidate_native_cache(&mut snapshot, &mut native_entries);
+        assert!(native_entries.is_empty());
+        assert!(snapshot.is_none());
+        // A provider can fail after repopulating the same indices, before publishing a snapshot.
+        native_entries.extend(["partial new root", "partial new child"]);
+        assert_eq!(super::retained_native_index(snapshot.as_ref(), native_entries.len(), &old_handle), None);
+    }
+
+    #[test]
     fn clone_error_preserves_typed_stale_handle_without_changing_display() {
         let stale = super::stale_handle("handle index outside snapshot");
         let text = stale.to_string();
@@ -1619,9 +1637,7 @@ impl UiaState {
         let capture_root = self
             .wait_for_root_web_area(&window, Duration::from_secs(2))
             .unwrap_or_else(|| window.clone());
-        // A failed rebuild must not associate partial native entries with the previous snapshot.
-        self.snapshot = None;
-        self.elements.clear();
+        invalidate_native_cache(&mut self.snapshot, &mut self.elements);
         let cache = self.capture_cache_request()?;
         let capture_root = unsafe { capture_root.BuildUpdatedCache(&cache) }
             .map_err(|e| operation("cache capture root", e))?;
@@ -1863,9 +1879,7 @@ impl UiaState {
         let cache = self.capture_cache_request()?;
         let parent_element = unsafe { element.BuildUpdatedCache(&cache) }
             .map_err(|e| operation("cache child page parent", e))?;
-        // A failed rebuild must not associate partial native entries with the previous snapshot.
-        self.snapshot = None;
-        self.elements.clear();
+        invalidate_native_cache(&mut self.snapshot, &mut self.elements);
         let mut parent_count = 0;
         let mut parent = self.capture_node(&parent_element, &cache, 0, 0, &mut parent_count)?;
         // Intentional paging is represented by offset/limit/total, never as native truncation.
@@ -3199,6 +3213,12 @@ impl From<CloneError> for BackendError {
         }
     }
 }
+fn invalidate_native_cache<T>(snapshot: &mut Option<Snapshot>, entries: &mut Vec<T>) {
+    // A failed rebuild must not associate partial native entries with the previous snapshot.
+    *snapshot = None;
+    entries.clear();
+}
+
 fn retained_native_index(
     snapshot: Option<&Snapshot>,
     native_count: usize,
