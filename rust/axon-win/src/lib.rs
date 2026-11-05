@@ -1115,7 +1115,11 @@ impl<
                     include_descendants: !direct,
                 };
                 // Current page-local handles can reach beyond whole-app capture limits.
-                let retained_page = if self.backend.retains_handle(&recorded).map_err(backend_error)? {
+                let retained_page = if self
+                    .backend
+                    .retains_handle(&recorded)
+                    .map_err(backend_error)?
+                {
                     match self.backend.capture_child_page(&recorded, paging) {
                         Ok(page) => Some(page),
                         Err(axon_core::BackendError::StaleHandle { .. }) => None,
@@ -1128,17 +1132,22 @@ impl<
                     page
                 } else {
                     let (handle, _) = self.resolve(params)?;
-                    self.backend.capture_child_page(&handle, paging).map_err(|error| {
-                        if matches!(error, axon_core::BackendError::StaleHandle { .. }) {
-                            JsonRpcError {
-                                code: -32002,
-                                message: format!("semantic name not found: {} / {}", target.app, target.name),
-                                data: Some(json!({"status":"missing","query":target})),
+                    self.backend
+                        .capture_child_page(&handle, paging)
+                        .map_err(|error| {
+                            if matches!(error, axon_core::BackendError::StaleHandle { .. }) {
+                                JsonRpcError {
+                                    code: -32002,
+                                    message: format!(
+                                        "semantic name not found: {} / {}",
+                                        target.app, target.name
+                                    ),
+                                    data: Some(json!({"status":"missing","query":target})),
+                                }
+                            } else {
+                                backend_error(error)
                             }
-                        } else {
-                            backend_error(error)
-                        }
-                    })?
+                        })?
                 };
                 let mut parent = page.parent.clone();
                 parent.children = page.children.clone();
@@ -2197,11 +2206,17 @@ mod tests {
                 if node.identifier.as_deref() == Some(identifier) {
                     Some(node.clone())
                 } else {
-                    node.children.iter().find_map(|child| find(child, identifier))
+                    node.children
+                        .iter()
+                        .find_map(|child| find(child, identifier))
                 }
             }
-            self.snapshot.app.windows.iter()
-                .find_map(|window| find(&window.root, identifier)).unwrap()
+            self.snapshot
+                .app
+                .windows
+                .iter()
+                .find_map(|window| find(&window.root, identifier))
+                .unwrap()
         }
 
         fn require_active_handle(&self, handle: &SnapshotHandle) -> Result<(), BackendError> {
@@ -2493,12 +2508,17 @@ mod tests {
             let observed = self.active_snapshot.as_ref().unwrap().node(index).unwrap();
             let mut parent = self.full_node(observed.identifier.as_deref().unwrap());
             let total = parent.children.len();
-            let children = parent.children.iter().skip(request.offset)
-                .take(request.limit.unwrap_or(usize::MAX)).cloned()
+            let children = parent
+                .children
+                .iter()
+                .skip(request.offset)
+                .take(request.limit.unwrap_or(usize::MAX))
+                .cloned()
                 .map(|mut child| {
                     Self::trim_node(&mut child, if request.include_descendants { 1 } else { 0 });
                     child
-                }).collect::<Vec<_>>();
+                })
+                .collect::<Vec<_>>();
             parent.children.clear();
             parent.truncation_reason = None;
             self.capture_serial += 1;
@@ -2766,9 +2786,14 @@ mod tests {
     }
 
     fn coverage_page(router: &mut Router<FakeBackend>, name: &str, app: &str) {
-        let SemanticSelection::Selected(context) = router.semantic_names.select(&axon_core::WireElementTarget {
-            app: app.into(), name: name.into(),
-        }) else { panic!("page target must be selected"); };
+        let SemanticSelection::Selected(context) =
+            router.semantic_names.select(&axon_core::WireElementTarget {
+                app: app.into(),
+                name: name.into(),
+            })
+        else {
+            panic!("page target must be selected");
+        };
         let recorded = context.recorded_handle().unwrap().clone();
         let current = router.backend.require_active_handle(&recorded).is_ok();
         let captures = router.backend.capture_queries.borrow().len();
@@ -2787,7 +2812,10 @@ mod tests {
         if current {
             assert_eq!(handle, &recorded);
         } else {
-            assert_eq!(handle.0, format!("capture-{}:2", router.backend.capture_serial - 1));
+            assert_eq!(
+                handle.0,
+                format!("capture-{}:2", router.backend.capture_serial - 1)
+            );
             let query = queries.last().unwrap();
             assert_eq!(query.process_id, Some(4242));
             assert_eq!(query.name, None);
@@ -2993,9 +3021,18 @@ mod tests {
 
     fn coverage_deep_name(router: &mut Router<FakeBackend>) -> String {
         let full = coverage_request(router, "look", json!({"app":"App","screenshot":false}));
-        let branch = full.pointer("/app/windows/0/root/children/0/name").unwrap().as_str().unwrap();
-        let page = coverage_request(router, "look", json!({"target":{"app":"App","name":branch},"direct":true,"format":"debug","tree":true}));
-        let children: Value = serde_json::from_str(page["children"]["tree"].as_str().unwrap()).unwrap();
+        let branch = full
+            .pointer("/app/windows/0/root/children/0/name")
+            .unwrap()
+            .as_str()
+            .unwrap();
+        let page = coverage_request(
+            router,
+            "look",
+            json!({"target":{"app":"App","name":branch},"direct":true,"format":"debug","tree":true}),
+        );
+        let children: Value =
+            serde_json::from_str(page["children"]["tree"].as_str().unwrap()).unwrap();
         children[0]["name"].as_str().unwrap().to_owned()
     }
 
@@ -3004,10 +3041,17 @@ mod tests {
         let mut router = coverage_deep_router();
         let deep = coverage_deep_name(&mut router);
         let captures = router.backend.capture_queries.borrow().len();
-        let page = coverage_request(&mut router, "look", json!({"target":{"app":"App","name":deep},"direct":true}));
+        let page = coverage_request(
+            &mut router,
+            "look",
+            json!({"target":{"app":"App","name":deep},"direct":true}),
+        );
         assert_eq!(page["children"]["total"], 1);
         assert_eq!(router.backend.capture_queries.borrow().len(), captures);
-        assert_eq!(captures, 1, "current handles page without any full recapture");
+        assert_eq!(
+            captures, 1,
+            "current handles page without any full recapture"
+        );
     }
 
     #[test]
@@ -3016,8 +3060,12 @@ mod tests {
         let deep = coverage_deep_name(&mut router);
         coverage_request(&mut router, "look", json!({"app":"App","screenshot":false}));
         let pages = router.backend.child_page_requests.len();
-        let response = router.request(request("look", json!({"target":{"app":"App","name":deep}}))).unwrap();
-        let JsonRpcResponse::Failure(failure) = response else { panic!("expired deep-only target must miss"); };
+        let response = router
+            .request(request("look", json!({"target":{"app":"App","name":deep}})))
+            .unwrap();
+        let JsonRpcResponse::Failure(failure) = response else {
+            panic!("expired deep-only target must miss");
+        };
         assert_eq!(failure.error.code, -32002);
         assert_eq!(failure.error.data.unwrap()["status"], "missing");
         assert_eq!(router.backend.child_page_requests.len(), pages);
@@ -3030,12 +3078,27 @@ mod tests {
             let name = coverage_name(&mut router);
             router.backend.cache_query_failure = query_failure;
             router.backend.page_failure = !query_failure;
-            let response = router.request(request("look", json!({"target":{"app":"App","name":name}}))).unwrap();
-            let JsonRpcResponse::Failure(failure) = response else { panic!("operational error must propagate"); };
+            let response = router
+                .request(request("look", json!({"target":{"app":"App","name":name}})))
+                .unwrap();
+            let JsonRpcResponse::Failure(failure) = response else {
+                panic!("operational error must propagate");
+            };
             assert_eq!(failure.error.code, -32000);
-            assert!(failure.error.message.contains(if query_failure { "query failed" } else { "provider failed" }));
-            assert_eq!(router.backend.capture_queries.borrow().len(), 1, "do not recapture on operational error");
-            assert_eq!(router.backend.child_page_requests.len(), usize::from(!query_failure));
+            assert!(failure.error.message.contains(if query_failure {
+                "query failed"
+            } else {
+                "provider failed"
+            }));
+            assert_eq!(
+                router.backend.capture_queries.borrow().len(),
+                1,
+                "do not recapture on operational error"
+            );
+            assert_eq!(
+                router.backend.child_page_requests.len(),
+                usize::from(!query_failure)
+            );
         }
     }
 
@@ -3045,11 +3108,18 @@ mod tests {
             let mut router = coverage_router();
             let name = coverage_name(&mut router);
             router.backend.stale_pages_remaining = stale_pages;
-            let response = router.request(request("look", json!({"target":{"app":"App","name":name}}))).unwrap();
+            let response = router
+                .request(request("look", json!({"target":{"app":"App","name":name}})))
+                .unwrap();
             if stale_pages == 1 {
-                assert!(matches!(response, JsonRpcResponse::Success(_)), "{response:?}");
+                assert!(
+                    matches!(response, JsonRpcResponse::Success(_)),
+                    "{response:?}"
+                );
             } else {
-                let JsonRpcResponse::Failure(failure) = response else { panic!("second stale page must miss"); };
+                let JsonRpcResponse::Failure(failure) = response else {
+                    panic!("second stale page must miss");
+                };
                 assert_eq!(failure.error.code, -32002);
                 assert_eq!(failure.error.data.unwrap()["status"], "missing");
             }
@@ -3063,8 +3133,12 @@ mod tests {
         let mut router = coverage_deep_router();
         let deep = coverage_deep_name(&mut router);
         router.backend.stale_pages_remaining = 1;
-        let response = router.request(request("look", json!({"target":{"app":"App","name":deep}}))).unwrap();
-        let JsonRpcResponse::Failure(failure) = response else { panic!("deep target beyond fresh cap must miss"); };
+        let response = router
+            .request(request("look", json!({"target":{"app":"App","name":deep}})))
+            .unwrap();
+        let JsonRpcResponse::Failure(failure) = response else {
+            panic!("deep target beyond fresh cap must miss");
+        };
         assert_eq!(failure.error.code, -32002);
         assert_eq!(failure.error.data.unwrap()["status"], "missing");
         assert_eq!(router.backend.child_page_requests.len(), 2);

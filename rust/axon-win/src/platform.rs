@@ -638,12 +638,34 @@ mod tests {
             "app":{"name":"App","windows":[{"title":null,"root":{"role":"Window","children":[{"role":"Button"}]}}]}
         })).unwrap();
         let child = snapshot.handle(1);
-        assert_eq!(super::retained_native_index(Some(&snapshot), 2, &child), Some(1));
+        assert_eq!(
+            super::retained_native_index(Some(&snapshot), 2, &child),
+            Some(1)
+        );
         assert_eq!(super::retained_native_index(None, 2, &child), None);
-        assert_eq!(super::retained_native_index(Some(&snapshot), 1, &child), None);
-        assert_eq!(super::retained_native_index(Some(&snapshot), 10, &snapshot.handle(2)), None);
-        for malformed in ["old-cache:1", "native-cache:-1", "native-cache:bad", "native-cache:1:2", "native-cache"] {
-            assert_eq!(super::retained_native_index(Some(&snapshot), 2, &axon_core::SnapshotHandle(malformed.into())), None);
+        assert_eq!(
+            super::retained_native_index(Some(&snapshot), 1, &child),
+            None
+        );
+        assert_eq!(
+            super::retained_native_index(Some(&snapshot), 10, &snapshot.handle(2)),
+            None
+        );
+        for malformed in [
+            "old-cache:1",
+            "native-cache:-1",
+            "native-cache:bad",
+            "native-cache:1:2",
+            "native-cache",
+        ] {
+            assert_eq!(
+                super::retained_native_index(
+                    Some(&snapshot),
+                    2,
+                    &axon_core::SnapshotHandle(malformed.into())
+                ),
+                None
+            );
         }
     }
 
@@ -652,7 +674,10 @@ mod tests {
         let stale = super::stale_handle("handle index outside snapshot");
         let text = stale.to_string();
         let cloned: axon_core::BackendError = super::CloneError::from(&stale).into();
-        assert!(matches!(&cloned, axon_core::BackendError::StaleHandle { .. }));
+        assert!(matches!(
+            &cloned,
+            axon_core::BackendError::StaleHandle { .. }
+        ));
         assert_eq!(cloned.to_string(), text);
         let operational = super::op("child page", "provider failed");
         let cloned: axon_core::BackendError = super::CloneError::from(&operational).into();
@@ -1017,7 +1042,12 @@ impl UiaState {
                 let _ = tx.send(self.capture(q, bounds));
             }
             Command::RetainsHandle(handle, tx) => {
-                let _ = tx.send(Ok(retained_native_index(self.snapshot.as_ref(), self.elements.len(), &handle).is_some()));
+                let _ = tx.send(Ok(retained_native_index(
+                    self.snapshot.as_ref(),
+                    self.elements.len(),
+                    &handle,
+                )
+                .is_some()));
             }
             Command::CaptureChildPage(target, request, tx) => {
                 let _ = tx.send(self.capture_child_page(&target, request));
@@ -3156,13 +3186,20 @@ impl From<CloneError> for BackendError {
                 cap(capability, e.message)
             }
         } else if e.stale_handle {
-            BackendError::StaleHandle { operation: e.operation, message: e.message }
+            BackendError::StaleHandle {
+                operation: e.operation,
+                message: e.message,
+            }
         } else {
             op(e.operation, e.message)
         }
     }
 }
-fn retained_native_index(snapshot: Option<&Snapshot>, native_count: usize, handle: &SnapshotHandle) -> Option<usize> {
+fn retained_native_index(
+    snapshot: Option<&Snapshot>,
+    native_count: usize,
+    handle: &SnapshotHandle,
+) -> Option<usize> {
     let snapshot = snapshot?;
     let index = snapshot.index_for_handle(handle).ok()?;
     snapshot.node(index)?;
@@ -3170,7 +3207,10 @@ fn retained_native_index(snapshot: Option<&Snapshot>, native_count: usize, handl
 }
 
 fn stale_handle(message: impl Into<String>) -> BackendError {
-    BackendError::StaleHandle { operation: "resolve handle".into(), message: message.into() }
+    BackendError::StaleHandle {
+        operation: "resolve handle".into(),
+        message: message.into(),
+    }
 }
 
 fn operation(name: &str, e: windows::core::Error) -> BackendError {
