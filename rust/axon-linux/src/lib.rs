@@ -2310,6 +2310,20 @@ mod tests {
         );
     }
 
+    fn coverage_trim(node: &mut Node, depth: usize) {
+        if depth == 0 {
+            if !node.children.is_empty() {
+                node.truncation_reason = Some("native full-app depth cap".into());
+                node.child_count = Some(node.children.len());
+                node.children.clear();
+            }
+        } else {
+            for child in &mut node.children {
+                coverage_trim(child, depth - 1);
+            }
+        }
+    }
+
     fn coverage_router() -> Router<FakeBackend> {
         let mut group = node("Panel");
         group.children = vec![node("Leaf")];
@@ -2385,6 +2399,10 @@ mod tests {
             .id
             .clone();
         let captures_before = router.backend.capture_queries.borrow().len();
+        let SemanticSelection::Selected(context) = router.semantic_names.select(&axon_core::WireElementTarget { app: app.into(), name: name.into() }) else { panic!("page target must be selected") };
+        let recorded = context.recorded_handle().unwrap();
+        let cached = router.backend.captured_snapshots.borrow().last().is_some_and(|snapshot|
+            snapshot.index_for_handle(recorded).ok().and_then(|index| snapshot.node(index)).is_some());
         let page = coverage_call(
             router,
             "look",
@@ -2394,13 +2412,15 @@ mod tests {
         assert_eq!(page["children"]["tree"], "[]");
         assert_eq!(page["children"]["parent"]["app"], app);
         let queries = router.backend.capture_queries.borrow();
-        assert_eq!(queries.len(), captures_before + 1);
-        assert_eq!(queries.last().unwrap().process_id, Some(4101));
-        assert!(queries.last().unwrap().name.is_none());
-        assert!(queries.last().unwrap().identifier.is_none());
+        assert_eq!(queries.len(), captures_before + usize::from(!cached));
+        if !cached {
+            assert_eq!(queries.last().unwrap().process_id, Some(4101));
+            assert!(queries.last().unwrap().name.is_none());
+            assert!(queries.last().unwrap().identifier.is_none());
+        }
         let requests = router.backend.child_requests.borrow();
         let (handle, _) = requests.last().unwrap();
-        assert_ne!(handle.0.split_once(':').unwrap().0, previous_id.0);
+        assert_eq!(handle.0.split_once(':').unwrap().0 == previous_id.0, cached);
         assert!(handle.0.ends_with(":2"));
         assert_eq!(
             router.backend.child_requests.borrow().last().unwrap().1,
@@ -2568,6 +2588,10 @@ mod tests {
     struct FakeBackend {
         snapshot: Snapshot,
         captured_snapshots: Rc<RefCell<Vec<Snapshot>>>,
+        full_capture_depth: Option<usize>,
+        retention_failure: bool,
+        page_failure: bool,
+        retention_queries: Rc<RefCell<Vec<SnapshotHandle>>>,
         invoked_handles: Rc<RefCell<Vec<SnapshotHandle>>>,
         child_requests: Rc<RefCell<Vec<(SnapshotHandle, axon_core::ChildPageRequest)>>>,
         capture_queries: Rc<RefCell<Vec<AppQuery>>>,
@@ -2805,9 +2829,22 @@ mod tests {
         }
         fn capture(&mut self, query: &AppQuery) -> Result<Snapshot, BackendError> {
             self.capture_queries.borrow_mut().push(query.clone());
-            let snapshot = Snapshot::new(self.snapshot.app.clone());
+            let mut snapshot = Snapshot::new(self.snapshot.app.clone());
+            if let Some(depth) = self.full_capture_depth {
+                for window in &mut snapshot.app.windows {
+                    coverage_trim(&mut window.root, depth);
+                }
+            }
             *self.captured_snapshots.borrow_mut() = vec![snapshot.clone()];
             Ok(snapshot)
+        }
+        fn retains_handle(&mut self, handle: &SnapshotHandle) -> Result<bool, BackendError> {
+            self.retention_queries.borrow_mut().push(handle.clone());
+            if self.retention_failure {
+                return Err(BackendError::Operation { operation: "cache query".into(), message: "injected cache failure".into(), diagnostic: None });
+            }
+            Ok(self.captured_snapshots.borrow().last().is_some_and(|snapshot|
+                snapshot.index_for_handle(handle).ok().and_then(|index| snapshot.node(index)).is_some()))
         }
         fn capture_child_page(
             &mut self,
@@ -2826,6 +2863,12 @@ mod tests {
                     snapshot.node(index).cloned()
                 })
                 .expect("paging must use a handle from the active capture");
+            if self.page_failure {
+                return Err(BackendError::Operation { operation: "child page".into(), message: "injected page failure".into(), diagnostic: None });
+            }
+            // Native paging starts at the cached object, not its previously captured descendants.
+            let parent = flattened(&self.snapshot).find(|node| node.identifier == parent.identifier)
+                .expect("cached object still exists in provider").clone();
             let total = parent.children.len();
             let limit = request.limit.unwrap_or(total);
             let mut children: Vec<_> = parent
@@ -3014,6 +3057,10 @@ mod tests {
         };
         FakeBackend {
             captured_snapshots: Default::default(),
+            full_capture_depth: None,
+            retention_failure: false,
+            page_failure: false,
+            retention_queries: Default::default(),
             invoked_handles: Default::default(),
             child_requests: Default::default(),
             capture_queries: Rc::new(RefCell::new(vec![])),
