@@ -677,14 +677,20 @@ mod tests {
         })).unwrap());
         let old_handle = snapshot.as_ref().unwrap().handle(1);
         let mut native_entries = vec!["old root", "old child"];
-        assert_eq!(super::retained_native_index(snapshot.as_ref(), native_entries.len(), &old_handle), Some(1));
+        assert_eq!(
+            super::retained_native_index(snapshot.as_ref(), native_entries.len(), &old_handle),
+            Some(1)
+        );
 
         super::invalidate_native_cache(&mut snapshot, &mut native_entries);
         assert!(native_entries.is_empty());
         assert!(snapshot.is_none());
         // A provider can fail after repopulating the same indices, before publishing a snapshot.
         native_entries.extend(["partial new root", "partial new child"]);
-        assert_eq!(super::retained_native_index(snapshot.as_ref(), native_entries.len(), &old_handle), None);
+        assert_eq!(
+            super::retained_native_index(snapshot.as_ref(), native_entries.len(), &old_handle),
+            None
+        );
     }
 
     #[test]
