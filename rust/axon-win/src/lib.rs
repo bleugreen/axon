@@ -2621,6 +2621,62 @@ mod tests {
         }
     }
 
+    #[test]
+    fn coverage_native_truncation_retains_names_in_look_and_stability() {
+        for method in ["look", "wait_for_stability"] {
+            let mut router = coverage_router();
+            let name = coverage_name(&mut router);
+            let full = router.backend.snapshot.clone();
+            let root = &mut router.backend.snapshot.app.windows[0].root;
+            root.children.clear();
+            root.truncation_reason = Some("native-safety-limit".into());
+            let mut params = json!({"app":"App","screenshot":false,"stableMs":0,"timeoutMs":0,"intervalMs":10});
+            if method == "wait_for_stability" {
+                params[axon_core::SINGLE_STABILITY_CAPTURE] = json!(true);
+            }
+            coverage_request(&mut router, method, params);
+            router.backend.snapshot = full;
+            coverage_invoke(&mut router, &name);
+        }
+    }
+
+    #[test]
+    fn coverage_complete_observations_revoke_omitted_names_despite_display_options() {
+        for params in [
+            json!({"app":"App","depth":0,"screenshot":false}),
+            json!({"app":"App","screenshot":false,"frames":false}),
+            json!({"app":"App","tree":false,"format":"debug","screenshot":false}),
+            json!({"app":"App","screenshot":true}),
+        ] {
+            let mut router = coverage_router();
+            let name = coverage_name(&mut router);
+            router.backend.snapshot.app.windows[0].root.children.clear();
+            coverage_request(&mut router, "look", params);
+            let response = router.request(request("invoke", json!({"target":{"app":"App","name":name},"name":"Invoke"}))).unwrap();
+            let JsonRpcResponse::Failure(failure) = response else {
+                panic!("complete capture must revoke omitted names");
+            };
+            assert_eq!(failure.error.data.unwrap()["status"], "missing");
+            assert!(router.backend.invoked.is_empty());
+        }
+    }
+
+    #[test]
+    fn coverage_bounded_capture_without_marker_retains_until_complete_replacement() {
+        let mut router = coverage_router();
+        let name = coverage_name(&mut router);
+        let full = router.backend.snapshot.clone();
+        router.backend.snapshot.app.windows[0].root.children.clear();
+        coverage_request(&mut router, "look", json!({"app":"App","childDepth":10,"screenshot":false}));
+        router.backend.snapshot = full;
+        coverage_invoke(&mut router, &name);
+        router.backend.snapshot.app.windows[0].root.children.clear();
+        coverage_request(&mut router, "look", json!({"app":"App","screenshot":false}));
+        let response = router.request(request("invoke", json!({"target":{"app":"App","name":name},"name":"Invoke"}))).unwrap();
+        assert!(matches!(response, JsonRpcResponse::Failure(_)));
+        assert_eq!(router.backend.invoked.len(), 1);
+    }
+
     fn validated_params(tool: &str, arguments: Value) -> Map<String, Value> {
         axon_core::validate_tool_arguments(axon_core::ToolBackend::Windows, tool, arguments)
             .unwrap()
