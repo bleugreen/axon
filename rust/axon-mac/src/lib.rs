@@ -1571,15 +1571,15 @@ impl<
                     });
                 }
             };
-            let handle = context
-                .recorded_handle()
-                .ok_or_else(|| {
-                    rpc_error(
-                        -32002,
-                        "semantic target has no live retained capture; call look for its app first",
-                    )
-                })?
-                .clone();
+            context.recorded_handle().ok_or_else(|| {
+                rpc_error(
+                    -32002,
+                    "semantic target has no live retained capture; call look for its app first",
+                )
+            })?;
+            // Native captures replace the handle cache, so retained provenance cannot authorize
+            // paging directly. Resolve against a fresh capture pinned to the selected process.
+            let (handle, _) = self.resolve(params)?;
             let page = self
                 .backend
                 .capture_child_page(
