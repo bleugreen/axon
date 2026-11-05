@@ -2442,7 +2442,7 @@ mod tests {
             if single {
                 params[axon_core::SINGLE_STABILITY_CAPTURE] = json!(true);
             }
-            coverage_call(&mut router, "wait", params);
+            coverage_call(&mut router, "wait_for_stability", params);
             router.backend.snapshot = coverage_router().backend.snapshot;
             coverage_invoke(&mut router, &name);
         }
