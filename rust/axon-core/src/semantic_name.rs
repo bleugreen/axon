@@ -4,6 +4,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -359,7 +360,7 @@ pub struct SemanticCandidate {
 /// application owns its whole window tree, so keeping the application in a record retained a
 /// complete copy of the observation for every element in it. Only these three fields are ever
 /// read; the tree was dead weight, and it was quadratic dead weight.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct RecordedApp {
     name: String,
     identifier: Option<String>,
@@ -380,7 +381,6 @@ impl From<&crate::Application> for RecordedApp {
 struct Record {
     target: WireElementTarget,
     app: RecordedApp,
-    snapshot_id: crate::SnapshotId,
     candidate_label: Option<String>,
     role: String,
     label: String,
@@ -395,6 +395,8 @@ pub struct SemanticResolutionContext {
     process_id: Option<crate::ProcessId>,
     recorded_snapshot_id: Option<crate::SnapshotId>,
     recorded_handle: Option<SnapshotHandle>,
+    captured: Option<Arc<CaptureProvenance>>,
+    app: Option<RecordedApp>,
 }
 
 impl SemanticResolutionContext {
@@ -404,6 +406,14 @@ impl SemanticResolutionContext {
 
     pub fn locator(&self) -> &Locator {
         &self.locator
+    }
+
+    pub fn app_name(&self) -> &str {
+        self.app.as_ref().map_or(&self.target.app, |app| &app.name)
+    }
+
+    pub fn app_identifier(&self) -> Option<&str> {
+        self.app.as_ref().and_then(|app| app.identifier.as_deref())
     }
 
     pub fn process_id(&self) -> Option<crate::ProcessId> {
@@ -482,35 +492,79 @@ struct ReplayRecord {
     process_id: Option<crate::ProcessId>,
 }
 
-/// One registration: the named elements of an observation beside the identity skeleton of the tree
-/// they were derived from.
-///
-/// The skeleton is what lets a locator be minimized after the observation is gone — uniqueness is a
-/// question about the capture, and `save` asks it at dispatch time, with no tree in hand.
-#[derive(Clone)]
-struct RegisteredSnapshot {
+/// Whether a registration covers the process's whole observable application.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SemanticRegistrationCoverage {
+    Complete,
+    Partial,
+}
+
+impl SemanticRegistrationCoverage {
+    /// Capture intent and native markers, before any display-only pruning is applied.
+    pub fn for_capture(snapshot: &Snapshot, child_depth: Option<usize>) -> Self {
+        fn truncated(node: &crate::Node) -> bool {
+            node.truncation_reason.is_some() || node.children.iter().any(truncated)
+        }
+        if child_depth.is_some()
+            || snapshot.app.windows.iter().any(|window| truncated(&window.root))
+        {
+            Self::Partial
+        } else {
+            Self::Complete
+        }
+    }
+}
+
+pub const MAX_RETAINED_PARTIAL_CAPTURES_PER_PROCESS: usize = 32;
+pub const DEFAULT_MAX_RETAINED_PROCESSES: usize = 8;
+
+/// Shared by every name group emitted by one registration, never keyed by snapshot ID.
+#[derive(Debug)]
+struct CaptureProvenance {
     identity: Snapshot,
+}
+
+#[derive(Clone)]
+struct NameGroup {
     records: Vec<Record>,
+    provenance: Arc<CaptureProvenance>,
+    freshness: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum ProcessKey {
+    Pid(crate::ProcessId),
+    App(String),
+}
+
+#[derive(Clone)]
+struct ProcessEntry {
+    app: RecordedApp,
+    baseline: HashMap<String, NameGroup>,
+    partial: HashMap<String, NameGroup>,
+    partial_order: VecDeque<u64>,
 }
 
 #[derive(Clone)]
 pub struct SemanticNameRegistry {
-    max_snapshots: usize,
-    order: VecDeque<crate::SnapshotId>,
-    records: HashMap<crate::SnapshotId, RegisteredSnapshot>,
+    max_processes: usize,
+    order: VecDeque<ProcessKey>,
+    processes: HashMap<ProcessKey, ProcessEntry>,
+    next_freshness: u64,
     replay_locators: HashMap<WireElementTarget, Vec<ReplayRecord>>,
 }
 impl Default for SemanticNameRegistry {
     fn default() -> Self {
-        Self::new(8)
+        Self::new(DEFAULT_MAX_RETAINED_PROCESSES)
     }
 }
 impl SemanticNameRegistry {
-    pub fn new(max: usize) -> Self {
+    pub fn new(max_processes: usize) -> Self {
         Self {
-            max_snapshots: max.max(1),
+            max_processes: max_processes.max(1),
             order: VecDeque::new(),
-            records: HashMap::new(),
+            processes: HashMap::new(),
+            next_freshness: 0,
             replay_locators: HashMap::new(),
         }
     }
@@ -533,12 +587,8 @@ impl SemanticNameRegistry {
         let SemanticSelection::Selected(context) = self.select(&target) else {
             return None;
         };
-        let locator = match context
-            .recorded_snapshot_id
-            .as_ref()
-            .and_then(|id| self.records.get(id))
-        {
-            Some(registered) => crate::persisted_locator(context.locator(), &registered.identity)?,
+        let locator = match context.captured.as_ref() {
+            Some(captured) => crate::persisted_locator(context.locator(), &captured.identity)?,
             // A replay locator came from a document rather than from a capture this process took,
             // so there is no observation to narrow its scope against. State is dropped all the
             // same: a document authored elsewhere may carry any of the scoring fields, and saving
@@ -548,33 +598,31 @@ impl SemanticNameRegistry {
         serde_json::to_value(locator).ok()?.as_object().cloned()
     }
 
-    pub fn register(&mut self, snapshot: &Snapshot) -> Vec<SemanticElementName> {
-        self.register_with_liveness(snapshot, |_| true)
+    pub fn register(
+        &mut self,
+        snapshot: &Snapshot,
+        coverage: SemanticRegistrationCoverage,
+    ) -> Vec<SemanticElementName> {
+        self.register_with_liveness(snapshot, coverage, |_| true)
     }
 
     pub fn register_with_liveness(
         &mut self,
         snapshot: &Snapshot,
+        coverage: SemanticRegistrationCoverage,
         is_process_live: impl Fn(crate::ProcessId) -> bool,
     ) -> Vec<SemanticElementName> {
-        if let Some(replacement_pid) = snapshot.app.process_id {
-            let identity = app_identity(&RecordedApp::from(&snapshot.app));
-            let stale: HashSet<_> = self
-                .records
-                .iter()
-                .filter(|(_, registered)| {
-                    registered.records.first().is_some_and(|record| {
-                        record.app.process_id.is_some_and(|pid| {
-                            pid != replacement_pid
-                                && app_identity(&record.app) == identity
-                                && !is_process_live(pid)
-                        })
-                    })
+        let app = RecordedApp::from(&snapshot.app);
+        if let Some(replacement_pid) = app.process_id {
+            let identity = app_identity(&app);
+            self.processes.retain(|_, entry| {
+                !entry.app.process_id.is_some_and(|pid| {
+                    pid != replacement_pid
+                        && app_identity(&entry.app) == identity
+                        && !is_process_live(pid)
                 })
-                .map(|(id, _)| id.clone())
-                .collect();
-            self.order.retain(|id| !stale.contains(id));
-            self.records.retain(|id, _| !stale.contains(id));
+            });
+            self.order.retain(|key| self.processes.contains_key(key));
         }
 
         let names = SemanticNameDeriver::derive(snapshot);
@@ -595,7 +643,6 @@ impl SemanticNameRegistry {
                             name: name.name.clone(),
                         },
                         app: RecordedApp::from(&snapshot.app),
-                        snapshot_id: snapshot.id.clone(),
                         candidate_label: name.candidate_label.clone(),
                         role: name.role.clone(),
                         label: name.label.clone(),
@@ -604,33 +651,56 @@ impl SemanticNameRegistry {
                     })
             })
             .collect();
-        if let Some(process_id) = snapshot.app.process_id {
-            let superseded: HashSet<_> = self
-                .records
-                .iter()
-                .filter(|(_, registered)| {
-                    registered
-                        .records
-                        .first()
-                        .is_some_and(|record| record.app.process_id == Some(process_id))
-                })
-                .map(|(id, _)| id.clone())
-                .collect();
-            self.order.retain(|id| !superseded.contains(id));
-            self.records.retain(|id, _| !superseded.contains(id));
+        self.next_freshness += 1;
+        let freshness = self.next_freshness;
+        let provenance = Arc::new(CaptureProvenance {
+            identity: crate::locator::identity_skeleton(snapshot),
+        });
+        let mut groups = HashMap::<String, NameGroup>::new();
+        for record in records {
+            groups.entry(record.target.name.clone()).or_insert_with(|| NameGroup {
+                records: Vec::new(),
+                provenance: provenance.clone(),
+                freshness,
+            }).records.push(record);
         }
-        self.order.retain(|id| id != &snapshot.id);
-        self.order.push_back(snapshot.id.clone());
-        self.records.insert(
-            snapshot.id.clone(),
-            RegisteredSnapshot {
-                identity: crate::locator::identity_skeleton(snapshot),
-                records,
-            },
+        let key = app.process_id.map_or_else(
+            || ProcessKey::App(app_identity(&app)),
+            ProcessKey::Pid,
         );
-        while self.order.len() > self.max_snapshots {
-            if let Some(id) = self.order.pop_front() {
-                self.records.remove(&id);
+        let entry = self.processes.entry(key.clone()).or_insert_with(|| ProcessEntry {
+            app: app.clone(),
+            baseline: HashMap::new(),
+            partial: HashMap::new(),
+            partial_order: VecDeque::new(),
+        });
+        entry.app = app;
+        match coverage {
+            SemanticRegistrationCoverage::Complete => {
+                entry.baseline = groups;
+                entry.partial.clear();
+                entry.partial_order.clear();
+            }
+            SemanticRegistrationCoverage::Partial => {
+                if !groups.is_empty() {
+                    entry.partial.extend(groups);
+                    let referenced: HashSet<_> =
+                        entry.partial.values().map(|group| group.freshness).collect();
+                    entry.partial_order.retain(|id| referenced.contains(id));
+                    entry.partial_order.push_back(freshness);
+                    while entry.partial_order.len() > MAX_RETAINED_PARTIAL_CAPTURES_PER_PROCESS {
+                        if let Some(evicted) = entry.partial_order.pop_front() {
+                            entry.partial.retain(|_, group| group.freshness != evicted);
+                        }
+                    }
+                }
+            }
+        }
+        self.order.retain(|old| old != &key);
+        self.order.push_back(key);
+        while self.order.len() > self.max_processes {
+            if let Some(evicted) = self.order.pop_front() {
+                self.processes.remove(&evicted);
             }
         }
         names
@@ -692,6 +762,8 @@ impl SemanticNameRegistry {
                 process_id: record.process_id,
                 recorded_snapshot_id: None,
                 recorded_handle: None,
+                captured: None,
+                app: None,
             },
         )))
     }
@@ -707,31 +779,19 @@ impl SemanticNameRegistry {
     }
 
     pub(crate) fn select_retained(&self, target: &WireElementTarget) -> RetainedSemanticSelection {
-        let matches: Vec<_> = self
-            .order
-            .iter()
-            .rev()
-            .filter_map(|id| self.records.get(id))
-            .flat_map(|registered| &registered.records)
-            .filter(|record| {
-                app_matches(&target.app, &record.app) && record.target.name == target.name
+        let group = self.processes.values()
+            .filter_map(|entry| {
+                let group = entry.partial.get(&target.name)
+                    .or_else(|| entry.baseline.get(&target.name))?;
+                group.records.first()
+                    .filter(|record| app_matches(&target.app, &record.app))
+                    .map(|_| group)
             })
-            .collect();
-        if matches.is_empty() {
+            .max_by_key(|group| group.freshness);
+        let Some(group) = group else {
             return RetainedSemanticSelection::NoRecord;
-        }
-
-        let query_pid = parse_process_id(&target.app);
-        let newest_pid = query_pid.or(matches[0].app.process_id);
-        let process_matches: Vec<_> = matches
-            .into_iter()
-            .filter(|record| record.app.process_id == newest_pid)
-            .collect();
-        let newest = process_matches[0].snapshot_id.clone();
-        let latest: Vec<_> = process_matches
-            .into_iter()
-            .filter(|record| record.snapshot_id == newest)
-            .collect();
+        };
+        let latest = &group.records;
         if latest.len() > 1 {
             return RetainedSemanticSelection::Selected(SemanticSelection::Ambiguous {
                 target: target.clone(),
@@ -747,14 +807,16 @@ impl SemanticNameRegistry {
                     .collect(),
             });
         }
-        let record = latest[0];
+        let record = &latest[0];
         RetainedSemanticSelection::Selected(SemanticSelection::Selected(Box::new(
             SemanticResolutionContext {
                 target: target.clone(),
                 locator: record.locator.clone(),
                 process_id: record.app.process_id,
-                recorded_snapshot_id: Some(record.snapshot_id.clone()),
+                recorded_snapshot_id: Some(group.provenance.identity.id.clone()),
                 recorded_handle: Some(record.handle.clone()),
+                captured: Some(group.provenance.clone()),
+                app: Some(record.app.clone()),
             },
         )))
     }
