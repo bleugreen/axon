@@ -853,7 +853,8 @@ impl ScreenshotUnavailable {
                 reason,
             },
             BackendError::CapabilityReason { code, reason, .. } => Self { code, reason },
-            BackendError::Operation { message, .. } => Self {
+            BackendError::Operation { message, .. }
+            | BackendError::StaleHandle { message, .. } => Self {
                 code: "capture-failed",
                 reason: message,
             },
