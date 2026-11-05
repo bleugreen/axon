@@ -111,10 +111,7 @@ pub enum BackendError {
     /// operational failures so paging can recover from cache replacement without hiding errors.
     /// Its display remains the existing operation-error representation on the wire.
     #[error("operation {operation} failed: {message}")]
-    StaleHandle {
-        operation: String,
-        message: String,
-    },
+    StaleHandle { operation: String, message: String },
     #[error("operation {operation} failed: {message}")]
     Operation {
         operation: String,
