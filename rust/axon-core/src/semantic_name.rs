@@ -927,6 +927,52 @@ mod tests {
         }
     }
 
+    fn hierarchical_capture(id: &str) -> Snapshot {
+        with_pid(snapshot(id, vec![Node {
+            role: "group".into(),
+            title: Some("Editor".into()),
+            children: vec![button("Save", Some("save"))],
+            ..empty_node()
+        }]), 41)
+    }
+
+    fn assert_retained_descendant_after(mut partial: Snapshot) {
+        let mut registry = SemanticNameRegistry::default();
+        let original = hierarchical_capture("original");
+        let name = registry.register(&original).into_iter()
+            .find(|name| name.label == "Save").unwrap().name;
+        let target = target("pid:41", name);
+        let SemanticSelection::Selected(before) = registry.select(&target) else {
+            panic!("original evidence missing");
+        };
+        partial.app.process_id = Some(41);
+        registry.register(&partial);
+        let SemanticSelection::Selected(after) = registry.select(&target) else {
+            panic!("partial observation revoked uncovered descendant");
+        };
+        assert_eq!(after.process_id(), Some(41));
+        assert_eq!(after.locator(), before.locator());
+        assert_eq!(after.recorded_handle(), before.recorded_handle());
+        let fresh = hierarchical_capture("fresh");
+        match after.resolve(&fresh) {
+            SemanticLookup::Unique { handle, .. } => assert_eq!(handle, fresh.handle(2)),
+            _ => panic!("retained descendant did not resolve against fresh evidence"),
+        }
+    }
+
+    #[test]
+    fn partial_root_only_retains_original_descendant() {
+        assert_retained_descendant_after(snapshot("root-only", vec![]));
+    }
+
+    #[test]
+    fn partial_empty_leaf_page_retains_original_hierarchical_name() {
+        let mut page = snapshot("leaf-page", vec![]);
+        page.app.windows[0].root = button("Save", Some("save"));
+        assert!(page.app.windows[0].root.children.is_empty());
+        assert_retained_descendant_after(page);
+    }
+
     #[test]
     fn registry_resolves_recorded_facts_against_a_fresh_capture() {
         let mut registry = SemanticNameRegistry::default();
