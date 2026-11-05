@@ -1,0 +1,104 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "tools/call",
+    "params": {
+      "name": "invoke",
+      "arguments": {
+        "target": {
+          "app": "Calculator",
+          "name": "main-sidebarnavigationsplitview/calculatorkeypadview/all-clear"
+        },
+        "name": "AXPress"
+      }
+    }
+  },
+  "response": {
+    "id": 5,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": "<1190 chars; mirrors structuredContent>",
+          "type": "text"
+        }
+      ],
+      "isError": false,
+      "structuredContent": {
+        "delivery": "semantic",
+        "deliveryPolicy": "backgroundOnly",
+        "dispatch": {
+          "mechanism": "AX action",
+          "success": true
+        },
+        "dispatchSuccess": true,
+        "refusal": null,
+        "resolution": {
+          "best": {
+            "frame": {
+              "height": 48,
+              "width": 48,
+              "x": 574,
+              "y": 627
+            },
+            "handle": "s4:8",
+            "index": 8,
+            "reasons": [
+              "role AXButton",
+              "label exact All Clear",
+              "identifier exact AllClear",
+              "window scope",
+              "window title exact Calculator",
+              "ancestor subrole AXHostingView",
+              "ancestor role AXGroup",
+              "ancestor identifier exact CalculatorKeypadView",
+              "ancestor role AXGroup",
+              "action AXPress",
+              "frame proximity 100"
+            ],
+            "role": "AXButton",
+            "score": 10100,
+            "title": null
+          },
+          "candidates": [
+            {
+              "frame": {
+                "height": 48,
+                "width": 48,
+                "x": 574,
+                "y": 627
+              },
+              "handle": "s4:8",
+              "index": 8,
+              "reasons": [
+                "role AXButton",
+                "label exact All Clear",
+                "identifier exact AllClear",
+                "window scope",
+                "window title exact Calculator",
+                "ancestor subrole AXHostingView",
+                "ancestor role AXGroup",
+                "ancestor identifier exact CalculatorKeypadView",
+                "ancestor role AXGroup",
+                "action AXPress",
+                "frame proximity 100"
+              ],
+              "role": "AXButton",
+              "score": 10100,
+              "title": null
+            }
+          ],
+          "confidence": "high",
+          "snapshotId": "s4",
+          "status": "unique"
+        },
+        "success": false,
+        "verification": {
+          "reason": "invoke has no declared postcondition",
+          "verified": false
+        }
+      }
+    }
+  }
+}

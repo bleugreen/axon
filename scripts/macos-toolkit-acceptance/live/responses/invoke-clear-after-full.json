@@ -1,0 +1,41 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "tools/call",
+    "params": {
+      "name": "invoke",
+      "arguments": {
+        "target": {
+          "app": "Calculator",
+          "name": "main-sidebarnavigationsplitview/calculatorkeypadview/all-clear"
+        },
+        "name": "AXPress"
+      }
+    }
+  },
+  "response": {
+    "id": 3,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": "<100 chars; mirrors structuredContent>",
+          "type": "text"
+        }
+      ],
+      "isError": true,
+      "structuredContent": {
+        "code": -32002,
+        "data": {
+          "query": {
+            "app": "Calculator",
+            "name": "main-sidebarnavigationsplitview/calculatorkeypadview/all-clear"
+          },
+          "status": "missing"
+        },
+        "message": "semantic name not found: Calculator / main-sidebarnavigationsplitview/calculatorkeypadview/all-clear"
+      }
+    }
+  }
+}

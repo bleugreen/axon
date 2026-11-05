@@ -1,0 +1,32 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 8,
+    "method": "tools/call",
+    "params": {
+      "name": "look",
+      "arguments": {
+        "app": "Calculator",
+        "since": "obs-636f6d2e6170706c652e63616c63756c61746f72.7334.4"
+      }
+    }
+  },
+  "response": {
+    "id": 8,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": "<99 chars; mirrors structuredContent>",
+          "type": "text"
+        }
+      ],
+      "isError": false,
+      "structuredContent": {
+        "app": "Calculator",
+        "since": "obs-636f6d2e6170706c652e63616c63756c61746f72.7335.5",
+        "unchanged": true
+      }
+    }
+  }
+}

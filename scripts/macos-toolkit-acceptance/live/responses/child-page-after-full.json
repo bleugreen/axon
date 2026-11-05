@@ -1,0 +1,47 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "tools/call",
+    "params": {
+      "name": "look",
+      "arguments": {
+        "target": {
+          "app": "Calculator",
+          "name": "main-sidebarnavigationsplitview/calculatorkeypadview/all-clear"
+        },
+        "offset": 0,
+        "limit": 1,
+        "direct": true
+      }
+    }
+  },
+  "response": {
+    "id": 2,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": "<213 chars; mirrors structuredContent>",
+          "type": "text"
+        }
+      ],
+      "isError": false,
+      "structuredContent": {
+        "children": {
+          "format": "children",
+          "limit": 0,
+          "nextOffset": null,
+          "offset": 0,
+          "parent": {
+            "app": "Calculator",
+            "name": "main-sidebarnavigationsplitview/calculatorkeypadview/all-clear"
+          },
+          "snapshot": "s2",
+          "total": 0,
+          "tree": "[]"
+        }
+      }
+    }
+  }
+}
