@@ -1370,6 +1370,291 @@ mod tests {
         ));
     }
 
+    fn issued(
+        registry: &mut SemanticNameRegistry,
+        snapshot: &Snapshot,
+        coverage: SemanticRegistrationCoverage,
+        label: &str,
+    ) -> String {
+        registry.register(snapshot, coverage).into_iter()
+            .find(|name| name.label == label).unwrap().name
+    }
+
+    fn selected(registry: &SemanticNameRegistry, app: &str, name: &str) -> Box<SemanticResolutionContext> {
+        let SemanticSelection::Selected(context) = registry.select(&target(app, name.into())) else {
+            panic!("expected unique {app}/{name}");
+        };
+        context
+    }
+
+    fn missing(registry: &SemanticNameRegistry, app: &str, name: &str) {
+        assert!(matches!(registry.select(&target(app, name.into())), SemanticSelection::Missing { .. }),
+            "expected missing {app}/{name}");
+    }
+
+    fn empty_capture(id: &str, pid: crate::ProcessId) -> Snapshot {
+        let mut capture = with_pid(snapshot(id, vec![]), pid);
+        capture.app.windows.clear();
+        capture
+    }
+
+    #[test]
+    fn coverage_uses_capture_intent_and_recursive_native_markers() {
+        let mut capture = hierarchical_capture("coverage");
+        assert_eq!(SemanticRegistrationCoverage::for_capture(&capture, None), SemanticRegistrationCoverage::Complete);
+        for bound in [0, 1, 100] {
+            assert_eq!(SemanticRegistrationCoverage::for_capture(&capture, Some(bound)), SemanticRegistrationCoverage::Partial);
+        }
+        capture.app.windows[0].root.children[0].children[0].truncation_reason = Some("native limit".into());
+        assert_eq!(SemanticRegistrationCoverage::for_capture(&capture, None), SemanticRegistrationCoverage::Partial);
+    }
+
+    #[test]
+    fn complete_value_name_churn_replaces_provenance_and_revokes_omitted_names() {
+        let mut registry = SemanticNameRegistry::default();
+        let mut previous: Option<(String, std::sync::Weak<CaptureProvenance>)> = None;
+        for index in 0..64 {
+            let value = format!("Value {index}");
+            let capture = with_pid(snapshot(&format!("complete-{index}"), vec![Node {
+                role: "text".into(), value: Some(value.clone()), editable: true,
+                ..empty_node()
+            }]), 41);
+            let name = issued(&mut registry, &capture, SemanticRegistrationCoverage::Complete, &value);
+            if let Some((old_name, old_provenance)) = previous.take() {
+                missing(&registry, "41", &old_name);
+                assert!(old_provenance.upgrade().is_none());
+            }
+            let entry = &registry.processes[&ProcessKey::Pid(41)];
+            assert!(entry.partial.is_empty());
+            assert!(entry.partial_order.is_empty());
+            let provenance = &entry.baseline[&name].provenance;
+            assert!(entry.baseline.values().all(|group| Arc::ptr_eq(&group.provenance, provenance)));
+            previous = Some((name, Arc::downgrade(provenance)));
+        }
+        let (last_name, last_provenance) = previous.unwrap();
+        let partial = with_pid(snapshot("partial", vec![button("Partial only", None)]), 41);
+        let partial_name = issued(&mut registry, &partial, SemanticRegistrationCoverage::Partial, "Partial only");
+        registry.register(&empty_capture("complete-empty", 41), SemanticRegistrationCoverage::Complete);
+        missing(&registry, "41", &last_name);
+        missing(&registry, "41", &partial_name);
+        assert!(last_provenance.upgrade().is_none());
+        assert!(registry.processes[&ProcessKey::Pid(41)].baseline.is_empty());
+        assert!(registry.processes[&ProcessKey::Pid(41)].partial.is_empty());
+    }
+
+    #[test]
+    fn partial_provenance_exact_boundary_evicts_only_partial_evidence_and_falls_back() {
+        assert_eq!(MAX_RETAINED_PARTIAL_CAPTURES_PER_PROCESS, 32);
+        let mut registry = SemanticNameRegistry::default();
+        let baseline = with_pid(snapshot("baseline", vec![button("Save", Some("baseline-save"))]), 41);
+        let save = issued(&mut registry, &baseline, SemanticRegistrationCoverage::Complete, "Save");
+        let original = selected(&registry, "41", &save);
+        let overlay = with_pid(snapshot("overlay", vec![button("Save", Some("overlay-save")), button("Overlay only", None)]), 41);
+        let overlay_only = issued(&mut registry, &overlay, SemanticRegistrationCoverage::Partial, "Overlay only");
+        assert_eq!(selected(&registry, "41", &save).recorded_handle(), Some(&overlay.handle(1)));
+        let overlay_provenance = Arc::downgrade(&registry.processes[&ProcessKey::Pid(41)].partial[&save].provenance);
+        let mut partial_names = Vec::new();
+        for index in 1..MAX_RETAINED_PARTIAL_CAPTURES_PER_PROCESS {
+            let label = format!("Partial {index}");
+            let capture = with_pid(snapshot(&format!("partial-{index}"), vec![button(&label, None)]), 41);
+            partial_names.push(issued(&mut registry, &capture, SemanticRegistrationCoverage::Partial, &label));
+        }
+        assert_eq!(registry.processes[&ProcessKey::Pid(41)].partial_order.len(), 32);
+        selected(&registry, "41", &overlay_only);
+        assert!(overlay_provenance.upgrade().is_some());
+        let newest = with_pid(snapshot("one-beyond", vec![button("Newest", None)]), 41);
+        registry.register(&newest, SemanticRegistrationCoverage::Partial);
+        assert_eq!(registry.processes[&ProcessKey::Pid(41)].partial_order.len(), 32);
+        missing(&registry, "41", &overlay_only);
+        assert!(overlay_provenance.upgrade().is_none());
+        let fallback = selected(&registry, "41", &save);
+        assert!(Arc::ptr_eq(fallback.captured.as_ref().unwrap(), original.captured.as_ref().unwrap()));
+        assert_eq!(fallback.locator(), original.locator());
+        for name in partial_names { selected(&registry, "41", &name); }
+        let next = with_pid(snapshot("two-beyond", vec![button("Next", None)]), 41);
+        registry.register(&next, SemanticRegistrationCoverage::Partial);
+        missing(&registry, "41", "main/partial-1");
+        assert_eq!(selected(&registry, "41", &save).recorded_handle(), Some(&baseline.handle(1)));
+    }
+
+    #[test]
+    fn superseded_partial_provenance_is_reclaimed_promptly_and_empty_partial_costs_no_slot() {
+        let mut registry = SemanticNameRegistry::default();
+        let first = with_pid(snapshot("first", vec![button("Save", Some("old"))]), 41);
+        let name = issued(&mut registry, &first, SemanticRegistrationCoverage::Partial, "Save");
+        let weak = Arc::downgrade(&registry.processes[&ProcessKey::Pid(41)].partial[&name].provenance);
+        let second = with_pid(snapshot("second", vec![button("Save", Some("new"))]), 41);
+        registry.register(&second, SemanticRegistrationCoverage::Partial);
+        assert!(weak.upgrade().is_none());
+        assert_eq!(registry.processes[&ProcessKey::Pid(41)].partial_order.len(), 1);
+        registry.register(&empty_capture("empty", 41), SemanticRegistrationCoverage::Partial);
+        assert_eq!(registry.processes[&ProcessKey::Pid(41)].partial_order.len(), 1);
+        assert_eq!(selected(&registry, "41", &name).recorded_handle(), Some(&second.handle(1)));
+    }
+
+    #[test]
+    fn process_capacity_is_real_configurable_lru_with_empty_partial_observation() {
+        assert_eq!(DEFAULT_MAX_RETAINED_PROCESSES, 8);
+        for capacity in [1, 3, DEFAULT_MAX_RETAINED_PROCESSES] {
+            let mut registry = if capacity == DEFAULT_MAX_RETAINED_PROCESSES {
+                SemanticNameRegistry::default()
+            } else { SemanticNameRegistry::new(capacity) };
+            let mut names = Vec::new();
+            for pid in 1..=capacity as u32 {
+                let capture = with_pid(snapshot(&format!("process-{pid}"), vec![button("Save", None)]), pid);
+                names.push(issued(&mut registry, &capture, SemanticRegistrationCoverage::Complete, "Save"));
+            }
+            assert_eq!(registry.processes.len(), capacity);
+            for (index, name) in names.iter().enumerate() { selected(&registry, &(index + 1).to_string(), name); }
+            registry.register(&empty_capture("refresh-oldest", 1), SemanticRegistrationCoverage::Partial);
+            let beyond = with_pid(snapshot("beyond", vec![button("Save", None)]), capacity as u32 + 1);
+            registry.register(&beyond, SemanticRegistrationCoverage::Complete);
+            assert_eq!(registry.processes.len(), capacity);
+            let evicted = if capacity == 1 { 1 } else { 2 };
+            missing(&registry, &evicted.to_string(), &names[evicted - 1]);
+            if capacity > 1 { selected(&registry, "1", &names[0]); }
+        }
+        let mut minimum = SemanticNameRegistry::new(0);
+        minimum.register(&empty_capture("one", 1), SemanticRegistrationCoverage::Partial);
+        minimum.register(&empty_capture("two", 2), SemanticRegistrationCoverage::Partial);
+        assert_eq!(minimum.max_processes, 1);
+        assert_eq!(minimum.processes.len(), 1);
+        assert!(!minimum.processes.contains_key(&ProcessKey::Pid(1)));
+    }
+
+    #[test]
+    fn partial_refresh_replaces_whole_ambiguous_groups_and_preserves_other_names() {
+        let mut registry = SemanticNameRegistry::default();
+        let complete = with_pid(snapshot("complete", vec![button("Share", None), button("Other", None)]), 41);
+        let share = issued(&mut registry, &complete, SemanticRegistrationCoverage::Complete, "Share");
+        let other = SemanticNameDeriver::derive(&complete).into_iter().find(|name| name.label == "Other").unwrap().name;
+        let other_context = selected(&registry, "41", &other);
+        let duplicate = with_pid(snapshot("duplicate", vec![button("Share", None), button("Share", None)]), 41);
+        registry.register(&duplicate, SemanticRegistrationCoverage::Partial);
+        let SemanticSelection::Ambiguous { candidates, .. } = registry.select(&target("41", share.clone())) else {
+            panic!("whole ambiguous group was not retained");
+        };
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(registry.processes[&ProcessKey::Pid(41)].partial[&share].records.iter().map(|record| record.handle.clone()).collect::<Vec<_>>(), vec![duplicate.handle(1), duplicate.handle(2)]);
+        let unique = with_pid(snapshot("unique", vec![button("Share", None)]), 41);
+        registry.register(&unique, SemanticRegistrationCoverage::Partial);
+        assert_eq!(selected(&registry, "41", &share).recorded_handle(), Some(&unique.handle(1)));
+        assert!(Arc::ptr_eq(selected(&registry, "41", &other).captured.as_ref().unwrap(), other_context.captured.as_ref().unwrap()));
+    }
+
+    #[test]
+    fn name_group_freshness_does_not_follow_process_observation_recency() {
+        let mut registry = SemanticNameRegistry::new(3);
+        let one = with_pid(snapshot("one", vec![button("Save", None)]), 41);
+        let save = issued(&mut registry, &one, SemanticRegistrationCoverage::Complete, "Save");
+        let two = with_pid(snapshot("two", vec![button("Save", None)]), 42);
+        registry.register_with_liveness(&two, SemanticRegistrationCoverage::Partial, |_| true);
+        let unrelated = with_pid(snapshot("other-name", vec![button("Other", None)]), 41);
+        registry.register(&unrelated, SemanticRegistrationCoverage::Partial);
+        registry.register(&empty_capture("empty", 41), SemanticRegistrationCoverage::Partial);
+        assert_eq!(selected(&registry, "App", &save).process_id(), Some(42));
+        for alias in ["41", "pid:41"] { assert_eq!(selected(&registry, alias, &save).process_id(), Some(41)); }
+        let refreshed = with_pid(snapshot("refreshed-save", vec![button("Save", None)]), 41);
+        registry.register(&refreshed, SemanticRegistrationCoverage::Partial);
+        assert_eq!(selected(&registry, "com.example.App", &save).process_id(), Some(41));
+    }
+
+    #[test]
+    fn pidless_evidence_is_isolated_normalized_and_uses_process_capacity() {
+        let mut registry = SemanticNameRegistry::new(2);
+        let anonymous = snapshot("anonymous", vec![button("Anonymous", None)]);
+        let name = issued(&mut registry, &anonymous, SemanticRegistrationCoverage::Complete, "Anonymous");
+        let pid = with_pid(snapshot("pid", vec![button("Save", None)]), 41);
+        let save = issued(&mut registry, &pid, SemanticRegistrationCoverage::Partial, "Save");
+        missing(&registry, "41", &name);
+        assert_eq!(selected(&registry, "App", &name).process_id(), None);
+        let mut normalized = snapshot("same-app", vec![button("Other", None)]);
+        normalized.app.identifier = Some("COM.EXAMPLE.APP".into());
+        registry.register(&normalized, SemanticRegistrationCoverage::Partial);
+        assert_eq!(registry.processes.len(), 2);
+        selected(&registry, "App", &name);
+        let another = with_pid(snapshot("another-process", vec![button("New", None)]), 42);
+        registry.register(&another, SemanticRegistrationCoverage::Partial);
+        missing(&registry, "41", &save);
+        selected(&registry, "App", &name);
+        registry.register(&snapshot("anonymous-empty", vec![]), SemanticRegistrationCoverage::Complete);
+        missing(&registry, "App", &name);
+        assert_eq!(registry.processes.len(), 2);
+    }
+
+    #[test]
+    fn partial_replacement_removes_only_proven_dead_same_identity_process_and_checks_live_pid() {
+        let mut registry = SemanticNameRegistry::default();
+        let old = with_pid(snapshot("old", vec![button("Save", None)]), 41);
+        let save = issued(&mut registry, &old, SemanticRegistrationCoverage::Complete, "Save");
+        let sibling = with_pid(snapshot("sibling", vec![button("Save", None)]), 42);
+        registry.register_with_liveness(&sibling, SemanticRegistrationCoverage::Partial, |_| true);
+        let mut unrelated = with_pid(snapshot("unrelated", vec![button("Save", None)]), 99);
+        unrelated.app.identifier = Some("com.example.other".into());
+        registry.register(&unrelated, SemanticRegistrationCoverage::Complete);
+        let new = with_pid(snapshot("new", vec![button("Other", None)]), 43);
+        registry.register_with_liveness(&new, SemanticRegistrationCoverage::Partial, |pid| pid != 41 && pid != 99);
+        missing(&registry, "41", &save);
+        let retained = selected(&registry, "42", &save);
+        selected(&registry, "99", &save);
+        assert!(matches!(retained.resolve(&old), SemanticLookup::Missing { .. }));
+        let mut fresh = sibling.clone();
+        fresh.id = crate::SnapshotId("fresh".into());
+        assert!(matches!(retained.resolve(&fresh), SemanticLookup::Unique { .. }));
+    }
+
+    #[test]
+    fn durable_locator_uses_original_scope_after_partial_and_duplicate_snapshot_ids() {
+        let mut registry = SemanticNameRegistry::default();
+        let scoped = |title: &str| Node {
+            role: "group".into(), title: Some(title.into()),
+            children: vec![Node { value: Some("captured state".into()), ..button("Save", None) }],
+            ..empty_node()
+        };
+        let original = with_pid(snapshot("reused-id", vec![scoped("Left"), scoped("Right")]), 41);
+        let name = registry.register(&original, SemanticRegistrationCoverage::Complete).into_iter()
+            .find(|name| name.source_index == 2).unwrap().name;
+        let durable = registry.durable_locator("41", &name).unwrap();
+        assert!(durable.contains_key("ancestors"), "scope must disambiguate the two Save buttons: {durable:?}");
+        for state in ["value", "frame", "actions", "nearbyText"] { assert!(!durable.contains_key(state)); }
+        let other = with_pid(snapshot("reused-id", vec![button("Other", None)]), 42);
+        registry.register(&other, SemanticRegistrationCoverage::Complete);
+        let partial = with_pid(snapshot("reused-id", vec![button("Different", None)]), 41);
+        registry.register(&partial, SemanticRegistrationCoverage::Partial);
+        assert_eq!(registry.durable_locator("41", &name).unwrap(), durable);
+        let context = selected(&registry, "41", &name);
+        assert_eq!(context.recorded_snapshot_id, Some(original.id.clone()));
+        assert_eq!(context.app_name(), "App");
+        assert_eq!(context.app_identifier(), Some("com.example.App"));
+        let mut fresh = original.clone();
+        fresh.id = crate::SnapshotId("fresh".into());
+        match context.resolve(&fresh) {
+            SemanticLookup::Unique { handle, .. } => assert_eq!(handle, fresh.handle(2)),
+            _ => panic!("original scoped evidence did not resolve"),
+        }
+    }
+
+    #[test]
+    fn replay_precedence_and_persistence_are_unchanged_by_partial_observations() {
+        let mut registry = SemanticNameRegistry::default();
+        let capture = with_pid(snapshot("capture", vec![button("Save", Some("captured"))]), 41);
+        let name = issued(&mut registry, &capture, SemanticRegistrationCoverage::Complete, "Save");
+        let replay_target = target("App", name.clone());
+        let replay_locator = locator(&button("Save", Some("replay")), &[], None);
+        registry.register_replay_locator_for_process(replay_target.clone(), replay_locator.clone(), Some(42));
+        registry.register(&empty_capture("partial", 41), SemanticRegistrationCoverage::Partial);
+        let context = selected(&registry, "App", &name);
+        assert_eq!(context.locator(), &replay_locator);
+        assert!(context.captured.is_none());
+        assert!(context.recorded_handle().is_none());
+        assert_eq!(context.process_id(), Some(42));
+        let durable: Locator = serde_json::from_value(serde_json::Value::Object(registry.durable_locator("App", &name).unwrap())).unwrap();
+        assert_eq!(durable, crate::persisted_locator_shape(&replay_locator));
+        registry.register_replay_locator_for_process(replay_target.clone(), replay_locator, Some(43));
+        assert!(matches!(registry.select(&replay_target), SemanticSelection::Ambiguous { .. }));
+        assert_eq!(selected(&registry, "41", &name).process_id(), Some(41));
+    }
+
     #[test]
     fn replay_evidence_is_pinned_and_legacy_duplicates_are_ambiguous() {
         let mut registry = SemanticNameRegistry::default();
