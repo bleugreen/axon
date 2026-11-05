@@ -3874,6 +3874,53 @@ mod tests {
             }
         }
 
+        #[test]
+        fn semantic_coverage_all_children_page_is_still_partial() {
+            let mut router = router(NativeFake::new());
+            let target = observed_save(&mut router);
+            let page = ok(&mut router, "look", json!({"target":target,"all":true}));
+            assert_eq!(page["children"]["total"], 0);
+            assert_eq!(page["children"]["tree"], "[]");
+            invoke_observed_save(&mut router, target);
+        }
+
+        #[test]
+        fn semantic_coverage_display_depth_keeps_captured_descendants_and_app_list_does_not_register() {
+            let mut router = router(NativeFake::new());
+            let target = observed_save(&mut router);
+            ok(&mut router, "look", json!({
+                "app":"TextEdit","screenshot":false,"depth":0,"frames":false
+            }));
+            let capture_count = router.backend.capture_sequence;
+            ok(&mut router, "look", json!({}));
+            assert_eq!(router.backend.capture_sequence, capture_count);
+            invoke_observed_save(&mut router, target);
+        }
+
+        #[test]
+        fn semantic_coverage_change_check_respects_capture_bound() {
+            for bounded in [true, false] {
+                let mut router = router(NativeFake::new());
+                let target = observed_save(&mut router);
+                let since = router.observations.keys().next().unwrap().clone();
+                let original = router.backend.snapshot.clone();
+                router.backend.snapshot.app.windows[0].root.children.clear();
+                let mut params = json!({"app":"TextEdit","since":since,"screenshot":false});
+                if bounded {
+                    params["childDepth"] = json!(0);
+                }
+                ok(&mut router, "look", params);
+                router.backend.snapshot = original;
+                if bounded {
+                    invoke_observed_save(&mut router, target);
+                } else {
+                    let error = call(&mut router, "invoke", json!({"target":target,"name":"AXPress"})).unwrap_err();
+                    assert_eq!(error.code, -32002);
+                    assert!(router.backend.invokes.is_empty());
+                }
+            }
+        }
+
         fn also_refused(result: &Value) -> String {
             result["refusal"]["alsoRefused"].to_string()
         }
