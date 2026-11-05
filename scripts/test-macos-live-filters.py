@@ -163,8 +163,8 @@ elif args.get("childDepth") == 0:
     name = "look-shallow"
 else:
     name = "look-full"
-print(json.loads((pathlib.Path(os.environ["FIXTURES"]) / (name + ".json")).read_text())["response"])
-""".replace('print(json.loads(', 'print(json.dumps(json.loads(').replace('["response"])', '["response"]))'))
+print(json.dumps(json.loads((pathlib.Path(os.environ["FIXTURES"]) / (name + ".json")).read_text())["response"]))
+""")
             cli.chmod(0o755)
             log = root / "requests"
             script = 'set -euo pipefail\nopen() { :; }\nsleep() { :; }\n' + body
