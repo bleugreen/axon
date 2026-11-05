@@ -401,7 +401,8 @@ siblings and uncertain liveness are not treated as dead. An expired name returns
 the existing semantic-name not-found error: observe the app again to obtain a
 current name. Retention guarantees neither that the element still exists nor that
 live resolution is unique; actions still resolve against fresh evidence in the
-selected process.
+selected process. Child paging likewise resolves the retained target afresh before
+capturing its children, rather than trusting the original capture's handle.
 
 `click` accepts semantic-name targets, point targets, and text locations.
 `drag` accepts the same pointer target vocabulary for `from` and `to`, though no

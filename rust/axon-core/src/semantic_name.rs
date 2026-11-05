@@ -1470,10 +1470,11 @@ mod tests {
         let fallback = selected(&registry, "41", &save);
         assert!(Arc::ptr_eq(fallback.captured.as_ref().unwrap(), original.captured.as_ref().unwrap()));
         assert_eq!(fallback.locator(), original.locator());
-        for name in partial_names { selected(&registry, "41", &name); }
+        for name in &partial_names { selected(&registry, "41", name); }
+        let oldest_partial = partial_names[0].clone();
         let next = with_pid(snapshot("two-beyond", vec![button("Next", None)]), 41);
         registry.register(&next, SemanticRegistrationCoverage::Partial);
-        missing(&registry, "41", "main/partial-1");
+        missing(&registry, "41", &oldest_partial);
         assert_eq!(selected(&registry, "41", &save).recorded_handle(), Some(&baseline.handle(1)));
     }
 
@@ -1632,6 +1633,37 @@ mod tests {
             SemanticLookup::Unique { handle, .. } => assert_eq!(handle, fresh.handle(2)),
             _ => panic!("original scoped evidence did not resolve"),
         }
+    }
+
+    #[test]
+    fn process_eviction_reclaims_both_baseline_and_partial_provenance() {
+        let mut registry = SemanticNameRegistry::new(1);
+        let baseline = with_pid(snapshot("baseline", vec![button("Save", None)]), 41);
+        let save = issued(&mut registry, &baseline, SemanticRegistrationCoverage::Complete, "Save");
+        let partial = with_pid(snapshot("partial", vec![button("Other", None)]), 41);
+        let other = issued(&mut registry, &partial, SemanticRegistrationCoverage::Partial, "Other");
+        let entry = &registry.processes[&ProcessKey::Pid(41)];
+        let baseline_weak = Arc::downgrade(&entry.baseline[&save].provenance);
+        let partial_weak = Arc::downgrade(&entry.partial[&other].provenance);
+        registry.register(&empty_capture("new-process", 42), SemanticRegistrationCoverage::Partial);
+        assert!(baseline_weak.upgrade().is_none());
+        assert!(partial_weak.upgrade().is_none());
+        missing(&registry, "41", &save);
+        missing(&registry, "41", &other);
+    }
+
+    #[test]
+    fn pidless_and_pid_groups_with_same_name_select_newest_without_merging_candidates() {
+        let mut registry = SemanticNameRegistry::default();
+        let anonymous = snapshot("anonymous", vec![button("Save", Some("anonymous"))]);
+        let save = issued(&mut registry, &anonymous, SemanticRegistrationCoverage::Partial, "Save");
+        let pid = with_pid(snapshot("pid", vec![button("Save", Some("pid"))]), 41);
+        registry.register(&pid, SemanticRegistrationCoverage::Partial);
+        assert_eq!(selected(&registry, "App", &save).process_id(), Some(41));
+        registry.register(&anonymous, SemanticRegistrationCoverage::Partial);
+        assert_eq!(selected(&registry, "App", &save).process_id(), None);
+        assert_eq!(selected(&registry, "pid:41", &save).recorded_handle(), Some(&pid.handle(1)));
+        assert_eq!(registry.processes.len(), 2);
     }
 
     #[test]
