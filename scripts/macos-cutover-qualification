@@ -384,28 +384,27 @@ def axn_action_count(text):
     return len(re.findall(r"^- id: ", text[match.end():], re.M))
 
 
-def swift_tree(response):
-    """The DSL tree string anywhere in a Swift look result (SnapshotObservation.swift at v0.3.6)."""
-    def find(value):
-        if isinstance(value, dict):
-            if isinstance(value.get("tree"), str):
-                return value["tree"]
-            for child in value.values():
-                found = find(child)
-                if found:
-                    return found
-        return None
-    return find((response or {}).get("result")) or ""
+def swift_snapshot_nodes(response):
+    """Every node of a Swift daemon look answered over the socket (SnapshotObservation.swift at v0.3.6).
+
+    The socket answers the raw snapshot, not the MCP facade's DSL: a flat `indexedNodes` list plus a
+    `windows` tree, each node carrying its semantic `name` and AXDescription as `description`.
+    """
+    snapshot = ((response or {}).get("result") or {}).get("snapshot") or {}
+    stack = list(snapshot.get("indexedNodes") or []) + list(snapshot.get("windows") or [])
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            yield node
+            stack.extend(reversed(node.get("children") or []))
 
 
-def swift_calculator_names(tree):
-    """Semantic names from Swift's DSL: `  <name>: button "1" [click]` (live.yml's macOS job)."""
-    line_shape = re.compile(r'^\s*(?P<name>\S.*?): (?P<role>[\w ]+?) "(?P<text>[^"]*)"')
+def swift_snapshot_names(response):
+    """Semantic names of Calculator's keys from a Swift socket look (`description` carries the AX label)."""
     buttons = []
-    for line in tree.splitlines():
-        match = line_shape.match(line)
-        if match and match.group("role") == "button":
-            buttons.append((match.group("text"), match.group("name")))
+    for node in swift_snapshot_nodes(response):
+        if node.get("role") == "AXButton" and node.get("name"):
+            buttons.append((node.get("description") or node.get("title") or "", node["name"]))
     found = {}
     for key, labels in CALC_KEYS.items():
         for label in labels:
@@ -914,8 +913,8 @@ def step1_swift_recording(state):
     """
     ensure_calculator(state)
     session = f"qual125-{RUN['id']}"
-    names = wait_for(lambda: (found := swift_calculator_names(swift_tree(rpc(
-        PROD_SOCKET, "look", {"app": "Calculator", "screenshot": False, "_session": session}, timeout=20))))
+    names = wait_for(lambda: (found := swift_snapshot_names(rpc(
+        PROD_SOCKET, "look", {"app": "Calculator", "screenshot": False, "_session": session}, timeout=20)))
         and all(key in found for key in ("1", "+", "2", "=")) and found, 30, 1) or {}
     if not all(key in names for key in ("1", "+", "2", "=")):
         verdict("1-swift-recording", False, reason="Calculator's 1, +, 2, = were not all named by production's look", names=names)
@@ -1689,13 +1688,10 @@ def self_test():
           and designated_requirement("# " + requirement) is not None)
     check("axn: action count", axn_action_count("version: 2\nargs: []\nactions:\n- id: a1\n  tool: invoke\n  expects:\n  - id: a1.changed.0\n- id: a2\n") == 2
           and axn_action_count("version: 2\nargs: []\nactions: []\n") == 0 and axn_action_count("version: 1\n") is None)
-    tree = ('window "Calculator"\n  button-ac: button "All Clear" [click]\n  button-1: button "1" [click]\n'
-            '  button-add: button "Add" [click]\n  button-2: button "2" [click]\n  button-eq: button "Equals" [click]\n'
-            '  display: text "0"\n')
-    names = swift_calculator_names(tree)
-    check("calculator: Swift DSL names", names.get("1") == "button-1" and names.get("+") == "button-add"
-          and names.get("=") == "button-eq" and names.get("clear") == "button-ac")
-    check("calculator: tree found anywhere in a Swift result", swift_tree({"result": {"observation": {"tree": tree}}}) == tree)
+    socket_look = {"result": {"snapshot": {"indexedNodes": [
+        {"role": "AXButton", "name": "keypad/1", "description": "1"}], "windows": [{"role": "AXWindow", "children": [
+        {"role": "AXButton", "name": "keypad/add", "description": "Add"}, {"role": "AXButton", "description": "2"}]}]}}}
+    check("calculator: Swift socket snapshot names", swift_snapshot_names(socket_look) == {"1": "keypad/1", "+": "keypad/add"})
     snapshot = {"app": {"name": "Calculator", "windows": [{"root": {"role": "AXWindow", "name": "window", "children": [
         {"role": "AXButton", "name": "one", "label": "1", "frame": {"x": 10, "y": 20, "width": 40, "height": 30}},
         {"role": "AXButton", "name": "plus", "label": "Add"},

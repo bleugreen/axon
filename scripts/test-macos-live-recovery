@@ -189,10 +189,6 @@ STUBS = {
               fi
             fi
             ;;
-          error)
-            echo "launchctl error $2" >> "$STUB_LOG"
-            printf '%s: stub error description\\n' "$2"
-            ;;
           bootout)
             label="$(label_of "$2")"
             echo "launchctl bootout $label" >> "$STUB_LOG"
@@ -615,11 +611,15 @@ def main() -> int:
     # and its log had never been created. What matters is that launchd's account is printed.
     check("probe", probe_assert, "prints launchd's evidence when the candidate exits after launchd names it", 1,
           expect=["(pid 5150) exited instead of serving the socket; launchd no longer runs",
-                  f"--- launchctl print gui/", "last exit code = 78", "launchctl error 78",
-                  "78: stub error description", "does not exist, so the job never opened it",
+                  f"--- launchctl print gui/", "last exit code = 78: stub exit reason",
+                  "does not exist, so the job never opened it",
                   "processID == 5150", "stub unified log entry"],
-          forbid=["ASSERTED", "axon status"],
+          forbid=["ASSERTED", "axon status", "launchctl error"],
           STUB_STATUS=status_doc(pid=5150), **{pid_var: 5150, dies_var: 78})
+    check("probe", probe_assert, "keeps a program exit status without interpreting it as errno", 1,
+          expect=["last exit code = 3: stub exit reason", "stub unified log entry"],
+          forbid=["ASSERTED", "axon status", "launchctl error", "No such process"],
+          STUB_STATUS=status_doc(pid=5150), **{pid_var: 5150, dies_var: 3})
     check("probe", probe_assert, "prints launchd's evidence when another process serves the endpoint", 1,
           expect=["is served by pid 4242, not the daemon under test (pid 5150)",
                   "--- launchctl print gui/", "state = running", "processID == 5150"],

@@ -47,8 +47,9 @@ skipped.
 
 The driver needs only ssh and the HID hand tool (`~/AxonBench/hand`). Whenever a step needs
 hands or eyes, it stops and asks. For eyes, the thread reads UserNotificationCenter and
-CoreServicesUIAgent through its bridge before and after each phase, so any prompt that appears is
-attributed to a window of time. The driver dismisses nothing on production's behalf. It sends
+CoreServicesUIAgent with a `look` over the production socket before and after each phase, so any
+prompt that appears is attributed to a window of time. The desktop-automation bridge is no longer
+installed on bgsrv-mac. The driver dismisses nothing on production's behalf. It sends
 production only `health`, `look`, `invoke`, and `save`. It never sends `type`, `keyboard`, or
 keyboard text, because the 0.3.6 Swift daemon crashes on keyboard text (axn/215).
 
@@ -112,6 +113,13 @@ plist mirrors the one `daemon install` writes, with only `AXON_SOCKET_PATH` set,
 passes it because its executable is the nested `com.bleugreen.axon.menu`.
 
 ## Known limits
+
+- **The unified-log scans need an administrator account.** Measured on bgsrv-mac on 2026-11-04:
+  the console user `dev` is not an administrator, so every `tcc_log_scan` reports the gap
+  `tcc-log-unreadable` with `log: Could not open local log store: Operation not permitted`.
+  The TCC database diff is unaffected. Run the scan window's
+  `log show --predicate 'subsystem == "com.apple.TCC"'` from an administrator account at the
+  console, or accept the gap.
 
 - **The rollback's last step is not rehearsed.** The rehearsal does load the 0.3.6 copy under
   the private label and verifies that its grants carry. What it does not run is the 0.3.6 CLI's
