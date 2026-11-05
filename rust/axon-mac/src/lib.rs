@@ -3699,7 +3699,7 @@ mod tests {
 
         fn invoke_observed_save(router: &mut Router<NativeFake>, target: Value) {
             let result = ok(router, "invoke", json!({"target":target,"name":"AXPress"}));
-            assert_eq!(result["targetResolution"]["status"], "unique");
+            assert_eq!(result["resolution"]["status"], "unique");
             assert_eq!(result["dispatchSuccess"], true);
             assert_eq!(router.backend.invokes, ["AXPress"]);
             assert_eq!(router.backend.invoked_handles.len(), 1);
