@@ -1248,7 +1248,8 @@ impl<
                         });
                     }
                 };
-                let handle = context.recorded_handle().ok_or_else(|| rpc_error(-32002, "semantic target has no live retained capture; call look for its app first"))?.clone();
+                context.recorded_handle().ok_or_else(|| rpc_error(-32002, "semantic target has no live retained capture; call look for its app first"))?;
+                let (handle, _) = self.resolve(params)?;
                 let page = self
                     .backend
                     .capture_child_page(
@@ -2370,6 +2371,8 @@ mod tests {
     }
 
     fn coverage_empty_page(router: &mut Router<FakeBackend>, app: &str, name: &str) {
+        let previous_id = router.backend.captured_snapshots.borrow().last().unwrap().id.clone();
+        let captures_before = router.backend.capture_queries.borrow().len();
         let page = coverage_call(
             router,
             "look",
@@ -2378,6 +2381,15 @@ mod tests {
         assert_eq!(page["children"]["total"], 0);
         assert_eq!(page["children"]["tree"], "[]");
         assert_eq!(page["children"]["parent"]["app"], app);
+        let queries = router.backend.capture_queries.borrow();
+        assert_eq!(queries.len(), captures_before + 1);
+        assert_eq!(queries.last().unwrap().process_id, Some(4101));
+        assert!(queries.last().unwrap().name.is_none());
+        assert!(queries.last().unwrap().identifier.is_none());
+        let requests = router.backend.child_requests.borrow();
+        let (handle, _) = requests.last().unwrap();
+        assert_ne!(handle.0.split_once(':').unwrap().0, previous_id.0);
+        assert!(handle.0.ends_with(":2"));
         assert_eq!(
             router.backend.child_requests.borrow().last().unwrap().1,
             axon_core::ChildPageRequest {
@@ -2829,6 +2841,8 @@ mod tests {
             Ok(page)
         }
         fn invoke(&mut self, handle: &SnapshotHandle, action: &str) -> Result<(), BackendError> {
+            self.captured_snapshots.borrow().last().expect("invoke requires active capture")
+                .index_for_handle(handle).expect("invoke requires fresh handle");
             self.invoked_handles.borrow_mut().push(handle.clone());
             self.invokes.borrow_mut().push(action.into());
             Ok(())
