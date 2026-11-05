@@ -3795,7 +3795,7 @@ mod tests {
                 let root = &mut router.backend.snapshot.app.windows[0].root;
                 root.children.clear();
                 root.truncation_reason = truncated.then(|| "native safety limit".into());
-                let result = ok(&mut router, "wait_for_stable", json!({
+                let result = ok(&mut router, "wait_for_stability", json!({
                     "app":"TextEdit","stableMs":0,"timeoutMs":100,"intervalMs":10
                 }));
                 assert_eq!(result["wait"]["success"], true);
