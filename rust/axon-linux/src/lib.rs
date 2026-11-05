@@ -2576,6 +2576,73 @@ mod tests {
         }
     }
 
+
+    fn coverage_deep_page() -> (Router<FakeBackend>, String) {
+        let mut router = coverage_router();
+        let mut deep = node("Deep");
+        deep.children = vec![node("Tip")];
+        deep.child_count = Some(1);
+        router.backend.snapshot.app.windows[0].root.children[0].children = vec![deep];
+        router.backend.full_capture_depth = Some(1);
+        let full = coverage_call(&mut router, "look", json!({"app":"App","screenshot":false}));
+        assert!(full.pointer("/app/windows/0/root/children/0/children/0").is_none());
+        let parent = full.pointer("/app/windows/0/root/children/0/name").unwrap().as_str().unwrap();
+        let page = coverage_call(&mut router, "look",
+            json!({"target":{"app":"4101","name":parent},"direct":true,"limit":1}));
+        let children: Value = serde_json::from_str(page["children"]["tree"].as_str().unwrap()).unwrap();
+        assert_eq!(page["children"]["total"], 1);
+        let name = children[0]["name"].as_str().unwrap().to_owned();
+        assert!(name.contains("deep"));
+        (router, name)
+    }
+
+    #[test]
+    fn coverage_registration_page_only_target_continues_without_full_recapture() {
+        let (mut router, name) = coverage_deep_page();
+        let captures = router.backend.capture_queries.borrow().len();
+        assert_eq!(captures, 1);
+        let page = coverage_call(&mut router, "look",
+            json!({"target":{"app":APP_IDENTITY,"name":name},"direct":true,"limit":1}));
+        assert_eq!(router.backend.capture_queries.borrow().len(), captures);
+        let children: Value = serde_json::from_str(page["children"]["tree"].as_str().unwrap()).unwrap();
+        assert_eq!(page["children"]["total"], 1);
+        assert!(children[0]["name"].as_str().unwrap().contains("tip"));
+        assert_eq!(router.snapshot.as_ref().unwrap().app.name, "App");
+        assert_eq!(router.snapshot.as_ref().unwrap().app.process_id, Some(4101));
+    }
+
+    #[test]
+    fn coverage_registration_evicted_page_only_target_returns_semantic_missing() {
+        let (mut router, name) = coverage_deep_page();
+        coverage_call(&mut router, "look", json!({"app":"App","screenshot":false}));
+        let pages = router.backend.child_requests.borrow().len();
+        let response = router.request(request("look",
+            json!({"target":{"app":"4101","name":name},"direct":true}))).unwrap();
+        let JsonRpcResponse::Failure(failure) = response else { panic!("omitted live target must be missing") };
+        assert_eq!(failure.error.code, -32002);
+        assert_eq!(failure.error.data.unwrap()["status"], "missing");
+        assert_eq!(router.backend.child_requests.borrow().len(), pages);
+        assert_eq!(router.backend.capture_queries.borrow().last().unwrap().process_id, Some(4101));
+    }
+
+    #[test]
+    fn coverage_registration_page_operational_errors_do_not_retry() {
+        for query_failure in [true, false] {
+            let mut router = coverage_router();
+            let name = coverage_leaf_name(&mut router);
+            router.backend.retention_failure = query_failure;
+            router.backend.page_failure = !query_failure;
+            let captures = router.backend.capture_queries.borrow().len();
+            let response = router.request(request("look",
+                json!({"target":{"app":"4101","name":name},"direct":true}))).unwrap();
+            let JsonRpcResponse::Failure(failure) = response else { panic!("operation must fail") };
+            assert_eq!(failure.error.code, -32000);
+            assert!(failure.error.message.contains(if query_failure { "injected cache failure" } else { "injected page failure" }));
+            assert_eq!(router.backend.capture_queries.borrow().len(), captures);
+            assert_eq!(router.backend.child_requests.borrow().len(), usize::from(!query_failure));
+        }
+    }
+
     #[test]
     fn coverage_registration_app_list_does_not_revoke_names() {
         let mut router = coverage_router();
