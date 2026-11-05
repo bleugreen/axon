@@ -3671,11 +3671,12 @@ mod tests {
                 &mut self,
                 handle: &SnapshotHandle,
             ) -> Result<Option<Vec<String>>, axon_core::BackendError> {
-                let index = self.snapshot.index_for_handle(handle).unwrap();
+                let snapshot = self.last_capture.as_ref().expect("an active native capture");
+                let index = snapshot.index_for_handle(handle).unwrap();
                 if index == POPUP {
                     return Ok(Some(vec!["AXPress".into(), "AXShowMenu".into()]));
                 }
-                Ok(self.snapshot.node(index).map(|node| node.actions.clone()))
+                Ok(snapshot.node(index).map(|node| node.actions.clone()))
             }
         }
         impl BackgroundApplicationKeyboard for NativeFake {
