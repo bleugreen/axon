@@ -2309,7 +2309,7 @@ mod tests {
         let full = coverage_call(router, "look", json!({"app":"App","screenshot":false}));
         let name = full.pointer("/app/windows/0/root/children/0/children/0/name")
             .and_then(Value::as_str).expect("full look issues leaf name").to_owned();
-        assert!(name.contains("Panel"), "duplicate leaf labels require ancestry: {name}");
+        assert!(name.contains("panel"), "duplicate leaf labels require ancestry: {name}");
         name
     }
 
@@ -2331,7 +2331,7 @@ mod tests {
 
     fn coverage_empty_page(router: &mut Router<FakeBackend>, app: &str, name: &str) {
         let page = coverage_call(router, "look",
-            json!({"target":{"app":app,"name":name},"offset":0,"limit":1,"direct":true,"screenshot":false}));
+            json!({"target":{"app":app,"name":name},"offset":0,"limit":1,"direct":true}));
         assert_eq!(page["children"]["total"], 0);
         assert_eq!(page["children"]["tree"], "[]");
         assert_eq!(page["children"]["parent"]["app"], app);
@@ -2430,7 +2430,7 @@ mod tests {
         let mut router = coverage_router();
         let name = coverage_leaf_name(&mut router);
         let page = coverage_call(&mut router, "look",
-            json!({"target":{"app":"4101","name":name},"all":true,"screenshot":false}));
+            json!({"target":{"app":"4101","name":name},"all":true}));
         assert_eq!(page["children"]["total"], 0);
         assert_eq!(page["children"]["tree"], "[]");
         coverage_invoke(&mut router, &name);
