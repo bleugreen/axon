@@ -1154,7 +1154,7 @@ impl LinuxBackend {
             // there is nothing left to revalidate, so nothing may be sent.
             Err(BackendError::Operation {
                 operation, message, ..
-            }) if operation == RESOLVE_HANDLE => {
+            } | BackendError::StaleHandle { operation, message }) if operation == RESOLVE_HANDLE => {
                 return Err(stale(format!(
                     "the resolved element can no longer be reached: {message}"
                 )));
@@ -2595,6 +2595,27 @@ mod tests {
 
     fn real(path: &'static str) -> ObjectRefOwned {
         ObjectRefOwned::from_static_str_unchecked(":1.7", path)
+    }
+
+
+    #[test]
+    fn retains_handle_requires_exact_native_snapshot_and_index() {
+        let object = real("/org/a11y/atspi/accessible/target");
+        let mut retained = HashMap::from([("current".into(), vec![object.clone()])]);
+        assert_eq!(retained_object(&retained, &SnapshotHandle("current:0".into())).unwrap(), &object);
+        for handle in ["previous:0", "current:1", "current:18446744073709551615"] {
+            assert!(matches!(retained_object(&retained, &SnapshotHandle(handle.into())),
+                Err(BackendError::StaleHandle { .. })), "{handle}");
+        }
+        for handle in ["current", "current:no-index", "current:-1"] {
+            assert!(retained_object(&retained, &SnapshotHandle(handle.into())).is_err(), "{handle}");
+        }
+        retained.clear();
+        retained.insert("page".into(), vec![object.clone()]);
+        assert!(matches!(retained_object(&retained, &SnapshotHandle("current:0".into())),
+            Err(BackendError::StaleHandle { .. })));
+        assert_eq!(retained_object(&retained, &SnapshotHandle("page:0".into())).unwrap(), &object);
+        assert_eq!(retained.len(), 1);
     }
 
     fn null() -> ObjectRefOwned {
