@@ -2593,7 +2593,8 @@ mod tests {
         assert_eq!(result["children"]["tree"], "[]");
         assert_eq!(result["children"]["parent"]["app"], app);
         assert_eq!(router.backend.child_page_requests.len(), 1);
-        let (_, request) = &router.backend.child_page_requests[0];
+        let (handle, request) = &router.backend.child_page_requests[0];
+        assert_eq!(handle.0, "capture-1:2");
         assert_eq!(request.offset, 0);
         assert_eq!(request.limit, Some(1));
         assert!(!request.include_descendants);
@@ -2632,7 +2633,7 @@ mod tests {
 
     #[test]
     fn coverage_native_truncation_retains_names_in_look_and_stability() {
-        for method in ["look", "wait_for_stability"] {
+        for (method, single) in [("look", false), ("wait_for_stability", true), ("wait_for_stability", false)] {
             let mut router = coverage_router();
             let name = coverage_name(&mut router);
             let full = router.backend.snapshot.clone();
@@ -2640,7 +2641,7 @@ mod tests {
             root.children.clear();
             root.truncation_reason = Some("native-safety-limit".into());
             let mut params = json!({"app":"App","screenshot":false,"stableMs":0,"timeoutMs":0,"intervalMs":10});
-            if method == "wait_for_stability" {
+            if single {
                 params[axon_core::SINGLE_STABILITY_CAPTURE] = json!(true);
             }
             coverage_request(&mut router, method, params);
@@ -2684,6 +2685,49 @@ mod tests {
         let response = router.request(request("invoke", json!({"target":{"app":"App","name":name},"name":"Invoke"}))).unwrap();
         assert!(matches!(response, JsonRpcResponse::Failure(_)));
         assert_eq!(router.backend.invoked.len(), 1);
+    }
+
+    #[test]
+    fn coverage_all_children_page_is_still_partial() {
+        let mut router = coverage_router();
+        let name = coverage_name(&mut router);
+        let page = coverage_request(&mut router, "look", json!({"target":{"app":"App","name":name},"all":true,"format":"debug","tree":true}));
+        assert_eq!(page["children"]["total"], 0);
+        assert_eq!(page["children"]["tree"], "[]");
+        assert_eq!(router.backend.child_page_requests[0].1.limit, None);
+        coverage_invoke(&mut router, &name);
+    }
+
+    #[test]
+    fn coverage_app_list_does_not_register_or_capture() {
+        let mut router = coverage_router();
+        let name = coverage_name(&mut router);
+        let captures = router.backend.capture_queries.borrow().len();
+        router.backend.snapshot.app.windows[0].root.children.clear();
+        let result = coverage_request(&mut router, "look", json!({}));
+        assert!(result["apps"].is_array());
+        assert_eq!(router.backend.capture_queries.borrow().len(), captures);
+        assert!(matches!(router.semantic_names.select(&axon_core::WireElementTarget {
+            app: "App".into(), name,
+        }), SemanticSelection::Selected(_)));
+    }
+
+    #[test]
+    fn coverage_complete_stability_capture_revokes_omitted_names() {
+        for single in [true, false] {
+            let mut router = coverage_router();
+            let name = coverage_name(&mut router);
+            router.backend.snapshot.app.windows[0].root.children.clear();
+            let mut params = json!({"app":"App","stableMs":0,"timeoutMs":0,"intervalMs":10});
+            params[axon_core::SINGLE_STABILITY_CAPTURE] = json!(single);
+            coverage_request(&mut router, "wait_for_stability", params);
+            let response = router.request(request("invoke", json!({"target":{"app":"App","name":name},"name":"Invoke"}))).unwrap();
+            let JsonRpcResponse::Failure(failure) = response else {
+                panic!("complete stability capture must revoke omitted name");
+            };
+            assert_eq!(failure.error.data.unwrap()["status"], "missing");
+            assert!(router.backend.invoked.is_empty());
+        }
     }
 
     fn validated_params(tool: &str, arguments: Value) -> Map<String, Value> {
