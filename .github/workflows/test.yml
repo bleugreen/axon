@@ -14,6 +14,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  macos-live-contract:
+    name: macOS live probe contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pure fixture and stub tests: no desktop, signing identity, or daemon required.
+      - name: Test macOS live filters against recorded Rust responses
+        run: python3 scripts/test-macos-live-filters.py
+
+      - name: Rehearse macOS live recovery without a desktop
+        run: python3 scripts/test-macos-live-recovery
+
   powershell-installer:
     name: PowerShell installer syntax
     runs-on: ubuntu-latest

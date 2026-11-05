@@ -405,7 +405,11 @@ jobs:
 
           child_page="$(jq -cn --arg app "$retained_app" --arg name "$clear_name" '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"look","arguments":{"target":{"app":$app,"name":$name},"offset":0,"limit":1,"direct":true}}}' | "$cli" mcp)"
           if ! printf '%s' "$child_page" | probe child_page -e >/dev/null; then
-            echo '::error::Calculator semantic child page did not expose bounded imageless metadata'
+            if printf '%s' "$child_page" | probe retention_missing -e >/dev/null; then
+              echo '::error::Calculator All Clear: a name issued by the earlier full look no longer resolves after a narrower look (shallow look), while requesting its child page'
+            else
+              echo '::error::Calculator semantic child page did not expose bounded imageless metadata'
+            fi
             printf '%s\n' "$child_page" | probe diagnostic
             exit 1
           fi
@@ -459,8 +463,11 @@ jobs:
             exit 1
           fi
           echo 'Calculator display verified'
-          change_clear_name="$(printf '%s' "$after" | probe 'button_name("Clear")' -er)"
-
+          if ! change_clear_name="$(printf '%s' "$after" | probe 'button_name("Clear")' -er)"; then
+            echo '::error::Calculator look after pressing 1 did not expose a uniquely named Clear key'
+            printf '%s\n' "$after" | probe diagnostic
+            exit 1
+          fi
 
           # `look(since:)`. A change check is only evidence if it can also say "unchanged", so the
           # window is first observed until a check against the previous token reports nothing new
@@ -499,9 +506,10 @@ jobs:
           fi
           # Pressed after the settle; the token checked against is the settled one, which the
           # unchanged answer itself carries.
-          if ! jq -cn --arg app "$retained_app" --arg name "$change_clear_name" '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"invoke","arguments":{"target":{"app":$app,"name":$name},"name":"AXPress"}}}' | "$cli" mcp \
-            | probe invoked -e >/dev/null; then
+          change_invoked="$(jq -cn --arg app "$retained_app" --arg name "$change_clear_name" '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"invoke","arguments":{"target":{"app":$app,"name":$name},"name":"AXPress"}}}' | "$cli" mcp)"
+          if ! printf '%s' "$change_invoked" | probe invoked -e >/dev/null; then
             echo '::error::Calculator Clear did not resolve uniquely and dispatch for the change check'
+            printf '%s\n' "$change_invoked" | probe diagnostic
             exit 1
           fi
           changed=false
