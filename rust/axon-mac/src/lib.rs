@@ -3798,6 +3798,13 @@ mod tests {
 
         fn empty_save_page(router: &mut Router<NativeFake>, target: Value) {
             let before = router.backend.capture_sequence;
+            let context = match router.semantic_names.select(&serde_json::from_value(target.clone()).unwrap()) {
+                SemanticSelection::Selected(context) => context,
+                _ => panic!("page target must remain registered"),
+            };
+            let recorded = context.recorded_handle().unwrap().clone();
+            let retained = router.backend.retains_handle(&recorded).unwrap();
+            let captures = router.backend.capture_queries.len();
             let result = ok(
                 router,
                 "look",
@@ -3808,15 +3815,13 @@ mod tests {
             assert_eq!(result["children"]["parent"], target);
             assert_eq!(result["children"]["total"], 0);
             assert_eq!(result["children"]["tree"], "[]");
-            assert_eq!(
-                router.backend.page_handles.last(),
-                Some(&SnapshotHandle(format!("mac-capture-{}:2", before + 1)))
-            );
-            assert_eq!(
-                router.backend.capture_queries.last().unwrap().process_id,
-                Some(TEXTEDIT as u32)
-            );
-            assert_eq!(router.backend.capture_sequence, before + 2);
+            let expected = if retained { recorded } else { SnapshotHandle(format!("mac-capture-{}:2", before + 1)) };
+            assert_eq!(router.backend.page_handles.last(), Some(&expected));
+            assert_eq!(router.backend.capture_queries.len(), captures + usize::from(!retained));
+            if !retained {
+                assert_eq!(router.backend.capture_queries.last().unwrap().process_id, Some(TEXTEDIT as u32));
+            }
+            assert_eq!(router.backend.capture_sequence, before + 1 + usize::from(!retained));
         }
 
         #[test]
