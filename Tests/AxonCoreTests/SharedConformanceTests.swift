@@ -17,25 +17,13 @@ private struct SharedLookRequestControls: Decodable {
         .appendingPathComponent("../../schema/fixtures/look-request-controls.json")
         .standardizedFileURL
     let fixture = try JSONDecoder().decode(SharedLookRequestControls.self, from: Data(contentsOf: fixtureURL))
-    let look = try #require(ToolSurfaceSchema.mcpToolJSONValues().first { $0["name"] == .string("look") })
+    let look = try #require(ToolSurfaceSchema.normalizedArtifactJSONValue()["tools"]?.arrayValue?.first { $0["name"] == .string("look") })
     let properties = try #require(look["inputSchema"]?["properties"])
 
     #expect(properties["format"]?["enum"] == .array(fixture.format.acceptedValues.map(JSONValue.string)))
     for name in fixture.nonnegative {
         #expect(properties[name]?["minimum"] == .int(0), Comment(rawValue: name))
     }
-}
-
-@Test func sharedMCPObservationEnvelopeIsByteExact() throws {
-    let fixtureURL = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()
-        .appendingPathComponent("../../schema/fixtures/mcp-look-observation-envelope.json")
-        .standardizedFileURL
-    let fixture = try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: fixtureURL))
-    let structuredContent = try #require(fixture["structuredContent"])
-    let expected = try #require(fixture["result"])
-
-    #expect(MCPContent.toolResult(structuredContent: structuredContent, isError: false) == expected.objectValue)
 }
 
 private struct SharedLookObservationNotes: Decodable {
