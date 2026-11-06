@@ -1540,8 +1540,8 @@ impl ToolDispatcher for RefusingDispatcher {
             ),
         );
         // The backend adapters' own rule for a delivered-but-unproved action.
-        let dispatched_without_semantic_verification = result["dispatchSuccess"] == true
-            && result["success"] == false;
+        let dispatched_without_semantic_verification =
+            result["dispatchSuccess"] == true && result["success"] == false;
         DispatchOutcome {
             success: result["success"].as_bool().unwrap_or(true),
             dispatched_without_semantic_verification,
@@ -1588,7 +1588,12 @@ fn swift_0_3_6_calculator_recording_replays_every_step_under_defaults() {
     assert!(result.success, "{:?}", result.trace);
     assert_eq!(dispatcher.dispatched, 4);
     assert_eq!(result.trace.len(), 4);
-    assert!(result.trace.iter().all(|entry| entry.success && entry.error.is_none()));
+    assert!(
+        result
+            .trace
+            .iter()
+            .all(|entry| entry.success && entry.error.is_none())
+    );
 }
 
 #[test]
