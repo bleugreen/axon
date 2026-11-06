@@ -509,7 +509,10 @@ impl SemanticLookup {
         let (message, data) = match self {
             Self::Unique { handle, resolution } => return Ok((handle, resolution)),
             Self::Ambiguous { target, candidates } => (
-                format!("semantic name is ambiguous: {} / {}", target.app, target.name),
+                format!(
+                    "semantic name is ambiguous: {} / {}",
+                    target.app, target.name
+                ),
                 json!({"status":"ambiguous","query":target,"candidates":candidates}),
             ),
             Self::Missing {
@@ -1483,9 +1486,9 @@ mod tests {
         let error = context.resolve(&wrong).into_rpc_result().unwrap_err();
         assert_eq!(error.code, -32002);
         assert!(
-            error
-                .message
-                .ends_with("was issued for an application process that is no longer the one running"),
+            error.message.ends_with(
+                "was issued for an application process that is no longer the one running"
+            ),
             "{}",
             error.message
         );

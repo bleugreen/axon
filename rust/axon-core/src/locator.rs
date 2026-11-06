@@ -804,8 +804,7 @@ mod tests {
             "../../../scripts/macos-toolkit-acceptance/live/responses/look-full.json"
         ))
         .unwrap();
-        serde_json::from_value(response["response"]["result"]["structuredContent"].clone())
-            .unwrap()
+        serde_json::from_value(response["response"]["result"]["structuredContent"].clone()).unwrap()
     }
 
     fn recorded_by_identifier(snapshot: &Snapshot, identifier: &str) -> Locator {
@@ -892,7 +891,11 @@ mod tests {
         );
         let resolution = LocatorResolver::resolve(&swift_shaped, &capture);
         assert!(
-            resolution.best.unwrap().reasons.contains(&"description exact Delete (label)".into()),
+            resolution
+                .best
+                .unwrap()
+                .reasons
+                .contains(&"description exact Delete (label)".into()),
             "the explanation names the attribute that matched"
         );
 
