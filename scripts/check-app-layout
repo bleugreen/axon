@@ -5,7 +5,7 @@
 #
 #   Contents/MacOS/Axon                          the Rust daemon (axon-mac), the bundle's main
 #                                                executable and only TCC subject
-#   Contents/Resources/bin/axon                  the Swift CLI
+#   Contents/Resources/bin/axon                  the Swift CLI, whose `mcp` execs the daemon's facade
 #   Contents/Library/Applications/Axon Menu.app    the unprivileged menu shell
 #   Contents/Library/Applications/Axon Editor.app  the .axn editor
 #
@@ -63,6 +63,15 @@ CLI="$APP/Contents/Resources/bin/axon"
 if [[ -x "$CLI" ]]; then
   CLI_VERSION="$("$CLI" version 2>/dev/null || true)"
   [[ "$CLI_VERSION" == "$VERSION" ]] || fail "bundled CLI reports '${CLI_VERSION:-<none>}', expected $VERSION"
+  # `bin/axon mcp` must be the daemon's own MCP facade (it execs Contents/MacOS/Axon mcp), which
+  # names itself axon-mac. The Swift router it replaced answered as `axon` and reshaped results.
+  # `initialize` never reaches a daemon, and the socket is one nothing serves, so this touches no
+  # running Axon.
+  MCP_INITIALIZE='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"check-app-layout","version":"1"}}}'
+  MCP_ANSWER="$(printf '%s\n' "$MCP_INITIALIZE" \
+    | env -u AXON_MAC_SOCKET AXON_SOCKET_PATH="$(mktemp -u -t axon-layout)" "$CLI" mcp 2>/dev/null || true)"
+  MCP_SERVER="$(/usr/bin/plutil -extract result.serverInfo.name raw -o - - <<<"$MCP_ANSWER" 2>/dev/null || true)"
+  [[ "$MCP_SERVER" == "axon-mac" ]] || fail "bundled CLI's mcp answers initialize as '${MCP_SERVER:-<none>}', expected the daemon facade axon-mac"
 else
   fail "Contents/Resources/bin/axon is missing or not executable"
 fi
