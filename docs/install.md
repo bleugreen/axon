@@ -104,7 +104,7 @@ axon shutdown  # stop the daemon and the menu, leaving both registered
 axon mcp       # the stdio MCP entrypoint clients run: the daemon's facade, Contents/MacOS/Axon mcp
 ```
 
-`axon mcp` works only from inside `Axon.app`, because the facade it runs ships in the same bundle. A copy of the CLI outside the bundle refuses and says so. The facade answers `initialize` with protocol version `2025-03-26` whatever version the client asks for; MCP clients that support that version, which current Claude Code and Codex do, proceed with it.
+`axon mcp` works only from inside `Axon.app`, because the facade it runs ships in the same bundle. A copy of the CLI outside the bundle refuses and says so. The facade answers `initialize` with protocol version `2025-03-26` whatever version the client asks for, which MCP version negotiation allows: a client that supports `2025-03-26` proceeds with it, and one that does not disconnects.
 
 `axon setup` remains an explicit alias for no-arg `axon` for scripts that prefer named commands.
 
