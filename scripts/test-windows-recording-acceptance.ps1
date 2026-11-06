@@ -188,7 +188,7 @@ function Invoke-AxonMcp {
     $index = if ($source.Contains('# fixture-0')) { 0 } else { 1 }
     $script:Runs += "$index/$($arguments.dryRun)"
     Check ([regex]::Matches($source, 'deliveryPolicy: foregroundPermitted').Count -eq 2) 'both replay actions need caller delivery policy'
-    Check ($arguments.continueOnError -eq $true) 'click must not truncate the replay'
+    Check ($null -eq $arguments.continueOnError) 'the replay must run under the default options'
     $dry = @{
         dryRun = $true
         trace = @(
@@ -201,7 +201,7 @@ function Invoke-AxonMcp {
     $real = @{
         dryRun = $false
         trace = @(
-            @{ index = 0; actionId = 'click-1'; tool = 'click'; success = $false
+            @{ index = 0; actionId = 'click-1'; tool = 'click'; success = $true
                targetResolution = @{ status = 'unique' }; result = @{ dispatchSuccess = $true } },
             @{ index = 1; actionId = 'type-1'; tool = 'type'; success = $true
                targetResolution = @{ status = 'unique' }; result = @{ dispatchSuccess = $true } }
@@ -224,6 +224,9 @@ function Invoke-AxonMcp {
             'undelivered' { $real.trace[1].result.dispatchSuccess = $false }
             'real-missing' { $real.trace = @($real.trace[0]) }
             'real-order' { $real.trace[1].index = 0 }
+            # A delivered click scored as failed, which halts a replay under the defaults.
+            'click-halts' { $real.trace[0].success = $false; $real.trace = @($real.trace[0]) }
+            'real-failed' { $real.trace[1].success = $false }
         }
     }
     $batch = if ($arguments.dryRun) { $dry } else { $real }
@@ -242,6 +245,7 @@ $cases = @{
     'resolution-missing' = 'did not resolve uniquely'; ambiguous = 'did not resolve uniquely'
     undelivered = 'was not delivered'; 'real-missing' = 'every dry-run action'
     'real-order' = 'differs from the parsed artifact'
+    'click-halts' = 'every dry-run action'; 'real-failed' = 'failed on replay'
     locator = 'no semantic target'; state = 'state-pinning field'
 }
 $count = 0

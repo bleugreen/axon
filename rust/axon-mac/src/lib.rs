@@ -4276,6 +4276,7 @@ mod tests {
             );
 
             assert_eq!(result["delivery"], Value::Null);
+            assert_eq!(result["dispatchSuccess"], json!(false));
             assert_eq!(result["refusal"]["reason"], "foregroundNotPermitted");
             let obstacles = also_refused(&result);
             assert!(
@@ -4284,6 +4285,13 @@ mod tests {
             );
             assert!(obstacles.contains("\"application\""), "{obstacles}");
             assert!(router.backend.dispatches.is_empty());
+
+            // Replay scores a refusal as never dispatched, so it fails and halts the run.
+            let params = json!({"app": "TextEdit", "text": "hi"});
+            let outcome =
+                ToolDispatcher::dispatch(&mut router, "keyboard", params.as_object().unwrap());
+            assert!(!outcome.success);
+            assert!(!outcome.dispatched_without_semantic_verification);
         }
 
         #[test]

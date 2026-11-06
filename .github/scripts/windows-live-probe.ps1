@@ -512,9 +512,9 @@ function Invoke-RecordingAcceptance {
                     jsonrpc = '2.0'; id = 1; method = 'tools/call'
                     params = @{
                         name = 'run'
-                        # Continue after a click's unverified goal success, but require actual
-                        # delivery and unique resolution separately for every real action.
-                        arguments = @{ path = $scriptPath; dryRun = $dryRun; continueOnError = $true }
+                        # Default options: a dispatched click with no postcondition must not
+                        # halt the replay, so every recorded action reaches the trace.
+                        arguments = @{ path = $scriptPath; dryRun = $dryRun }
                     }
                 } | ConvertTo-Json -Compress -Depth 10)
                 $batch = $replay.result.structuredContent.batch
@@ -1276,6 +1276,10 @@ function Assert-RecordingReplay {
         # click has no postcondition, so goal success is not the delivery guarantee.
         if ($step.result.dispatchSuccess -ne $true) {
             throw "recording [$Label] action $index was not delivered: $($step | ConvertTo-Json -Compress -Depth 30)"
+        }
+        # A delivered step whose declared expectations held, or that declares none, succeeds.
+        if ($step.success -ne $true) {
+            throw "recording [$Label] action $index failed on replay: $($step | ConvertTo-Json -Compress -Depth 30)"
         }
     }
 }

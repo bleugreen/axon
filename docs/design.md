@@ -231,7 +231,7 @@ The daemon executes a submitted axn object, traces it, and forgets it. It does n
 
 YAML is the preferred on-disk format because it is compact and human-editable. JSON-RPC remains the daemon transport, and structured JSON axn objects remain acceptable when a caller already has data in memory.
 
-Failures are part of the axn trace, not MCP transport failures. A failed axn run stops at the first failing action unless `continueOnError: true`, preserves completed trace entries, and returns `success: false` with the failing action's index, tool, and error. Locator failures preserve the resolution status, snapshot id, candidate count, and candidate summaries so an agent can repair the axn file without another broad state read.
+Failures are part of the axn trace, not MCP transport failures. An action fails when its target does not resolve, when it is not dispatched (a transport or capability failure, or a delivery refusal), or when one of its declared `expects` does not hold; a dispatched action that declares no expectation does not fail just because the primitive could not prove its goal. A failed axn run stops at the first failing action unless `continueOnError: true`, preserves completed trace entries, and returns `success: false` with the failing action's index, tool, and error. Locator failures preserve the resolution status, snapshot id, candidate count, and candidate summaries so an agent can repair the axn file without another broad state read.
 
 Higher-order control flow (conditionals, polling waits, repeat loops, assertions, output binding) is intentionally not part of the axn surface. If those primitives prove necessary, they should be added to the underlying tool set so that axn files remain a flat sequence of normal tool calls.
 

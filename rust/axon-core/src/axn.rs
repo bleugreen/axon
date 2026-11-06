@@ -469,9 +469,11 @@ pub struct DispatchOutcome {
     pub success: bool,
     /// The native action was delivered, but its semantic effect was not verified.
     ///
-    /// This is the only unsuccessful outcome that replay may promote using declared
-    /// postconditions. Transport, capability, target-resolution, and refusal failures
-    /// must leave it false.
+    /// Replay counts such a step as dispatched: it succeeds when every declared expectation
+    /// holds, including when none are declared. Its *result* is promoted to semantically
+    /// verified only when a declared postcondition proves a causal transition. Transport,
+    /// capability, target-resolution, and refusal failures must leave it false, because those
+    /// steps were never dispatched and always fail.
     #[serde(default)]
     pub dispatched_without_semantic_verification: bool,
     #[serde(default)]
@@ -850,9 +852,10 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
             } else {
                 self.dispatcher.dispatch(&action.tool, &params)
             };
-            let can_verify_dispatch_only =
-                outcome.dispatched_without_semantic_verification && causal_transition;
-            let verification_error = if (outcome.success || can_verify_dispatch_only) && !dry_run {
+            // A delivered action is dispatched whether or not the primitive proved its goal; only
+            // a declared expectation that does not hold can fail it from here.
+            let dispatched = outcome.success || outcome.dispatched_without_semantic_verification;
+            let verification_error = if dispatched && !dry_run {
                 action
                     .expects
                     .iter()
@@ -863,8 +866,14 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
             } else {
                 None
             };
+            // The result is promoted only when a declared fact that did not hold before dispatch
+            // holds after it. A fact that already held proves nothing about this action, so the
+            // step succeeds while its result keeps the primitive's own unverified report.
+            let causally_verified = outcome.dispatched_without_semantic_verification
+                && causal_transition
+                && verification_error.is_none();
             let redacted = if secret_fields.is_empty() {
-                if can_verify_dispatch_only && verification_error.is_none() {
+                if causally_verified {
                     semantically_verified_result(&action.tool, outcome.result)
                 } else {
                     outcome.result
@@ -899,8 +908,7 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
             if let Some(event) = &heal {
                 heal_events.push(event.clone());
             }
-            let action_success =
-                (outcome.success || can_verify_dispatch_only) && verification_error.is_none();
+            let action_success = dispatched && verification_error.is_none();
             let entry = TraceEntry {
                 index,
                 tool: action.tool.clone(),
@@ -909,17 +917,18 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
                 result: (!redacted.is_null()).then_some(redacted),
                 error: verification_error
                     .map(|error| redact_error(error, &active_secrets))
-                    .or((!can_verify_dispatch_only)
-                        .then_some(outcome.error)
-                        .flatten()
-                        .map(|e| {
-                            if secret_fields.is_empty() {
-                                e
-                            } else {
-                                "<redacted: contains-secret>".into()
-                            }
-                        })
-                        .or_else(|| (!outcome.success).then(|| "action failed".into()))),
+                    .or((!dispatched).then(|| {
+                        outcome
+                            .error
+                            .map(|e| {
+                                if secret_fields.is_empty() {
+                                    e
+                                } else {
+                                    "<redacted: contains-secret>".into()
+                                }
+                            })
+                            .unwrap_or_else(|| "action failed".into())
+                    })),
                 resolution: outcome
                     .resolution
                     .map(|resolution| redact_target_resolution(&resolution, &active_secrets)),
