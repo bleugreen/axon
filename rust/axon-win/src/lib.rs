@@ -5,11 +5,10 @@ use axon_core::{
     DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung, DeliverySelection,
     DiffPolicy, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId,
     JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, PointerContract,
-    ResolutionStatus, RunEnvelope, SemanticLookup, SemanticNameRegistry,
-    SemanticRegistrationCoverage, SemanticSelection, Snapshot, SnapshotHandle,
-    TextLocationResolver, TextLocationSource, TextLocationTarget, TextRecognitionProvider,
-    ToolDispatcher, classify_semantic_diff, dispatch_in_foreground, goal_success, prepare_run,
-    select_delivery,
+    ResolutionStatus, RunEnvelope, SemanticNameRegistry, SemanticRegistrationCoverage,
+    SemanticSelection, Snapshot, SnapshotHandle, TextLocationResolver, TextLocationSource,
+    TextLocationTarget, TextRecognitionProvider, ToolDispatcher, classify_semantic_diff,
+    dispatch_in_foreground, goal_success, prepare_run, select_delivery,
 };
 use serde_json::{Map, Value, json};
 use std::{
@@ -1452,22 +1451,7 @@ impl<
             .map_err(backend_error)?;
         let lookup = context.resolve(&live);
         self.snapshot = Some(live);
-        match lookup {
-            SemanticLookup::Unique { handle, resolution } => Ok((handle, resolution)),
-            SemanticLookup::Missing { target } => Err(JsonRpcError {
-                code: -32002,
-                message: format!("semantic name not found: {} / {}", target.app, target.name),
-                data: Some(json!({"status":"missing","query":target})),
-            }),
-            SemanticLookup::Ambiguous { target, candidates } => Err(JsonRpcError {
-                code: -32002,
-                message: format!(
-                    "semantic name is ambiguous: {} / {}",
-                    target.app, target.name
-                ),
-                data: Some(json!({"status":"ambiguous","query":target,"candidates":candidates})),
-            }),
-        }
+        lookup.into_rpc_result()
     }
 
     fn readable_state(&self, handle: &SnapshotHandle) -> Result<Map<String, Value>, JsonRpcError> {
@@ -4513,7 +4497,7 @@ mod tests {
     }
 
     #[test]
-    fn axn_unknown_semantic_name_fails_closed_without_dispatch() {
+    fn axn_locator_matching_nothing_fails_closed_without_dispatch() {
         let backend = backend(vec![], Some("ready now"));
         let clicks = backend.clicks.clone();
         let focuses = backend.focuses.clone();
@@ -4533,11 +4517,10 @@ mod tests {
         let batch = &success.result["batch"];
         assert_eq!(batch["success"], json!(false));
         assert_eq!(batch["trace"].as_array().unwrap().len(), 1);
+        let error = batch["trace"][0]["error"].as_str().unwrap();
         assert!(
-            batch["trace"][0]["error"]
-                .as_str()
-                .unwrap()
-                .contains("semantic name not found")
+            error.starts_with("no element matches the locator for App / missing (0 candidates"),
+            "{error}"
         );
         assert_eq!(*clicks.borrow(), 0);
         assert_eq!(*focuses.borrow(), 0);

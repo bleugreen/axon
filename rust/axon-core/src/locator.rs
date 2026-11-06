@@ -387,6 +387,47 @@ fn node_label(n: &Node) -> Option<&str> {
         .or(n.description.as_deref())
         .or(n.identifier.as_deref())
 }
+/// The node attribute that satisfied a locator's `description`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DescriptionSource {
+    Description,
+    Label,
+}
+
+impl DescriptionSource {
+    pub(crate) fn read(self, node: &Node) -> Option<&str> {
+        match self {
+            Self::Description => node.description.as_deref(),
+            Self::Label => node.label.as_deref(),
+        }
+    }
+}
+
+/// How a locator's `description` is read: it is satisfied by the element's `description`, or,
+/// when the locator carries no `label`, by the element's `label`. `None` when the locator names no
+/// description or neither attribute matches it.
+///
+/// The fallback exists for recordings made by the Swift daemon (0.3.6 and earlier). Swift wrote
+/// an element's AXDescription — its accessible name — under the locator field `description` and
+/// never wrote `label`, while every Rust backend presents the accessible name as the node's
+/// `label` and reserves `description` for descriptive text (AXHelp on macOS, HelpText on Windows).
+/// Which producer wrote a locator cannot be told from the document: a Rust locator for a titled
+/// button with a tooltip has Swift's exact shape. So the rule is a reading of the field rather
+/// than a translation of old files, and it is purely additive: every strict match still matches,
+/// and a producer that separates the two names writes `label` whenever the element has one, which
+/// switches the fallback off. Matching is tried against `description` first, so a locator whose
+/// text equals the element's own description never needs the fallback.
+pub(crate) fn description_source(locator: &Locator, node: &Node) -> Option<DescriptionSource> {
+    let matcher = locator.description.as_ref()?;
+    if matcher.matches(node.description.as_deref()) {
+        Some(DescriptionSource::Description)
+    } else if locator.label.is_none() && matcher.matches(node.label.as_deref()) {
+        Some(DescriptionSource::Label)
+    } else {
+        None
+    }
+}
+
 fn ancestor_matches(l: &AncestorLocator, n: &Node) -> bool {
     l.role.as_ref().is_none_or(|x| x == &n.role)
         && l.subrole
@@ -417,6 +458,22 @@ fn add_match(
         Some(_) => false,
     }
 }
+fn description_match(locator: &Locator, node: &Node, reasons: &mut Vec<String>) -> bool {
+    let Some(matcher) = &locator.description else {
+        return true;
+    };
+    match description_source(locator, node) {
+        Some(DescriptionSource::Description) => {
+            reasons.push(format!("description {}", matcher.reason()));
+            true
+        }
+        Some(DescriptionSource::Label) => {
+            reasons.push(format!("description {} (label)", matcher.reason()));
+            true
+        }
+        None => false,
+    }
+}
 fn candidate(
     locator: &Locator,
     snapshot: &Snapshot,
@@ -440,12 +497,7 @@ fn candidate(
     }
     if !add_match(&locator.title, node.title.as_deref(), "title", &mut reasons)
         || !add_match(&locator.label, node.label.as_deref(), "label", &mut reasons)
-        || !add_match(
-            &locator.description,
-            node.description.as_deref(),
-            "description",
-            &mut reasons,
-        )
+        || !description_match(locator, node, &mut reasons)
         || !add_match(
             &locator.identifier,
             node.identifier.as_deref(),
@@ -743,6 +795,118 @@ mod tests {
             persisted_locator(&recorded(&capture, 2), &capture),
             None,
             "two identical siblings are separated only by geometry, which is not durable"
+        );
+    }
+
+    /// The axon-mac `look` of Calculator committed by the macOS acceptance harness.
+    fn axon_mac_calculator() -> Snapshot {
+        let response: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../scripts/macos-toolkit-acceptance/live/responses/look-full.json"
+        ))
+        .unwrap();
+        serde_json::from_value(response["response"]["result"]["structuredContent"].clone()).unwrap()
+    }
+
+    fn recorded_by_identifier(snapshot: &Snapshot, identifier: &str) -> Locator {
+        let mut contexts = Vec::new();
+        for window in &snapshot.app.windows {
+            crate::semantic_name::walk_context(
+                &window.root,
+                &[],
+                window.title.as_deref(),
+                &mut contexts,
+            );
+        }
+        let (node, ancestors, window) = contexts
+            .iter()
+            .find(|(node, _, _)| node.identifier.as_deref() == Some(identifier))
+            .unwrap_or_else(|| panic!("no {identifier} in the capture"));
+        crate::semantic_name::locator(node, ancestors, *window)
+    }
+
+    fn exact(value: &str) -> Option<TextMatcher> {
+        Some(TextMatcher::Exact {
+            value: value.into(),
+            case_sensitive: false,
+        })
+    }
+
+    fn best_identifier(locator: &Locator, snapshot: &Snapshot) -> Option<String> {
+        let resolution = LocatorResolver::resolve(locator, snapshot);
+        (resolution.status == ResolutionStatus::Unique)
+            .then(|| snapshot.node(resolution.best?.index)?.identifier.clone())
+            .flatten()
+    }
+
+    #[test]
+    fn rust_persists_the_calculator_one_key_by_its_label() {
+        let capture = axon_mac_calculator();
+
+        let persisted = persisted_locator(&recorded_by_identifier(&capture, "One"), &capture)
+            .expect("identity alone is unique");
+
+        assert_eq!(
+            persisted,
+            Locator {
+                role: Some("AXButton".into()),
+                label: exact("1"),
+                identifier: exact("One"),
+                ..Locator::default()
+            }
+        );
+    }
+
+    /// The key Rust recordings could lose if `description` were renamed rather than read
+    /// leniently: axon-mac pins AXHelp under `description` beside the AXDescription `label`.
+    #[test]
+    fn rust_persisted_delete_key_keeps_its_help_text_and_still_resolves() {
+        let capture = axon_mac_calculator();
+
+        let persisted = persisted_locator(&recorded_by_identifier(&capture, "Delete"), &capture)
+            .expect("identity alone is unique");
+
+        assert_eq!(persisted.label, exact("Delete"));
+        assert_eq!(
+            persisted.description,
+            exact("Delete the last digit or operation entered (long press to delete all)")
+        );
+        assert_eq!(
+            best_identifier(&persisted, &capture).as_deref(),
+            Some("Delete")
+        );
+    }
+
+    #[test]
+    fn description_reads_the_label_only_when_the_locator_names_no_label() {
+        let capture = axon_mac_calculator();
+        let swift_shaped = Locator {
+            role: Some("AXButton".into()),
+            description: exact("Delete"),
+            ..Locator::default()
+        };
+        assert_eq!(
+            best_identifier(&swift_shaped, &capture).as_deref(),
+            Some("Delete"),
+            "the element's own description is its help text, so only its label can match"
+        );
+        let resolution = LocatorResolver::resolve(&swift_shaped, &capture);
+        assert!(
+            resolution
+                .best
+                .unwrap()
+                .reasons
+                .contains(&"description exact Delete (label)".into()),
+            "the explanation names the attribute that matched"
+        );
+
+        let with_label = Locator {
+            label: exact("Delete"),
+            ..swift_shaped
+        };
+        assert_eq!(
+            LocatorResolver::resolve(&with_label, &capture).status,
+            ResolutionStatus::Missing,
+            "beside a label, description means the element's description and nothing else"
         );
     }
 

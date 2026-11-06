@@ -162,7 +162,9 @@ fn locator_evidence(recorded: &Locator, node: &crate::Node) -> Vec<Value> {
         &mut evidence,
         "description",
         recorded.description.as_ref(),
-        node.description.as_deref(),
+        crate::locator::description_source(recorded, node)
+            .unwrap_or(crate::locator::DescriptionSource::Description)
+            .read(node),
     );
     matcher_evidence(
         &mut evidence,

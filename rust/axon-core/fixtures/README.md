@@ -11,8 +11,13 @@ daemon reading a Swift-made recording fails here.
 
 If one of these tests fails, the fix is in the Rust codec or runner, never in the fixture.
 
-`scripts/macos-toolkit-acceptance/live/axn125/` holds a Swift-made Calculator recording captured
-from the production 0.3.6 daemon during the cutover qualification; it belongs to the same corpus.
+`swift-calculator-recording-0.3.6.axn` belongs to the same corpus but has a different origin: the
+others were written from the Swift schema, while this one is a real recording, four `invoke` steps
+on Calculator saved by the production 0.3.6 daemon during the cutover qualification (run
+`carry-20261104-162953`). Its conformance test resolves it against an axon-mac capture of the same
+window, `scripts/macos-toolkit-acceptance/live/responses/look-full.json`, so it pins what the
+field-by-field correspondence between a Swift locator and an axon-mac node has to keep true (see
+"Reading `description`" in `docs/axn.md`).
 
 ## The Rust corpus
 

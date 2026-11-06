@@ -5,11 +5,11 @@ use axon_core::{
     DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung, DeliverySelection,
     DiffPolicy, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId,
     JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, PointSpace, PointTarget,
-    PointerContract, ResolutionStatus, RunEnvelope, SemanticElementName, SemanticLookup,
-    SemanticNameRegistry, SemanticRegistrationCoverage, SemanticSelection, SinceToken, Snapshot,
-    SnapshotHandle, TextLocationResolver, TextLocationSource, TextLocationTarget,
-    TextRecognitionProvider, ToolDispatcher, classify_semantic_diff, dispatch_in_foreground,
-    goal_success, look_since_response, pointer_target_is_point, prepare_run, select_delivery,
+    PointerContract, ResolutionStatus, RunEnvelope, SemanticElementName, SemanticNameRegistry,
+    SemanticRegistrationCoverage, SemanticSelection, SinceToken, Snapshot, SnapshotHandle,
+    TextLocationResolver, TextLocationSource, TextLocationTarget, TextRecognitionProvider,
+    ToolDispatcher, classify_semantic_diff, dispatch_in_foreground, goal_success,
+    look_since_response, pointer_target_is_point, prepare_run, select_delivery,
 };
 use serde_json::{Map, Value, json};
 use std::{
@@ -1989,22 +1989,7 @@ impl<
             .map_err(backend_error)?;
         let lookup = context.resolve(&live);
         self.snapshot = Some(live);
-        match lookup {
-            SemanticLookup::Unique { handle, resolution } => Ok((handle, resolution)),
-            SemanticLookup::Missing { target } => Err(JsonRpcError {
-                code: -32002,
-                message: format!("semantic name not found: {} / {}", target.app, target.name),
-                data: Some(json!({"status":"missing","query":target})),
-            }),
-            SemanticLookup::Ambiguous { target, candidates } => Err(JsonRpcError {
-                code: -32002,
-                message: format!(
-                    "semantic name is ambiguous: {} / {}",
-                    target.app, target.name
-                ),
-                data: Some(json!({"status":"ambiguous","query":target,"candidates":candidates})),
-            }),
-        }
+        lookup.into_rpc_result()
     }
 
     fn run_axn(&mut self, params: &Map<String, Value>) -> Result<Value, JsonRpcError> {

@@ -398,6 +398,69 @@ fn rust_producer_fixtures_parse_and_replay_through_rust() {
     }
 }
 
+/// The axon-mac `look` of Calculator committed by the macOS acceptance harness: the capture a
+/// Swift-made Calculator recording has to resolve against after the cutover.
+fn axon_mac_calculator_capture() -> Snapshot {
+    let response: Value = serde_json::from_str(include_str!(
+        "../../../scripts/macos-toolkit-acceptance/live/responses/look-full.json"
+    ))
+    .unwrap();
+    serde_json::from_value(response["response"]["result"]["structuredContent"].clone()).unwrap()
+}
+
+/// A recording the production Swift 0.3.6 daemon saved replays on axon-mac. Swift wrote each
+/// key's AXDescription under the locator's `description`; axon-mac presents AXDescription as the
+/// node's `label`, so this resolves only because a `description` with no `label` beside it is
+/// also satisfied by the element's label. Replaying the unchanged recording must not propose a
+/// heal either: the evidence has to read the field the resolver matched.
+#[test]
+fn swift_0_3_6_calculator_recording_resolves_on_an_axon_mac_capture() {
+    let document = AxnCodec::parse(include_str!(
+        "../fixtures/swift-calculator-recording-0.3.6.axn"
+    ))
+    .unwrap();
+    let capture = axon_mac_calculator_capture();
+    let expected = ["One", "Add", "Two", "Equals"];
+    assert_eq!(document.actions.len(), expected.len());
+
+    let mut registry = SemanticNameRegistry::default();
+    for (index, (action, identifier)) in document.actions.iter().zip(expected).enumerate() {
+        let target = action.params["target"].as_object().unwrap();
+        let locator: Locator = serde_json::from_value(target["locator"].clone()).unwrap();
+
+        let resolution = LocatorResolver::resolve(&locator, &capture);
+        assert_eq!(
+            resolution.status,
+            ResolutionStatus::Unique,
+            "{identifier}: {} candidates in snapshot {}",
+            resolution.candidates.len(),
+            resolution.snapshot_id.0
+        );
+        let best = capture.node(resolution.best.unwrap().index).unwrap();
+        assert_eq!(best.identifier.as_deref(), Some(identifier));
+
+        let wire = WireElementTarget {
+            app: target["app"].as_str().unwrap().into(),
+            name: target["name"].as_str().unwrap().into(),
+        };
+        registry.register_replay_locator(wire.clone(), locator);
+        let SemanticSelection::Selected(context) = registry.select(&wire) else {
+            panic!("{identifier}: the replay locator was not selected");
+        };
+        assert!(matches!(
+            context.resolve(&capture),
+            SemanticLookup::Unique { .. }
+        ));
+        let replayed = replay_target_resolution_for_context(&context, &capture).unwrap();
+        assert_eq!(replayed.status, ResolutionStatus::Unique, "{identifier}");
+        assert_eq!(
+            healing_event(action, index, &replayed, &[], |_, _| true).map(|event| event.diff),
+            None,
+            "{identifier}: an unchanged Swift recording has nothing to heal"
+        );
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LookFormatControls {

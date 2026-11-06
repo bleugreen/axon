@@ -67,7 +67,9 @@ must not use the process or user locale when resolving a locator.
 
 The distinction between filtering and scoring is part of the contract. Role,
 subrole, title, label, description, identifier, non-editable value, window scope,
-and ancestors are hard filters. Actions, editable values, and nearby text are
+and ancestors are hard filters; a `description` with no `label` beside it is
+also satisfied by the element's label, for recordings made by the Swift daemon
+(see "Reading `description`" in `axn.md`). Actions, editable values, and nearby text are
 replay signals: a match may improve confidence and explain a candidate, but their
 absence must not eliminate an otherwise stable candidate. Nearby text is never
 negative evidence. Frame proximity cannot overcome a semantic mismatch.

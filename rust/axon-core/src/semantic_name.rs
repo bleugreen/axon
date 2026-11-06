@@ -433,6 +433,7 @@ impl SemanticResolutionContext {
         {
             return SemanticLookup::Missing {
                 target: self.target.clone(),
+                reason: MissingReason::ProcessChanged,
             };
         }
         let resolution = LocatorResolver::resolve(&self.locator, live);
@@ -479,11 +480,80 @@ pub enum SemanticLookup {
     },
     Missing {
         target: WireElementTarget,
+        reason: MissingReason,
     },
     Ambiguous {
         target: WireElementTarget,
         candidates: Vec<SemanticCandidate>,
     },
+}
+
+/// Why a semantic target found no element. The three read alike to a client — the target is
+/// `missing` — but send a reader to different places: the name registry, the locator, or the
+/// application's process.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MissingReason {
+    /// Nothing is recorded under the name.
+    NoRecord,
+    /// The name's locator was evaluated against a live snapshot and matched no element.
+    NoCandidates { snapshot_id: crate::SnapshotId },
+    /// The name was issued for an application process that is no longer the one running.
+    ProcessChanged,
+}
+
+impl SemanticLookup {
+    /// The JSON-RPC answer every backend gives for a lookup: the element, or a `-32002` error
+    /// with `status` `missing` or `ambiguous` that names why.
+    pub fn into_rpc_result(self) -> Result<(SnapshotHandle, Resolution), crate::JsonRpcError> {
+        use serde_json::json;
+        let (message, data) = match self {
+            Self::Unique { handle, resolution } => return Ok((handle, resolution)),
+            Self::Ambiguous { target, candidates } => (
+                format!(
+                    "semantic name is ambiguous: {} / {}",
+                    target.app, target.name
+                ),
+                json!({"status":"ambiguous","query":target,"candidates":candidates}),
+            ),
+            Self::Missing {
+                target,
+                reason: MissingReason::NoRecord,
+            } => (
+                format!("semantic name not found: {} / {}", target.app, target.name),
+                json!({"status":"missing","query":target}),
+            ),
+            Self::Missing {
+                target,
+                reason: MissingReason::NoCandidates { snapshot_id },
+            } => (
+                format!(
+                    "no element matches the locator for {} / {} (0 candidates in snapshot {})",
+                    target.app, target.name, snapshot_id.0
+                ),
+                json!({
+                    "status":"missing",
+                    "reason":"noCandidates",
+                    "query":target,
+                    "snapshotId":snapshot_id
+                }),
+            ),
+            Self::Missing {
+                target,
+                reason: MissingReason::ProcessChanged,
+            } => (
+                format!(
+                    "{} / {} was issued for an application process that is no longer the one running",
+                    target.app, target.name
+                ),
+                json!({"status":"missing","reason":"processChanged","query":target}),
+            ),
+        };
+        Err(crate::JsonRpcError {
+            code: -32002,
+            message,
+            data: Some(data),
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -786,7 +856,10 @@ impl SemanticNameRegistry {
     pub fn resolve(&self, target: &WireElementTarget, live: &Snapshot) -> SemanticLookup {
         match self.select(target) {
             SemanticSelection::Selected(context) => context.resolve(live),
-            SemanticSelection::Missing { target } => SemanticLookup::Missing { target },
+            SemanticSelection::Missing { target } => SemanticLookup::Missing {
+                target,
+                reason: MissingReason::NoRecord,
+            },
             SemanticSelection::Ambiguous { target, candidates } => {
                 SemanticLookup::Ambiguous { target, candidates }
             }
@@ -860,6 +933,9 @@ pub(crate) fn lookup_from_resolution(
         },
         ResolutionStatus::Missing => SemanticLookup::Missing {
             target: target.clone(),
+            reason: MissingReason::NoCandidates {
+                snapshot_id: result.snapshot_id,
+            },
         },
         ResolutionStatus::Ambiguous => SemanticLookup::Ambiguous {
             target: target.clone(),
@@ -1402,14 +1478,88 @@ mod tests {
         let wrong = with_pid(snapshot("wrong", vec![button("Save", Some("save"))]), 42);
         assert!(matches!(
             context.resolve(&wrong),
-            SemanticLookup::Missing { .. }
+            SemanticLookup::Missing {
+                reason: MissingReason::ProcessChanged,
+                ..
+            }
         ));
+        let error = context.resolve(&wrong).into_rpc_result().unwrap_err();
+        assert_eq!(error.code, -32002);
+        assert!(
+            error.message.ends_with(
+                "was issued for an application process that is no longer the one running"
+            ),
+            "{}",
+            error.message
+        );
+        assert_eq!(error.data.unwrap()["reason"], "processChanged");
 
         let unknown = snapshot("unknown", vec![button("Save", Some("save"))]);
         assert!(matches!(
             context.resolve(&unknown),
-            SemanticLookup::Missing { .. }
+            SemanticLookup::Missing {
+                reason: MissingReason::ProcessChanged,
+                ..
+            }
         ));
+    }
+
+    /// A locator that matches nothing and a name that was never issued are different failures,
+    /// and the error must send the reader to the right one.
+    #[test]
+    fn a_missing_lookup_names_why_it_found_nothing() {
+        let live = snapshot("live", vec![button("Save", Some("save"))]);
+        let mut registry = SemanticNameRegistry::default();
+        let query = WireElementTarget {
+            app: "App".into(),
+            name: "gone".into(),
+        };
+        registry.register_replay_locator(
+            query.clone(),
+            Locator {
+                identifier: Some(TextMatcher::Exact {
+                    value: "absent".into(),
+                    case_sensitive: false,
+                }),
+                ..Locator::default()
+            },
+        );
+
+        let error = registry
+            .resolve(&query, &live)
+            .into_rpc_result()
+            .unwrap_err();
+        assert_eq!(error.code, -32002);
+        assert_eq!(
+            error.message,
+            "no element matches the locator for App / gone (0 candidates in snapshot live)"
+        );
+        assert_eq!(
+            error.data,
+            Some(serde_json::json!({
+                "status": "missing",
+                "reason": "noCandidates",
+                "query": {"app": "App", "name": "gone"},
+                "snapshotId": "live"
+            }))
+        );
+
+        let never_issued = WireElementTarget {
+            app: "App".into(),
+            name: "never-issued".into(),
+        };
+        let error = registry
+            .resolve(&never_issued, &live)
+            .into_rpc_result()
+            .unwrap_err();
+        assert_eq!(error.message, "semantic name not found: App / never-issued");
+        assert_eq!(
+            error.data,
+            Some(serde_json::json!({
+                "status": "missing",
+                "query": {"app": "App", "name": "never-issued"}
+            }))
+        );
     }
 
     fn issued(

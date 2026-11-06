@@ -64,6 +64,38 @@ there long after the observation itself is gone.
 Replay still reads a wider locator than it writes. Documents authored elsewhere
 may carry any of the scoring fields, and `find` accepts all of them.
 
+### Reading `description`
+
+A node's `label` is the element's accessible name (AXDescription on macOS, the
+UIA Name on Windows), and its `description` is descriptive text beside that name
+(AXHelp on macOS, HelpText on Windows). The Swift daemon, which wrote every
+recording made with Axon 0.3.6 and earlier, used other names: it wrote an
+element's AXDescription under the locator field `description` and never wrote
+`label`. The resolver therefore reads `description` with one fallback: **a
+locator's `description` is satisfied by the element's `description`, or, when
+the locator carries no `label`, by the element's `label`.** The element's own
+description is tried first, and the candidate's explanation says which attribute
+matched (`description exact 1 (label)`). Locator healing compares against the
+same attribute, so an unchanged Swift recording reports no drift.
+
+The correspondence lives in this reading rule rather than in a translation
+applied when a file is opened, because which daemon wrote a locator cannot be
+told from the file: a Rust locator for a titled button with a tooltip,
+`{role, title, description}`, has exactly Swift's shape. It also cannot live in
+how axon-mac names its node fields, since renaming AXHelp away from
+`description` would break every Rust recording that pinned it. The rule is
+purely additive. Every strict match still matches, and a producer that keeps
+the two names apart writes `label` whenever an element has one, which switches
+the fallback off. Recording-time minimization, replay, healing, and fact
+resolution all resolve through the same function, so they all read a locator
+this way. `fixtures/swift-calculator-recording-0.3.6.axn` in axon-core is a real
+Swift recording that pins it.
+
+Two other Swift habits are not read this way yet: the recorder borrowed a
+descendant's text as `title` for a control with no text of its own, and
+checkbox, radio, and slider state was pinned as a numeric `value`, which
+axon-mac does not currently read.
+
 Process identity is also runtime-only. A live look records the selected process ID beside its
 semantic-name evidence, and later actions select that evidence before capturing the application
 again. This keeps coexisting instances separate and pins replay resolution to the process that was
