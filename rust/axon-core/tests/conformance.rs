@@ -1452,7 +1452,7 @@ fn dispatch_only(states: Vec<Value>) -> SemanticDispatcher {
     }
 }
 
-fn run_with_defaults(dispatcher: &mut dyn ToolDispatcher, doc: &AxnDocument) -> RunResult {
+fn run_with_defaults<D: ToolDispatcher>(dispatcher: &mut D, doc: &AxnDocument) -> RunResult {
     AxnRunner::new(dispatcher)
         .run(
             doc,
