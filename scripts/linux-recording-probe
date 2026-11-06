@@ -314,17 +314,14 @@ done
 echo "both scopes recorded the same flow, which is what tells an identity disagreement apart from a broken observer"
 
 note "replaying what was recorded"
-# `continueOnError` is not a convenience here. A recorded click declares no postcondition, so the
-# runner scores it as unsuccessful and, under the default, stops the batch at the first one --
-# meaning every recorded artifact containing a click replays exactly one action. That is axn/228,
-# it is not specific to this platform, and it is deliberately not fixed here. What this asserts
-# instead is what the recording is actually about: every action dispatched, and every recorded
-# target resolved to exactly one element.
+# Under the default options, as a caller replaying a recording would. A recorded click declares no
+# postcondition, and a dispatched step with nothing declared neither fails nor halts the replay, so
+# every recorded action has to appear in the trace and succeed.
 #
 # `run` takes an artifact by `path` (or inline `actions`), never as a string.
 run_artifact() {
   mcp "$(jq -cn --arg path "$1" --argjson dry "$2" \
-    '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"path":$path,"dryRun":$dry,"continueOnError":true}}}')"
+    '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"path":$path,"dryRun":$dry}}}')"
 }
 
 # What each traced action did, in the shape the run reports it.
@@ -407,6 +404,9 @@ replay_live() {
   ' >/dev/null || fail "a target in the $label did not resolve to exactly one element on live replay"
   printf '%s' "$replayed" | jq -e 'all(.result.structuredContent.batch.trace[]; .result.dispatchSuccess == true)' >/dev/null \
     || fail "an action in the $label did not dispatch on live replay"
+  printf '%s' "$replayed" | jq -e '.result.structuredContent.batch.success == true
+        and all(.result.structuredContent.batch.trace[]; .success == true)' >/dev/null \
+    || fail "the $label did not succeed under the default replay options"
   expect_entry 'axon recorded this' "the typed step of the $label did not land"
 }
 

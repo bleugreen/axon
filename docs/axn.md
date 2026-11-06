@@ -211,6 +211,18 @@ no `expects` postcondition can promote it to success. A step that *did* dispatch
 but could not prove its goal is exactly the case `expects` exists for, and a
 postcondition that verifies clears the declined escalation it no longer explains.
 
+Replay scores a step by what it can show, not by what the primitive could prove
+on its own. A step that dispatched and whose declared expectations all held,
+including a step that declares none, succeeds and does not halt the replay. Only
+three things fail a step: its target did not resolve, its action was not
+dispatched (a transport or capability failure, or a delivery refusal), or a
+declared expectation did not hold afterwards. A succeeded step's `result` still
+reports `verification.verified: false` unless a causal postcondition proved it:
+one that changed, or one that did not hold before a `click`, `keyboard`, `drag`,
+or `scroll` and holds after it. An expectation that already held before dispatch
+lets the step succeed but proves nothing about the action, so it does not promote
+the result.
+
 `deliveryPolicy` needs no special version-2 syntax: `.axn` steps retain tool
 parameters verbatim, and the external `{"batch": ...}` envelope is untouched.
 
