@@ -746,6 +746,115 @@ mod tests {
         );
     }
 
+    /// The axon-mac `look` of Calculator committed by the macOS acceptance harness.
+    fn axon_mac_calculator() -> Snapshot {
+        let response: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../scripts/macos-toolkit-acceptance/live/responses/look-full.json"
+        ))
+        .unwrap();
+        serde_json::from_value(response["response"]["result"]["structuredContent"].clone())
+            .unwrap()
+    }
+
+    fn recorded_by_identifier(snapshot: &Snapshot, identifier: &str) -> Locator {
+        let mut contexts = Vec::new();
+        for window in &snapshot.app.windows {
+            crate::semantic_name::walk_context(
+                &window.root,
+                &[],
+                window.title.as_deref(),
+                &mut contexts,
+            );
+        }
+        let (node, ancestors, window) = contexts
+            .iter()
+            .find(|(node, _, _)| node.identifier.as_deref() == Some(identifier))
+            .unwrap_or_else(|| panic!("no {identifier} in the capture"));
+        crate::semantic_name::locator(node, ancestors, *window)
+    }
+
+    fn exact(value: &str) -> Option<TextMatcher> {
+        Some(TextMatcher::Exact {
+            value: value.into(),
+            case_sensitive: false,
+        })
+    }
+
+    fn best_identifier(locator: &Locator, snapshot: &Snapshot) -> Option<String> {
+        let resolution = LocatorResolver::resolve(locator, snapshot);
+        (resolution.status == ResolutionStatus::Unique)
+            .then(|| snapshot.node(resolution.best?.index)?.identifier.clone())
+            .flatten()
+    }
+
+    #[test]
+    fn rust_persists_the_calculator_one_key_by_its_label() {
+        let capture = axon_mac_calculator();
+
+        let persisted = persisted_locator(&recorded_by_identifier(&capture, "One"), &capture)
+            .expect("identity alone is unique");
+
+        assert_eq!(
+            persisted,
+            Locator {
+                role: Some("AXButton".into()),
+                label: exact("1"),
+                identifier: exact("One"),
+                ..Locator::default()
+            }
+        );
+    }
+
+    /// The key Rust recordings could lose if `description` were renamed rather than read
+    /// leniently: axon-mac pins AXHelp under `description` beside the AXDescription `label`.
+    #[test]
+    fn rust_persisted_delete_key_keeps_its_help_text_and_still_resolves() {
+        let capture = axon_mac_calculator();
+
+        let persisted = persisted_locator(&recorded_by_identifier(&capture, "Delete"), &capture)
+            .expect("identity alone is unique");
+
+        assert_eq!(persisted.label, exact("Delete"));
+        assert_eq!(
+            persisted.description,
+            exact("Delete the last digit or operation entered (long press to delete all)")
+        );
+        assert_eq!(
+            best_identifier(&persisted, &capture).as_deref(),
+            Some("Delete")
+        );
+    }
+
+    #[test]
+    fn description_reads_the_label_only_when_the_locator_names_no_label() {
+        let capture = axon_mac_calculator();
+        let swift_shaped = Locator {
+            role: Some("AXButton".into()),
+            description: exact("Delete"),
+            ..Locator::default()
+        };
+        assert_eq!(
+            best_identifier(&swift_shaped, &capture).as_deref(),
+            Some("Delete"),
+            "the element's own description is its help text, so only its label can match"
+        );
+        let resolution = LocatorResolver::resolve(&swift_shaped, &capture);
+        assert!(
+            resolution.best.unwrap().reasons.contains(&"description exact Delete (label)".into()),
+            "the explanation names the attribute that matched"
+        );
+
+        let with_label = Locator {
+            label: exact("Delete"),
+            ..swift_shaped
+        };
+        assert_eq!(
+            LocatorResolver::resolve(&with_label, &capture).status,
+            ResolutionStatus::Missing,
+            "beside a label, description means the element's description and nothing else"
+        );
+    }
+
     #[test]
     fn identity_skeleton_answers_uniqueness_like_the_observation_it_came_from() {
         let text = "private notes".repeat(32);

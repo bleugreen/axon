@@ -1,0 +1,90 @@
+version: 2
+actions:
+- id: a001
+  tool: invoke
+  target:
+    app: Calculator
+    locator:
+      actions:
+      - AXPress
+      ancestors:
+      - role: AXWindow
+      - role: AXGroup
+        subrole: AXHostingView
+      - identifier: main, SidebarNavigationSplitView
+        role: AXSplitGroup
+      - role: AXGroup
+        subrole: AXHostingView
+      - identifier: CalculatorKeypadView
+        role: AXGroup
+      description: '1'
+      identifier: One
+      role: AXButton
+    name: main-sidebarnavigationsplitview/calculatorkeypadview/1
+  name: AXPress
+- id: a002
+  tool: invoke
+  target:
+    app: Calculator
+    locator:
+      actions:
+      - AXPress
+      ancestors:
+      - role: AXWindow
+      - role: AXGroup
+        subrole: AXHostingView
+      - identifier: main, SidebarNavigationSplitView
+        role: AXSplitGroup
+      - role: AXGroup
+        subrole: AXHostingView
+      - identifier: CalculatorKeypadView
+        role: AXGroup
+      description: Add
+      identifier: Add
+      role: AXButton
+    name: main-sidebarnavigationsplitview/calculatorkeypadview/add
+  name: AXPress
+- id: a003
+  tool: invoke
+  target:
+    app: Calculator
+    locator:
+      actions:
+      - AXPress
+      ancestors:
+      - role: AXWindow
+      - role: AXGroup
+        subrole: AXHostingView
+      - identifier: main, SidebarNavigationSplitView
+        role: AXSplitGroup
+      - role: AXGroup
+        subrole: AXHostingView
+      - identifier: CalculatorKeypadView
+        role: AXGroup
+      description: '2'
+      identifier: Two
+      role: AXButton
+    name: main-sidebarnavigationsplitview/calculatorkeypadview/2
+  name: AXPress
+- id: a004
+  tool: invoke
+  target:
+    app: Calculator
+    locator:
+      actions:
+      - AXPress
+      ancestors:
+      - role: AXWindow
+      - role: AXGroup
+        subrole: AXHostingView
+      - identifier: main, SidebarNavigationSplitView
+        role: AXSplitGroup
+      - role: AXGroup
+        subrole: AXHostingView
+      - identifier: CalculatorKeypadView
+        role: AXGroup
+      description: Equals
+      identifier: Equals
+      role: AXButton
+    name: main-sidebarnavigationsplitview/calculatorkeypadview/equals
+  name: AXPress
