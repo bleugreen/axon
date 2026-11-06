@@ -4660,6 +4660,35 @@ mod tests {
         assert_eq!(*router.backend.clicks.borrow(), 0);
     }
     #[test]
+    fn axn_locator_matching_nothing_fails_closed_without_dispatch() {
+        let backend = backend(vec![], Some("ready now"));
+        let clicks = backend.clicks.clone();
+        let focuses = backend.focuses.clone();
+        let mut router = Router::new(backend);
+        let actions = json!([{
+            "tool": "invoke",
+            "name": "Invoke",
+            "target": {"app": "App", "name": "missing", "locator": {"role": "definitely-missing"}}
+        }]);
+
+        let response = router
+            .request(request("run", json!({"actions": actions})))
+            .unwrap();
+        let JsonRpcResponse::Success(success) = response else {
+            panic!("the .axn run itself returns a batch result")
+        };
+        let batch = &success.result["batch"];
+        assert_eq!(batch["success"], json!(false));
+        assert_eq!(batch["trace"].as_array().unwrap().len(), 1);
+        let error = batch["trace"][0]["error"].as_str().unwrap();
+        assert!(
+            error.starts_with("no element matches the locator for App / missing (0 candidates"),
+            "{error}"
+        );
+        assert_eq!(*clicks.borrow(), 0);
+        assert_eq!(*focuses.borrow(), 0);
+    }
+    #[test]
     fn axn_v1_handle_facts_are_rejected_at_the_public_run_boundary() {
         let backend = backend(vec![], Some("ready now"));
         let handle = backend.snapshot.handle(0).0;

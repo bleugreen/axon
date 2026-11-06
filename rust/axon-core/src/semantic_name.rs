@@ -1475,14 +1475,88 @@ mod tests {
         let wrong = with_pid(snapshot("wrong", vec![button("Save", Some("save"))]), 42);
         assert!(matches!(
             context.resolve(&wrong),
-            SemanticLookup::Missing { .. }
+            SemanticLookup::Missing {
+                reason: MissingReason::ProcessChanged,
+                ..
+            }
         ));
+        let error = context.resolve(&wrong).into_rpc_result().unwrap_err();
+        assert_eq!(error.code, -32002);
+        assert!(
+            error
+                .message
+                .ends_with("was issued for an application process that is no longer the one running"),
+            "{}",
+            error.message
+        );
+        assert_eq!(error.data.unwrap()["reason"], "processChanged");
 
         let unknown = snapshot("unknown", vec![button("Save", Some("save"))]);
         assert!(matches!(
             context.resolve(&unknown),
-            SemanticLookup::Missing { .. }
+            SemanticLookup::Missing {
+                reason: MissingReason::ProcessChanged,
+                ..
+            }
         ));
+    }
+
+    /// A locator that matches nothing and a name that was never issued are different failures,
+    /// and the error must send the reader to the right one.
+    #[test]
+    fn a_missing_lookup_names_why_it_found_nothing() {
+        let live = snapshot("live", vec![button("Save", Some("save"))]);
+        let mut registry = SemanticNameRegistry::default();
+        let query = WireElementTarget {
+            app: "App".into(),
+            name: "gone".into(),
+        };
+        registry.register_replay_locator(
+            query.clone(),
+            Locator {
+                identifier: Some(TextMatcher::Exact {
+                    value: "absent".into(),
+                    case_sensitive: false,
+                }),
+                ..Locator::default()
+            },
+        );
+
+        let error = registry
+            .resolve(&query, &live)
+            .into_rpc_result()
+            .unwrap_err();
+        assert_eq!(error.code, -32002);
+        assert_eq!(
+            error.message,
+            "no element matches the locator for App / gone (0 candidates in snapshot live)"
+        );
+        assert_eq!(
+            error.data,
+            Some(serde_json::json!({
+                "status": "missing",
+                "reason": "noCandidates",
+                "query": {"app": "App", "name": "gone"},
+                "snapshotId": "live"
+            }))
+        );
+
+        let never_issued = WireElementTarget {
+            app: "App".into(),
+            name: "never-issued".into(),
+        };
+        let error = registry
+            .resolve(&never_issued, &live)
+            .into_rpc_result()
+            .unwrap_err();
+        assert_eq!(error.message, "semantic name not found: App / never-issued");
+        assert_eq!(
+            error.data,
+            Some(serde_json::json!({
+                "status": "missing",
+                "query": {"app": "App", "name": "never-issued"}
+            }))
+        );
     }
 
     fn issued(

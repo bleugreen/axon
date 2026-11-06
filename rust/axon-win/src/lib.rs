@@ -4498,7 +4498,7 @@ mod tests {
     }
 
     #[test]
-    fn axn_unknown_semantic_name_fails_closed_without_dispatch() {
+    fn axn_locator_matching_nothing_fails_closed_without_dispatch() {
         let backend = backend(vec![], Some("ready now"));
         let clicks = backend.clicks.clone();
         let focuses = backend.focuses.clone();
@@ -4518,11 +4518,10 @@ mod tests {
         let batch = &success.result["batch"];
         assert_eq!(batch["success"], json!(false));
         assert_eq!(batch["trace"].as_array().unwrap().len(), 1);
+        let error = batch["trace"][0]["error"].as_str().unwrap();
         assert!(
-            batch["trace"][0]["error"]
-                .as_str()
-                .unwrap()
-                .contains("semantic name not found")
+            error.starts_with("no element matches the locator for App / missing (0 candidates"),
+            "{error}"
         );
         assert_eq!(*clicks.borrow(), 0);
         assert_eq!(*focuses.borrow(), 0);
