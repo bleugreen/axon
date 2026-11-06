@@ -122,7 +122,10 @@ import Testing
 /// The tool entries of `schema/tool-surface-v1.json`, the spec every Rust facade's MCP tool list is
 /// generated from.
 private func artifactTools() -> [JSONValue] {
-    ToolSurfaceSchema.normalizedArtifactJSONValue()["tools"]?.arrayValue ?? []
+    guard case let .array(tools)? = ToolSurfaceSchema.normalizedArtifactJSONValue()["tools"] else {
+        return []
+    }
+    return tools
 }
 
 private func toolNames(in tools: [JSONValue]) -> [String] {

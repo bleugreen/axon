@@ -17,7 +17,11 @@ private struct SharedLookRequestControls: Decodable {
         .appendingPathComponent("../../schema/fixtures/look-request-controls.json")
         .standardizedFileURL
     let fixture = try JSONDecoder().decode(SharedLookRequestControls.self, from: Data(contentsOf: fixtureURL))
-    let look = try #require(ToolSurfaceSchema.normalizedArtifactJSONValue()["tools"]?.arrayValue?.first { $0["name"] == .string("look") })
+    guard case let .array(tools)? = ToolSurfaceSchema.normalizedArtifactJSONValue()["tools"] else {
+        Issue.record("the tool surface artifact has no tools array")
+        return
+    }
+    let look = try #require(tools.first { $0["name"] == .string("look") })
     let properties = try #require(look["inputSchema"]?["properties"])
 
     #expect(properties["format"]?["enum"] == .array(fixture.format.acceptedValues.map(JSONValue.string)))
