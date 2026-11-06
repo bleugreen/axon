@@ -433,6 +433,7 @@ impl SemanticResolutionContext {
         {
             return SemanticLookup::Missing {
                 target: self.target.clone(),
+                reason: MissingReason::ProcessChanged,
             };
         }
         let resolution = LocatorResolver::resolve(&self.locator, live);
@@ -504,43 +505,46 @@ impl SemanticLookup {
     /// The JSON-RPC answer every backend gives for a lookup: the element, or a `-32002` error
     /// with `status` `missing` or `ambiguous` that names why.
     pub fn into_rpc_result(self) -> Result<(SnapshotHandle, Resolution), crate::JsonRpcError> {
-        let (target, message, data) = match self {
+        use serde_json::json;
+        let (message, data) = match self {
             Self::Unique { handle, resolution } => return Ok((handle, resolution)),
             Self::Ambiguous { target, candidates } => (
                 format!("semantic name is ambiguous: {} / {}", target.app, target.name),
-                serde_json::json!({"status":"ambiguous","query":&target,"candidates":candidates}),
-                target,
+                json!({"status":"ambiguous","query":target,"candidates":candidates}),
             ),
-            Self::Missing { target, reason } => {
-                let (message, data) = match reason {
-                    MissingReason::NoRecord => (
-                        format!("semantic name not found: {} / {}", target.app, target.name),
-                        serde_json::json!({"status":"missing","query":&target}),
-                    ),
-                    MissingReason::NoCandidates { snapshot_id } => (
-                        format!(
-                            "no element matches the locator for {} / {} (0 candidates in snapshot {})",
-                            target.app, target.name, snapshot_id.0
-                        ),
-                        serde_json::json!({
-                            "status":"missing",
-                            "reason":"noCandidates",
-                            "query":&target,
-                            "snapshotId":snapshot_id
-                        }),
-                    ),
-                    MissingReason::ProcessChanged => (
-                        format!(
-                            "{} / {} was issued for an application process that is no longer the one running",
-                            target.app, target.name
-                        ),
-                        serde_json::json!({"status":"missing","reason":"processChanged","query":&target}),
-                    ),
-                };
-                (message, data, target)
-            }
+            Self::Missing {
+                target,
+                reason: MissingReason::NoRecord,
+            } => (
+                format!("semantic name not found: {} / {}", target.app, target.name),
+                json!({"status":"missing","query":target}),
+            ),
+            Self::Missing {
+                target,
+                reason: MissingReason::NoCandidates { snapshot_id },
+            } => (
+                format!(
+                    "no element matches the locator for {} / {} (0 candidates in snapshot {})",
+                    target.app, target.name, snapshot_id.0
+                ),
+                json!({
+                    "status":"missing",
+                    "reason":"noCandidates",
+                    "query":target,
+                    "snapshotId":snapshot_id
+                }),
+            ),
+            Self::Missing {
+                target,
+                reason: MissingReason::ProcessChanged,
+            } => (
+                format!(
+                    "{} / {} was issued for an application process that is no longer the one running",
+                    target.app, target.name
+                ),
+                json!({"status":"missing","reason":"processChanged","query":target}),
+            ),
         };
-        let _ = target;
         Err(crate::JsonRpcError {
             code: -32002,
             message,
@@ -849,7 +853,10 @@ impl SemanticNameRegistry {
     pub fn resolve(&self, target: &WireElementTarget, live: &Snapshot) -> SemanticLookup {
         match self.select(target) {
             SemanticSelection::Selected(context) => context.resolve(live),
-            SemanticSelection::Missing { target } => SemanticLookup::Missing { target },
+            SemanticSelection::Missing { target } => SemanticLookup::Missing {
+                target,
+                reason: MissingReason::NoRecord,
+            },
             SemanticSelection::Ambiguous { target, candidates } => {
                 SemanticLookup::Ambiguous { target, candidates }
             }
@@ -923,6 +930,9 @@ pub(crate) fn lookup_from_resolution(
         },
         ResolutionStatus::Missing => SemanticLookup::Missing {
             target: target.clone(),
+            reason: MissingReason::NoCandidates {
+                snapshot_id: result.snapshot_id,
+            },
         },
         ResolutionStatus::Ambiguous => SemanticLookup::Ambiguous {
             target: target.clone(),

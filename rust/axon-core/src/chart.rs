@@ -347,7 +347,10 @@ impl<'a> ChartSeededResolver<'a> {
                 return context.resolve(live);
             }
             RetainedSemanticSelection::Selected(crate::SemanticSelection::Missing { target }) => {
-                return SemanticLookup::Missing { target };
+                return SemanticLookup::Missing {
+                    target,
+                    reason: MissingReason::NoRecord,
+                };
             }
             RetainedSemanticSelection::Selected(crate::SemanticSelection::Ambiguous {
                 target,
@@ -359,6 +362,7 @@ impl<'a> ChartSeededResolver<'a> {
         if !app_matches_identity(&target.app, live, app_identity) {
             return SemanticLookup::Missing {
                 target: target.clone(),
+                reason: MissingReason::NoRecord,
             };
         }
         let seeds = self
@@ -367,6 +371,7 @@ impl<'a> ChartSeededResolver<'a> {
         if seeds.is_empty() {
             return SemanticLookup::Missing {
                 target: target.clone(),
+                reason: MissingReason::NoRecord,
             };
         }
         if seeds.len() == 1 {
@@ -402,6 +407,9 @@ impl<'a> ChartSeededResolver<'a> {
         if candidates.is_empty() {
             SemanticLookup::Missing {
                 target: target.clone(),
+                reason: MissingReason::NoCandidates {
+                    snapshot_id: live.id.clone(),
+                },
             }
         } else {
             SemanticLookup::Ambiguous {
