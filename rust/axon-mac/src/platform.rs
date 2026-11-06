@@ -415,6 +415,23 @@ fn editable(role: &str) -> bool {
     matches!(role, "AXComboBox" | "AXTextArea" | "AXTextField")
 }
 
+/// The members of an application's `AXWindows` array that `look` reports as its windows.
+///
+/// `AXWindows` lists every top-level element AppKit registers for the process, not only windows.
+/// Measured on macOS 26.6 it holds `AXWindow` in every window subrole (standard, dialog, system
+/// dialog, system floating window), and also a button's tooltip as an `AXHelpTag` while it is
+/// showing, and Finder's desktop as an `AXScrollArea`. Neither of those is a window. Sheets are not
+/// entries at all: they are children of their window. So the rule keeps `AXWindow` by role, whatever
+/// its subrole, and drops every other root, including one whose role cannot be read.
+fn application_windows<T>(
+    entries: impl IntoIterator<Item = T>,
+    role: impl Fn(&T) -> Option<String>,
+) -> impl Iterator<Item = T> {
+    entries
+        .into_iter()
+        .filter(move |entry| role(entry).as_deref() == Some("AXWindow"))
+}
+
 struct Captured {
     node: Node,
     elements: Vec<Owned>,
@@ -892,13 +909,14 @@ impl PlatformBackend for MacBackend {
         let mut snapshot_windows = Vec::new();
         let mut all_elements = Vec::new();
         let mut count = 0;
-        for index in 0..unsafe { CFArrayGetCount(windows.0) } {
-            let element = unsafe { CFArrayGetValueAtIndex(windows.0, index) };
-            if element.is_null() {
-                continue;
-            }
+        // CFArray does not transfer ownership. Each entry must survive the array release.
+        let entries = (0..unsafe { CFArrayGetCount(windows.0) })
+            .map(|index| unsafe { CFArrayGetValueAtIndex(windows.0, index) })
+            .filter(|element| !element.is_null())
+            .map(|element| Owned(unsafe { CFRetain(element) }));
+        for element in application_windows(entries, |entry| text_attribute(entry.0, "AXRole")) {
             let captured = capture_node(
-                Owned(unsafe { CFRetain(element) }),
+                element,
                 0,
                 bounds.child_depth.unwrap_or(MAX_DEPTH).min(MAX_DEPTH),
                 &mut count,
@@ -1246,6 +1264,21 @@ mod tests {
         }
         backend.handles.clear();
         assert!(!backend.retains_handle(&handle).unwrap());
+    }
+
+    #[test]
+    fn application_windows_keep_only_window_roots() {
+        let entries = [
+            ("tooltip", Some("AXHelpTag")),
+            ("calculator", Some("AXWindow")),
+            ("desktop", Some("AXScrollArea")),
+            ("alert", Some("AXWindow")),
+            ("unreadable", None),
+        ];
+        let kept: Vec<_> = application_windows(entries, |(_, role)| role.map(String::from))
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(kept, ["calculator", "alert"]);
     }
 
     #[test]
