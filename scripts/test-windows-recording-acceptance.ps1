@@ -224,7 +224,7 @@ function Invoke-AxonMcp {
             'undelivered' { $real.trace[1].result.dispatchSuccess = $false }
             'real-missing' { $real.trace = @($real.trace[0]) }
             'real-order' { $real.trace[1].index = 0 }
-            # The pre-#228 scoring: the delivered click fails and halts the replay.
+            # A delivered click scored as failed, which halts a replay under the defaults.
             'click-halts' { $real.trace[0].success = $false; $real.trace = @($real.trace[0]) }
             'real-failed' { $real.trace[1].success = $false }
         }
