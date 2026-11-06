@@ -479,11 +479,74 @@ pub enum SemanticLookup {
     },
     Missing {
         target: WireElementTarget,
+        reason: MissingReason,
     },
     Ambiguous {
         target: WireElementTarget,
         candidates: Vec<SemanticCandidate>,
     },
+}
+
+/// Why a semantic target found no element. The three read alike to a client — the target is
+/// `missing` — but send a reader to different places: the name registry, the locator, or the
+/// application's process.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MissingReason {
+    /// Nothing is recorded under the name.
+    NoRecord,
+    /// The name's locator was evaluated against a live snapshot and matched no element.
+    NoCandidates { snapshot_id: crate::SnapshotId },
+    /// The name was issued for an application process that is no longer the one running.
+    ProcessChanged,
+}
+
+impl SemanticLookup {
+    /// The JSON-RPC answer every backend gives for a lookup: the element, or a `-32002` error
+    /// with `status` `missing` or `ambiguous` that names why.
+    pub fn into_rpc_result(self) -> Result<(SnapshotHandle, Resolution), crate::JsonRpcError> {
+        let (target, message, data) = match self {
+            Self::Unique { handle, resolution } => return Ok((handle, resolution)),
+            Self::Ambiguous { target, candidates } => (
+                format!("semantic name is ambiguous: {} / {}", target.app, target.name),
+                serde_json::json!({"status":"ambiguous","query":&target,"candidates":candidates}),
+                target,
+            ),
+            Self::Missing { target, reason } => {
+                let (message, data) = match reason {
+                    MissingReason::NoRecord => (
+                        format!("semantic name not found: {} / {}", target.app, target.name),
+                        serde_json::json!({"status":"missing","query":&target}),
+                    ),
+                    MissingReason::NoCandidates { snapshot_id } => (
+                        format!(
+                            "no element matches the locator for {} / {} (0 candidates in snapshot {})",
+                            target.app, target.name, snapshot_id.0
+                        ),
+                        serde_json::json!({
+                            "status":"missing",
+                            "reason":"noCandidates",
+                            "query":&target,
+                            "snapshotId":snapshot_id
+                        }),
+                    ),
+                    MissingReason::ProcessChanged => (
+                        format!(
+                            "{} / {} was issued for an application process that is no longer the one running",
+                            target.app, target.name
+                        ),
+                        serde_json::json!({"status":"missing","reason":"processChanged","query":&target}),
+                    ),
+                };
+                (message, data, target)
+            }
+        };
+        let _ = target;
+        Err(crate::JsonRpcError {
+            code: -32002,
+            message,
+            data: Some(data),
+        })
+    }
 }
 
 #[derive(Clone)]
