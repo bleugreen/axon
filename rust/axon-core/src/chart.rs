@@ -1,5 +1,6 @@
 use crate::{
-    AncestorLocator, Locator, LocatorResolver, ResolutionStatus, RetainedSemanticSelection,
+    AncestorLocator, Locator, LocatorResolver, MissingReason, ResolutionStatus,
+    RetainedSemanticSelection,
     SemanticCandidate, SemanticElementName, SemanticLookup, SemanticNameDeriver,
     SemanticNameRegistry, Snapshot, TextMatcher, WireElementTarget, locator as runtime_locator,
     lookup_from_resolution, walk_context,
