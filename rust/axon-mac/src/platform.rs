@@ -1275,10 +1275,9 @@ mod tests {
             ("alert", Some("AXWindow")),
             ("unreadable", None),
         ];
-        let kept: Vec<_> =
-            application_windows(entries, |(_, role)| role.map(String::from))
-                .map(|(name, _)| name)
-                .collect();
+        let kept: Vec<_> = application_windows(entries, |(_, role)| role.map(String::from))
+            .map(|(name, _)| name)
+            .collect();
         assert_eq!(kept, ["calculator", "alert"]);
     }
 
