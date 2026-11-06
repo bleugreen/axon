@@ -1,4 +1,5 @@
 @testable import AxonClient
+import Darwin
 import Foundation
 import Testing
 
@@ -106,12 +107,18 @@ private func makeAxonApp(at bundle: URL, main: Data, identifier: String = AppBun
 }
 
 /// The `axon` product `swift test` built beside this test bundle.
+///
+/// Found from this image's own path: Swift Testing loads the bundle's executable from a helper
+/// process, so it is not among the process's loaded `Bundle`s.
 private func builtCLI() throws -> URL {
-    let products = try #require(
-        Bundle.allBundles.first { $0.bundleURL.pathExtension == "xctest" }?.bundleURL.deletingLastPathComponent(),
-        "no .xctest bundle is loaded to locate the build products from"
-    )
-    let cli = products.appendingPathComponent("axon")
+    var info = Dl_info()
+    try #require(dladdr(#dsohandle, &info) != 0 && info.dli_fname != nil, "cannot locate the test image")
+    var bundle = URL(fileURLWithPath: String(cString: info.dli_fname)).resolvingSymlinksInPath()
+    while bundle.pathExtension != "xctest", bundle.path != "/" {
+        bundle.deleteLastPathComponent()
+    }
+    try #require(bundle.pathExtension == "xctest", "the test image is not inside an .xctest bundle")
+    let cli = bundle.deletingLastPathComponent().appendingPathComponent("axon")
     try #require(FileManager.default.isExecutableFile(atPath: cli.path), "swift test did not build \(cli.path)")
     return cli
 }
