@@ -1438,6 +1438,159 @@ fn transport_failure_cannot_be_rescued_by_a_verifying_postcondition() {
     assert_eq!(dispatcher.changed_cursor, 1);
 }
 
+fn dispatch_only(states: Vec<Value>) -> SemanticDispatcher {
+    SemanticDispatcher {
+        states: states
+            .into_iter()
+            .map(|state| state.as_object().unwrap().clone())
+            .collect(),
+        cursor: 0,
+        dispatched: 0,
+        fail_dispatch: true,
+        changed_captures: vec![],
+        changed_cursor: 0,
+    }
+}
+
+fn run_with_defaults(dispatcher: &mut dyn ToolDispatcher, doc: &AxnDocument) -> RunResult {
+    AxnRunner::new(dispatcher)
+        .run(
+            doc,
+            &Map::new(),
+            RunOptions {
+                dry_run: None,
+                continue_on_error: None,
+            },
+        )
+        .unwrap()
+}
+
+#[test]
+fn dispatched_step_without_expects_neither_fails_nor_halts() {
+    let click = json!({"tool":"click","target":{"app":"Example","name":"button","locator":{"role":"AXButton"}}});
+    let doc = semantic_doc(json!([click, click]));
+    let mut dispatcher = dispatch_only(vec![json!({})]);
+    let result = run_with_defaults(&mut dispatcher, &doc);
+
+    assert!(result.success);
+    assert_eq!(dispatcher.dispatched, 2);
+    assert_eq!(result.trace.len(), 2);
+    for entry in &result.trace {
+        assert!(entry.success);
+        assert_eq!(entry.error, None);
+        // Nothing proved the goal, so the primitive's own unverified report stands.
+        let action = &entry.result.as_ref().unwrap()["action"];
+        assert_eq!(action["semanticStatus"], "unverified");
+        assert_eq!(action["success"], false);
+    }
+}
+
+#[test]
+fn preheld_noncausal_expectation_succeeds_unpromoted() {
+    let fact = json!({"id":"first.value.1","kind":"value","target":{"app":"Example","locator":{"role":"AXTextField"}},"state":{"value":"ready"}});
+    let follower = json!({"tool":"click","target":{"app":"Example","name":"button","locator":{"role":"AXButton"}},"requires":["first.value.1"]});
+    for (case, first, states) in [
+        // A click is causal only for a fact that did not already hold; this one did.
+        (
+            "click",
+            json!({"tool":"click","target":{"app":"Example","name":"button","locator":{"role":"AXButton"}},"expects":[fact]}),
+            vec![json!({"value":"ready"}); 3],
+        ),
+        // An invoke with a state fact is outside the causal allowlist altogether.
+        (
+            "invoke",
+            json!({"tool":"invoke","target":{"app":"Example","name":"button","locator":{"role":"AXButton"}},"name":"AXPress","expects":[fact]}),
+            vec![json!({"value":"ready"}); 2],
+        ),
+    ] {
+        let doc = semantic_doc(json!([first, follower]));
+        let mut dispatcher = dispatch_only(states);
+        let result = run_with_defaults(&mut dispatcher, &doc);
+
+        assert!(result.success, "{case}: {:?}", result.trace);
+        assert_eq!(dispatcher.dispatched, 2, "{case}");
+        assert!(result.trace[0].success, "{case}");
+        assert_eq!(result.trace[0].error, None, "{case}");
+        assert_eq!(
+            result.trace[0].result.as_ref().unwrap()["action"]["semanticStatus"],
+            "unverified",
+            "{case}: a fact that held before dispatch must not promote the result"
+        );
+        assert!(
+            result.trace[1].success,
+            "{case}: the held fact must be established for a later requires"
+        );
+    }
+}
+
+struct RefusingDispatcher {
+    dispatched: usize,
+}
+
+impl ToolDispatcher for RefusingDispatcher {
+    fn dispatch(&mut self, _tool: &str, _params: &Map<String, Value>) -> DispatchOutcome {
+        self.dispatched += 1;
+        let result = DeliveryOutcome::refusal_result(
+            DeliveryPolicy::BackgroundOnly,
+            DeliveryRefusal::new(
+                DeliveryRefusalReason::ForegroundNotPermitted,
+                DeliveryRung::Foreground,
+                Some(DeliveryCapability::GlobalInput),
+                "click needs the foreground",
+            ),
+        );
+        // The backend adapters' own rule for a delivered-but-unproved action.
+        let dispatched_without_semantic_verification = result["dispatchSuccess"] == true
+            && result["success"] == false;
+        DispatchOutcome {
+            success: result["success"].as_bool().unwrap_or(true),
+            dispatched_without_semantic_verification,
+            result,
+            error: None,
+            resolution: None,
+        }
+    }
+
+    fn verify(&mut self, _fact: &ExpectedFact) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[test]
+fn refused_step_still_halts_replay() {
+    let click = json!({"tool":"click","target":{"app":"Example","name":"button","locator":{"role":"AXButton"}}});
+    let doc = semantic_doc(json!([click, click]));
+    let mut dispatcher = RefusingDispatcher { dispatched: 0 };
+    let result = run_with_defaults(&mut dispatcher, &doc);
+
+    assert!(!result.success);
+    assert_eq!(dispatcher.dispatched, 1);
+    assert_eq!(result.trace.len(), 1);
+    assert!(!result.trace[0].success);
+    assert_eq!(result.trace[0].error.as_deref(), Some("action failed"));
+    assert_eq!(
+        result.trace[0].result.as_ref().unwrap()["dispatchSuccess"],
+        false
+    );
+}
+
+/// The parity case measured against the Swift daemon: a recorded Calculator sum, no `expects`
+/// on any step, replays every step under the default options.
+#[test]
+fn swift_0_3_6_calculator_recording_replays_every_step_under_defaults() {
+    let doc = AxnCodec::parse(include_str!(
+        "../fixtures/swift-calculator-recording-0.3.6.axn"
+    ))
+    .unwrap();
+    let mut dispatcher = dispatch_only(vec![json!({})]);
+    let result = run_with_defaults(&mut dispatcher, &doc);
+
+    assert!(result.success, "{:?}", result.trace);
+    assert_eq!(dispatcher.dispatched, 4);
+    assert_eq!(result.trace.len(), 4);
+    assert!(result.trace.iter().all(|entry| entry.success && entry.error.is_none()));
+}
+
 #[test]
 fn requires_reverifies_the_established_fact_before_dispatch() {
     let fact = json!({"id":"first.value.1","kind":"value","target":{"app":"Example","locator":{"role":"AXTextField"}},"state":{"value":"ready"}});
