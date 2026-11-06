@@ -4,7 +4,7 @@ import Testing
 @testable import AxonCore
 
 @Test func toolSurfaceGeneratesMCPToolSchemasFromSpec() throws {
-    let tools = ToolSurfaceSchema.mcpToolJSONValues()
+    let tools = artifactTools()
 
     #expect(toolNames(in: tools) == ToolSurfaceSpec.toolNames)
     #expect(tool(named: "click", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[0]?["type"] == .string("object"))
@@ -31,7 +31,7 @@ import Testing
 }
 
 @Test func toolSurfaceDeclaresExactNestedTargetSchemas() throws {
-    let tools = ToolSurfaceSchema.mcpToolJSONValues()
+    let tools = artifactTools()
     let clickTarget = tool(named: "click", in: tools)?["inputSchema"]?["properties"]?["target"]
     let semantic = clickTarget?["anyOf"]?[0]
     #expect(semantic?["properties"]?["app"]?["type"] == .string("string"))
@@ -117,6 +117,15 @@ import Testing
     #expect(encoded.contains("falls back to screenshot OCR when accessibility matches nothing"))
     #expect(encoded.contains("ax and screenshot use only that source and never fall back"))
     #expect(encoded.contains("Rendered web content frequently exposes no accessibility text"))
+}
+
+/// The tool entries of `schema/tool-surface-v1.json`, the spec every Rust facade's MCP tool list is
+/// generated from.
+private func artifactTools() -> [JSONValue] {
+    guard case let .array(tools)? = ToolSurfaceSchema.normalizedArtifactJSONValue()["tools"] else {
+        return []
+    }
+    return tools
 }
 
 private func toolNames(in tools: [JSONValue]) -> [String] {

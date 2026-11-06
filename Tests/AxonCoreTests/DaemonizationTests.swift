@@ -136,77 +136,6 @@ private func makeAppBundle(at url: URL, identifier: String, version: String, exe
     #expect(SocketClient.defaultRunResponseTimeoutSeconds > SocketClient.defaultResponseTimeoutSeconds)
 }
 
-@Test func socketCommandRouterForwardsRequestsToSocketClient() throws {
-    let request = JSONRPCRequest(id: .string("health"), method: "health")
-    let router = SocketCommandRouter(path: "/tmp/axon-test.sock") { received in
-        #expect(received == request)
-        return JSONRPCResponse(id: received.id, result: ["status": .string("ok")])
-    }
-
-    let response = router.handle(request)
-
-    #expect(response.error == nil)
-    #expect(response.result?["status"] == .string("ok"))
-}
-
-@Test func socketCommandRouterReportsDaemonConnectionFailureAsJSONRPCError() {
-    let router = SocketCommandRouter(path: "/tmp/missing-axon.sock") { _ in
-        throw SocketError.connectionClosed
-    }
-
-    let response = router.handle(JSONRPCRequest(id: .int(1), method: "health"))
-
-    #expect(response.error?.code == -32603)
-    #expect(response.error?.message.contains("Axon daemon request failed at /tmp/missing-axon.sock") == true)
-}
-
-@Test func mcpToolsCallForwardsCommandRequestsToInjectedHandler() {
-    let handler = RecordingCommandHandler(response: JSONRPCResponse(
-        id: .string("state"),
-        result: [
-            "snapshot": .object([
-                "id": .string("snapshot-1"),
-                "app": .object([
-                    "name": .string("Example"),
-                    "pid": .int(123)
-                ]),
-                "windows": .array([
-                    .object([
-                        "handle": .string("snapshot-1:0"),
-                        "role": .string("AXWindow"),
-                        "title": .string("Main")
-                    ])
-                ])
-            ])
-        ]
-    ))
-    let router = MCPRouter(commandHandler: handler)
-
-    let response = router.handle(JSONRPCRequest(
-        id: .string("state"),
-        method: "tools/call",
-        params: .object([
-            "name": .string("look"),
-            "arguments": .object(["app": .string("com.example.App")])
-        ])
-    ))
-
-    #expect(response?.error == nil)
-    #expect(handler.requests == [
-        JSONRPCRequest(
-            id: .string("state"),
-            method: "look",
-            params: .object([
-                "app": .string("com.example.App"),
-                "screenshot": .bool(true),
-                "tree": .bool(true)
-            ])
-        )
-    ])
-    #expect(response?.result?["structuredContent"]?["format"] == .string("observation"))
-    #expect(response?.result?["structuredContent"]?["snapshot"] == .string("snapshot-1"))
-}
-
 /// Builds the shipped release layout: one `.app` holding the daemon app at `Contents/MacOS/Axon`
 /// and the CLI that invokes `daemon install` at `Contents/Resources/bin/axon`.
 ///
@@ -579,20 +508,6 @@ private func makeReleaseBundle(
     #expect(commands[0][0] == "bootstrap")
     #expect(commands[1][0] == "bootout")
     #expect(commands[2][0] == "bootstrap")
-}
-
-private final class RecordingCommandHandler: JSONRPCCommandHandling {
-    private let response: JSONRPCResponse
-    private(set) var requests: [JSONRPCRequest] = []
-
-    init(response: JSONRPCResponse) {
-        self.response = response
-    }
-
-    func handle(_ request: JSONRPCRequest) -> JSONRPCResponse {
-        requests.append(request)
-        return response
-    }
 }
 
 private func socketPair() throws -> (reader: Int32, writer: Int32) {

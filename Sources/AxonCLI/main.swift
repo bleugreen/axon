@@ -16,7 +16,7 @@ do {
         try runDoctor()
 
     case "mcp":
-        try MCPStdioServer().run()
+        try runMCPFacade(arguments: Array(arguments.dropFirst()))
 
     case "start":
         try startAxon()
@@ -188,7 +188,7 @@ do {
         commands:
           axon     start Axon and request permissions when needed
           doctor   report the running daemon's permissions
-          mcp      run an MCP stdio facade backed by the daemon socket
+          mcp      run the daemon's MCP stdio facade (this Axon.app's Contents/MacOS/Axon mcp)
           start    register this Axon.app if needed, then start the daemon and its menu
           edit <path.axn>
                   open an axn file in the visual editor
@@ -206,6 +206,17 @@ do {
 } catch {
     fputs("axon: \(error)\n", stderr)
     exit(1)
+}
+
+/// Hands the process to the daemon's own MCP facade; returns only by throwing.
+private func runMCPFacade(arguments: [String]) throws {
+    switch MCPFacade.plan(invokedExecutable: try resolvedExecutablePath(), arguments: arguments) {
+    case let .exec(executable, argv):
+        let code = MCPFacade.execute(executable, arguments: argv)
+        throw CLIError.operationFailed("could not run \(executable) mcp: \(String(cString: strerror(code)))")
+    case let .refuse(message):
+        throw CLIError.operationFailed(message)
+    }
 }
 
 private func sendAction(method: String, params: [String: JSONValue]) throws {

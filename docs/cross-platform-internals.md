@@ -138,8 +138,9 @@ should be discoverable here first.
 - `drag` on every platform: not implemented. A drag holds a button across
   the whole gesture and needs its own account of a press held across a failed
   restoration. On macOS the drag the Swift daemon implemented left with it at
-  0.4.0; the CLI, SDKs, and MCP tool list keep the verb, and `axon-mac`
-  refuses it with `-32004` and capability `PointerDrag`.
+  0.4.0; the CLI and SDKs keep the verb, and `axon-mac` refuses it with
+  `-32004` and capability `PointerDrag`. No Rust facade lists it, so an MCP
+  `drag` call is refused at the facade with `-32602`.
 - The editor's step debugger (`debug.*`) on macOS: refused with `-32004` and
   capability `DebugSession` since 0.4.0, when the Swift daemon that ran the
   session was deleted. On the first refusal the editor disables Debug and Run
@@ -1598,6 +1599,18 @@ connections concurrently through one serialized native-backend worker. Health an
 shutdown bypass that worker so a long replay or wait cannot hide daemon liveness.
 Since 0.4.0 this binary is the registered production daemon, shipped as
 `Axon.app/Contents/MacOS/Axon`.
+
+It is also the macOS MCP facade. `axon-mac mcp` builds `initialize`,
+`tools/list`, and every tool result from the shared spec and envelope, as the
+Windows and Linux facades do. The `axon mcp` that clients are registered with is
+the Swift CLI at `Contents/Resources/bin/axon`, and its only job there is to
+`execv` the enclosing bundle's main executable with `mcp`
+(`Sources/AxonClient/MCPFacade.swift`), inheriting stdio and the environment.
+It neither answers MCP nor proxies bytes. The Swift router that used to stand
+there re-derived the tool list, injected `look` defaults, and rewrote results,
+so macOS clients saw a surface no other platform had and that no fixture
+described. `scripts/check-app-layout` requires a packaged `bin/axon mcp` to
+answer `initialize` as `axon-mac`.
 
 The durable bglab-mac development identity is packaged by
 `scripts/package-macos-rust-bench` at `~/AxonBench/AxonMacDev.app`, with the

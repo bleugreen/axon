@@ -372,10 +372,6 @@ public enum ToolSurfaceSpec {
 public enum ToolSurfaceSchema {
     public static let artifactFormatVersion = 1
 
-    public static func mcpToolJSONValues() -> [JSONValue] {
-        ToolSurfaceSpec.tools.map(mcpToolJSONValue)
-    }
-
     public static func normalizedArtifactJSONValue() -> JSONValue {
         .object([
             "formatVersion": .int(artifactFormatVersion),

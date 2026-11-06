@@ -7,7 +7,7 @@ On macOS the install is one application, `Axon.app`, containing:
 - the Axon daemon, the bundle's main executable at `Contents/MacOS/Axon`. It serves the local socket and is the one process macOS grants Accessibility and Screen Recording to,
 - `Axon Menu.app`, the menu bar app, nested at `Contents/Library/Applications`. It shows the daemon's state and holds no permission of its own,
 - `Axon Editor.app`, for opening and editing `.axn` files, nested beside the menu,
-- `axon`, the command-line and MCP entrypoint, at `Contents/Resources/bin/axon`.
+- `axon`, the command-line and MCP entrypoint, at `Contents/Resources/bin/axon`. `axon mcp` runs the daemon's own MCP facade: it replaces itself with `Contents/MacOS/Axon mcp` from the same bundle, so MCP clients on macOS get the same tool list and result shapes as on Windows and Linux.
 
 One application means the release archive extracts to a single bundle you drag into `/Applications`, replacing any copy already there, and the daemon, the menu, and the editor can never reach different versions.
 
@@ -101,8 +101,10 @@ axon           # start Axon, then request Accessibility when it is missing
 axon start     # register this Axon.app if needed, then start the daemon and its menu
 axon status    # describe the daemon, both login items, permissions, and capabilities
 axon shutdown  # stop the daemon and the menu, leaving both registered
-axon mcp       # the stdio MCP entrypoint clients run
+axon mcp       # the stdio MCP entrypoint clients run: the daemon's facade, Contents/MacOS/Axon mcp
 ```
+
+`axon mcp` works only from inside `Axon.app`, because the facade it runs ships in the same bundle. A copy of the CLI outside the bundle refuses and says so. The facade answers `initialize` with protocol version `2025-03-26` whatever version the client asks for, which MCP version negotiation allows: a client that supports `2025-03-26` proceeds with it, and one that does not disconnects.
 
 `axon setup` remains an explicit alias for no-arg `axon` for scripts that prefer named commands.
 
