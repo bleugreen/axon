@@ -387,6 +387,47 @@ fn node_label(n: &Node) -> Option<&str> {
         .or(n.description.as_deref())
         .or(n.identifier.as_deref())
 }
+/// The node attribute that satisfied a locator's `description`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DescriptionSource {
+    Description,
+    Label,
+}
+
+impl DescriptionSource {
+    pub(crate) fn read(self, node: &Node) -> Option<&str> {
+        match self {
+            Self::Description => node.description.as_deref(),
+            Self::Label => node.label.as_deref(),
+        }
+    }
+}
+
+/// How a locator's `description` is read: it is satisfied by the element's `description`, or,
+/// when the locator carries no `label`, by the element's `label`. `None` when the locator names no
+/// description or neither attribute matches it.
+///
+/// The fallback exists for recordings made by the Swift daemon (0.3.6 and earlier). Swift wrote
+/// an element's AXDescription — its accessible name — under the locator field `description` and
+/// never wrote `label`, while every Rust backend presents the accessible name as the node's
+/// `label` and reserves `description` for descriptive text (AXHelp on macOS, HelpText on Windows).
+/// Which producer wrote a locator cannot be told from the document: a Rust locator for a titled
+/// button with a tooltip has Swift's exact shape. So the rule is a reading of the field rather
+/// than a translation of old files, and it is purely additive: every strict match still matches,
+/// and a producer that separates the two names writes `label` whenever the element has one, which
+/// switches the fallback off. Matching is tried against `description` first, so a locator whose
+/// text equals the element's own description never needs the fallback.
+pub(crate) fn description_source(locator: &Locator, node: &Node) -> Option<DescriptionSource> {
+    let matcher = locator.description.as_ref()?;
+    if matcher.matches(node.description.as_deref()) {
+        Some(DescriptionSource::Description)
+    } else if locator.label.is_none() && matcher.matches(node.label.as_deref()) {
+        Some(DescriptionSource::Label)
+    } else {
+        None
+    }
+}
+
 fn ancestor_matches(l: &AncestorLocator, n: &Node) -> bool {
     l.role.as_ref().is_none_or(|x| x == &n.role)
         && l.subrole
@@ -417,6 +458,22 @@ fn add_match(
         Some(_) => false,
     }
 }
+fn description_match(locator: &Locator, node: &Node, reasons: &mut Vec<String>) -> bool {
+    let Some(matcher) = &locator.description else {
+        return true;
+    };
+    match description_source(locator, node) {
+        Some(DescriptionSource::Description) => {
+            reasons.push(format!("description {}", matcher.reason()));
+            true
+        }
+        Some(DescriptionSource::Label) => {
+            reasons.push(format!("description {} (label)", matcher.reason()));
+            true
+        }
+        None => false,
+    }
+}
 fn candidate(
     locator: &Locator,
     snapshot: &Snapshot,
@@ -440,12 +497,7 @@ fn candidate(
     }
     if !add_match(&locator.title, node.title.as_deref(), "title", &mut reasons)
         || !add_match(&locator.label, node.label.as_deref(), "label", &mut reasons)
-        || !add_match(
-            &locator.description,
-            node.description.as_deref(),
-            "description",
-            &mut reasons,
-        )
+        || !description_match(locator, node, &mut reasons)
         || !add_match(
             &locator.identifier,
             node.identifier.as_deref(),
