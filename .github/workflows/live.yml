@@ -183,15 +183,17 @@ jobs:
           # re-run attempt of a cancelled run shares its id and the restore removes the file.
           export AXON_SOCKET_PATH="/tmp/axon-live-${GITHUB_RUN_ID}.sock"
 
-          if pgrep -x Calculator >/dev/null; then
-            echo '::error::Calculator is already running; refusing to alter an existing desktop session.'
-            exit 1
-          fi
-          # Calculator alone, because it is the only desktop state this step owns. The candidate's
-          # jobs and the desktop's own belong to the restore step instead: a trap cannot run when
-          # the runner cancels the job, and putting a machine's start-at-login daemon back is not
-          # something to leave to a handler that a cancellation skips.
-          trap 'killall Calculator >/dev/null 2>&1 || true' EXIT
+          for app in Calculator TextEdit; do
+            if pgrep -x "$app" >/dev/null; then
+              echo "::error::$app is already running; refusing to alter an existing desktop session."
+              exit 1
+            fi
+          done
+          # Calculator and TextEdit alone, because they are the only desktop state this step owns.
+          # The candidate's jobs and the desktop's own belong to the restore step instead: a trap
+          # cannot run when the runner cancels the job, and putting a machine's start-at-login
+          # daemon back is not something to leave to a handler that a cancellation skips.
+          trap 'killall Calculator TextEdit >/dev/null 2>&1 || true' EXIT
 
           for executable in "$dist_main" "$dist_menu"; do
             if [[ ! -x "$executable" ]]; then
@@ -559,6 +561,69 @@ jobs:
             echo "replayed $replay successfully"
           fi
 
+          # A shortcut, delivered and acted on. A chord is the one keystroke whose effect is an
+          # application's menu rather than a text field, and it once failed in exactly the way a
+          # dispatch report cannot show: every chord reported a foreground delivery with its
+          # modifiers restored while AppKit ignored it, because its key events carried a Unicode
+          # payload that key-equivalent matching will not accept (axn/268). TextEdit starts with an
+          # Untitled document rather than its open panel and restores no windows, so the window
+          # `cmd+n` opens is the only one it can gain; its documents are never edited, so nothing
+          # is autosaved for the next launch.
+          open -a TextEdit --args -ApplePersistenceIgnoreState YES -NSShowAppCentricOpenPanelInsteadOfUntitledFile NO
+          textedit_windows() {
+            printf '%s\n' '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"look","arguments":{"app":"TextEdit","screenshot":false,"depth":0,"childDepth":0,"frames":false}}}' \
+              | "$cli" mcp 2>/dev/null \
+              | jq -r 'if .result.isError == false then [.result.structuredContent.app.windows[]?] | length else "" end' 2>/dev/null || true
+          }
+          windows_before=""
+          for _ in {1..40}; do
+            windows_before="$(textedit_windows)"
+            if [[ "$windows_before" =~ ^[1-9][0-9]*$ ]]; then
+              break
+            fi
+            windows_before=""
+            sleep 0.25
+          done
+          if [[ -z "$windows_before" ]]; then
+            echo '::error::TextEdit never exposed a window to look before the chord probe'
+            exit 1
+          fi
+          # Read again once launch has settled, so a window TextEdit was still opening is not
+          # credited to the chord.
+          sleep 0.5
+          windows_before="$(textedit_windows)"
+          if ! [[ "$windows_before" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::TextEdit's window count could not be read before the chord (got '${windows_before}')"
+            exit 1
+          fi
+          chord="$(printf '%s\n' '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"keyboard","arguments":{"app":"TextEdit","key":"cmd+n","deliveryPolicy":"foregroundPermitted"}}}' | "$cli" mcp)"
+          printf '%s' "$chord" | jq -c '.result.structuredContent | {delivery, dispatchSuccess, dispatch, foreground}'
+          if ! printf '%s' "$chord" | jq -e '
+            .result.isError == false
+            and .result.structuredContent.delivery == "foreground"
+            and .result.structuredContent.dispatchSuccess == true
+            and .result.structuredContent.foreground.activationProved == true
+            and .result.structuredContent.foreground.modifiersRestored == true
+          ' >/dev/null; then
+            echo '::error::keyboard cmd+n to TextEdit was not delivered through the foreground with proved activation and restored modifiers'
+            printf '%s\n' "$chord" | jq .
+            exit 1
+          fi
+          windows_after="$windows_before"
+          for _ in {1..20}; do
+            windows_after="$(textedit_windows)"
+            if [[ "$windows_after" =~ ^[0-9]+$ ]] && (( windows_after > windows_before )); then
+              break
+            fi
+            sleep 0.25
+          done
+          if ! [[ "$windows_after" =~ ^[0-9]+$ ]] || (( windows_after != windows_before + 1 )); then
+            echo "::error::cmd+n reported a foreground delivery but TextEdit went from $windows_before window(s) to ${windows_after:-unknown}, not one more"
+            exit 1
+          fi
+          echo "cmd+n opened a TextEdit window ($windows_before -> $windows_after) with the modifiers restored"
+          killall TextEdit >/dev/null 2>&1 || true
+
           # The menu has been talking to the candidate for the whole probe; one that died on any
           # of it would otherwise pass unnoticed, because nothing above is its client.
           if [[ -z "$(job_pid "$AXON_LIVE_MENU_LABEL")" ]]; then
@@ -592,7 +657,7 @@ jobs:
           # there is nothing of the desktop's here to leave alone. A survivor no longer holds the
           # desktop's endpoint -- it served a private one -- so it does not stand in the way of the
           # restore; it is recorded and fails the step after the desktop has its daemon back.
-          killall Calculator >/dev/null 2>&1 || true
+          killall Calculator TextEdit >/dev/null 2>&1 || true
           sweep_failed=false
           scripts/stop-probe-app \
             --launchd-label "$AXON_LIVE_MENU_LABEL" --launchd-label "$AXON_LIVE_DAEMON_LABEL" \

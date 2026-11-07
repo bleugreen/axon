@@ -76,6 +76,8 @@ acceptance-probe <command> [--key value]
   post-key --pid --text [--source ...]
   foreground-click --x --y [--pid] [--restore]      the control
   foreground-key --pid --text [--restore]           the control
+  post-chord --pid --key --modifiers cmd,shift,option,ctrl [--payload with|without] [--source ...]
+  foreground-chord --pid --key --modifiers ... [--payload with|without] [--restore]
   activate --pid
   ax-read --pid                    Accessibility readback of the focused window's document and title
   fixture --nonce [--role target|decoy] [--title] [--report URL] [--x --y --width --height]
