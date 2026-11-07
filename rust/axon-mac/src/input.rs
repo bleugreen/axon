@@ -10,7 +10,9 @@
 //! also the variant the acceptance campaign measured (`probe key_code_for`): a null event source,
 //! keyDown then keyUp, the ANSI key code, and the Unicode payload on both events. Native controls
 //! read the payload, so text in any script still arrives; only consumers that read raw key codes
-//! under a non-ANSI layout see the ANSI position instead.
+//! under a non-ANSI layout see the ANSI position instead. A shortcut is the exception: a stroke that
+//! holds Command, Control, or Option carries no payload, because AppKit does not match a menu key
+//! equivalent against one (see [`keyboard_events`]).
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
 use axon_core::{Key, Modifier, NamedKey};
@@ -28,9 +30,9 @@ pub const CHARACTER_INTERVAL_MS: u64 = 20;
 pub struct Stroke {
     pub code: u16,
     pub flags: u64,
-    /// The character a character key types, carried as the key events' Unicode payload as a real
-    /// keyboard's are. A consumer that reads the characters of `cmd+a` (the recorder among them)
-    /// otherwise sees an empty string.
+    /// The character a character key types. An unmodified or Shift-only stroke carries it as the
+    /// key events' Unicode payload; a shortcut carries none ([`keyboard_events`]), and a consumer
+    /// that reads its characters (the recorder among them) recovers the key from its code.
     pub character: Option<char>,
 }
 
@@ -238,6 +240,40 @@ pub fn stroke_events(stroke: Stroke) -> Vec<KeyEvent> {
     events
 }
 
+/// The modifiers that make a stroke a shortcut rather than a character. Shift is not among them:
+/// it chooses which character a key types.
+const SHORTCUT_FLAGS: u64 = FLAG_COMMAND | FLAG_CONTROL | FLAG_OPTION;
+
+/// The one stroke that types `character` as text: no modifiers, the ANSI key code where there is
+/// one and code 0 where there is not, and the character itself, case kept, as the payload.
+pub fn text_stroke(character: char) -> Stroke {
+    Stroke {
+        code: ansi_key_code(character).unwrap_or(0),
+        flags: 0,
+        character: Some(character),
+    }
+}
+
+/// Every event one stroke posts ([`stroke_events`]), each beside the character it carries as its
+/// Unicode payload.
+///
+/// Only the key's own events carry a character; a modifier key types nothing. A shortcut's key
+/// events carry none either. On bgsrv-mac (macOS 26.6, axn/268), `cmd+n` posted to TextEdit with
+/// the payload `n` on its key events opened no window, while the identical sequence without the
+/// payload did, whether posted to the HID tap, the session tap, or the process, and with or
+/// without gaps between events: AppKit matches menu key equivalents against characters it derives
+/// from the key code, and an explicitly set string defeats that match. The key code alone then
+/// says which key was pressed, as it does for a real keyboard's shortcut.
+pub fn keyboard_events(stroke: Stroke) -> Vec<(KeyEvent, Option<char>)> {
+    let payload = stroke
+        .character
+        .filter(|_| stroke.flags & SHORTCUT_FLAGS == 0);
+    stroke_events(stroke)
+        .into_iter()
+        .map(|event| (event, payload.filter(|_| event.code == stroke.code)))
+        .collect()
+}
+
 /// Whether a `key` intent holds any modifier. Text never does: every text event carries no flags,
 /// which is the variant the campaign measured (it ran with no modifier held).
 pub fn has_modifiers(spec: &str) -> Result<bool, String> {
@@ -287,8 +323,8 @@ pub fn wheel_steps(delta_x: f64, delta_y: f64) -> Vec<(i32, i32)> {
 #[cfg(target_os = "macos")]
 pub mod native {
     use super::{
-        CHARACTER_INTERVAL_MS, KeyEvent, Stroke, WHEEL_STEP_INTERVAL_MS, ansi_key_code,
-        stroke_events,
+        CHARACTER_INTERVAL_MS, KeyEvent, Stroke, WHEEL_STEP_INTERVAL_MS, keyboard_events,
+        text_stroke,
     };
     use axon_core::{BackendError, Capability};
     use std::{ffi::c_void, thread::sleep, time::Duration};
@@ -400,13 +436,10 @@ pub mod native {
     /// Every event's flags are set explicitly. A null-source event otherwise inherits the session's
     /// current modifier state, so a modifier the user happens to be holding would turn background
     /// text into shortcuts in an application they are not looking at.
-    fn build(
-        events: &[KeyEvent],
-        payload_for: impl Fn(&KeyEvent) -> Option<Vec<u16>>,
-    ) -> Result<Vec<CGEventRef>, BackendError> {
+    fn build(events: &[(KeyEvent, Option<char>)]) -> Result<Vec<CGEventRef>, BackendError> {
         let mut built = Vec::with_capacity(events.len());
-        for event in events {
-            let payload = payload_for(event);
+        for (event, character) in events {
+            let payload = character.map(|character| character.encode_utf16(&mut [0; 2]).to_vec());
             match created(
                 unsafe { CGEventCreateKeyboardEvent(std::ptr::null(), event.code, event.down) },
                 "keyboard",
@@ -442,14 +475,7 @@ pub mod native {
             if index > 0 {
                 sleep(Duration::from_millis(CHARACTER_INTERVAL_MS));
             }
-            let payload: Vec<u16> = character.encode_utf16(&mut [0; 2]).to_vec();
-            let code = ansi_key_code(character).unwrap_or(0);
-            let stroke = Stroke {
-                code,
-                flags: 0,
-                character: None,
-            };
-            for event in build(&stroke_events(stroke), |_| Some(payload.clone()))? {
+            for event in build(&keyboard_events(text_stroke(character)))? {
                 post(destination, event);
             }
         }
@@ -458,14 +484,9 @@ pub mod native {
 
     /// Presses one key, with each of its modifiers pressed around it as a key of its own.
     pub fn post_stroke(destination: Destination, stroke: Stroke) -> Result<(), BackendError> {
-        // Only the key's own events carry its character; a modifier key types nothing.
-        let payload = stroke
-            .character
-            .map(|character| character.encode_utf16(&mut [0; 2]).to_vec());
-        let key = stroke.code;
-        for event in build(&stroke_events(stroke), |event| {
-            (event.code == key).then(|| payload.clone()).flatten()
-        })? {
+        // Only the key's own events carry its character, and a shortcut's carry none: AppKit
+        // ignores a menu key equivalent whose event has an explicit string (axn/268, measured).
+        for event in build(&keyboard_events(stroke))? {
             post(destination, event);
         }
         Ok(())
@@ -658,6 +679,41 @@ mod tests {
         assert_eq!(
             stroke_events(stroke("Return").unwrap()),
             vec![event(36, true, 0), event(36, false, 0)]
+        );
+    }
+
+    /// A shortcut's key events carry no payload, so AppKit can match its key equivalent; an
+    /// unmodified key, a Shift-only stroke, and text keep the character on the key's own events.
+    #[test]
+    fn a_shortcut_carries_no_payload_while_a_character_and_text_do() {
+        let payloads = |stroke: Stroke| -> Vec<Option<char>> {
+            keyboard_events(stroke)
+                .into_iter()
+                .map(|(_, payload)| payload)
+                .collect()
+        };
+        assert_eq!(payloads(stroke("cmd+n").unwrap()), vec![None; 4]);
+        assert_eq!(payloads(stroke("ctrl+a").unwrap()), vec![None; 4]);
+        assert_eq!(payloads(stroke("option+e").unwrap()), vec![None; 4]);
+        assert_eq!(payloads(stroke("cmd+shift+s").unwrap()), vec![None; 6]);
+        assert_eq!(payloads(stroke("n").unwrap()), vec![Some('n'); 2]);
+        assert_eq!(
+            payloads(stroke("shift+a").unwrap()),
+            vec![None, Some('a'), Some('a'), None]
+        );
+        assert_eq!(payloads(stroke("Return").unwrap()), vec![None; 2]);
+        assert_eq!(payloads(text_stroke('N')), vec![Some('N'); 2]);
+        assert_eq!(payloads(text_stroke('é')), vec![Some('é'); 2]);
+        // The events themselves are exactly the stroke's, whatever they carry.
+        let chord = stroke("cmd+n").unwrap();
+        let events: Vec<KeyEvent> = keyboard_events(chord).into_iter().map(|(e, _)| e).collect();
+        assert_eq!(events, stroke_events(chord));
+        assert_eq!(
+            stroke_events(text_stroke('é')),
+            vec![
+                KeyEvent { code: 0, down: true, flags: 0 },
+                KeyEvent { code: 0, down: false, flags: 0 },
+            ]
         );
     }
 
