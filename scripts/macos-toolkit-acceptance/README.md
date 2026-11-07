@@ -210,8 +210,10 @@ acts: whether the key's own events carry the character as an explicit Unicode st
 (macOS 26.6), `cmd+n` posted to TextEdit opened a window without the payload and did nothing with
 it, through the HID tap, the session tap, and `CGEventPostToPid` alike. AppKit matches a menu key
 equivalent against characters it derives from the key code, and a set string defeats the match.
-The daemon therefore posts every stroke that holds Command, Control, or Option without a payload,
-and keeps it on unmodified and Shift-only strokes and on text, the measured keystroke variant.
+A shifted chord behaves the same way: with this probe, `cmd+shift+s` (TextEdit's Duplicate) acted
+without the payload and did nothing with it, two rounds each. The daemon therefore posts every
+stroke that holds Command, Control, or Option without a payload, and keeps it on unmodified and
+Shift-only strokes and on text, the measured keystroke variant.
 
 The probe posts the daemon's chord shape, each modifier pressed as a key of its own around the key
 and the last event holding nothing, with the payload switchable:

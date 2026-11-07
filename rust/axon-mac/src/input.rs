@@ -262,8 +262,10 @@ pub fn text_stroke(character: char) -> Stroke {
 /// the payload `n` on its key events opened no window, while the identical sequence without the
 /// payload did, whether posted to the HID tap, the session tap, or the process, and with or
 /// without gaps between events: AppKit matches menu key equivalents against characters it derives
-/// from the key code, and an explicitly set string defeats that match. The key code alone then
-/// says which key was pressed, as it does for a real keyboard's shortcut.
+/// from the key code, and an explicitly set string defeats that match. Shift does not rescue it:
+/// `cmd+shift+s` (TextEdit's Duplicate) acted without the payload and did nothing with it, in two
+/// rounds each. The key code alone then says which key was pressed, as it does for a real
+/// keyboard's shortcut.
 pub fn keyboard_events(stroke: Stroke) -> Vec<(KeyEvent, Option<char>)> {
     let payload = stroke
         .character
