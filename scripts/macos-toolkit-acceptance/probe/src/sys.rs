@@ -134,8 +134,7 @@ unsafe extern "C" {
     pub fn objc_msgSendSuper();
     pub fn objc_allocateClassPair(superclass: Id, name: *const c_char, extra: usize) -> Id;
     pub fn objc_registerClassPair(class: Id);
-    pub fn class_addMethod(class: Id, name: Sel, imp: *const c_void, types: *const c_char)
-    -> bool;
+    pub fn class_addMethod(class: Id, name: Sel, imp: *const c_void, types: *const c_char) -> bool;
 }
 
 #[repr(C)]
@@ -233,7 +232,12 @@ pub fn cf_number_i64(value: CFTypeRef) -> Option<i64> {
             return None;
         }
         let mut out: i64 = 0;
-        if CFNumberGetValue(value, kCFNumberSInt64Type, &mut out as *mut i64 as *mut c_void) == 0 {
+        if CFNumberGetValue(
+            value,
+            kCFNumberSInt64Type,
+            &mut out as *mut i64 as *mut c_void,
+        ) == 0
+        {
             return None;
         }
         Some(out)
@@ -249,7 +253,12 @@ pub fn cf_number_f64(value: CFTypeRef) -> Option<f64> {
             return None;
         }
         let mut out: f64 = 0.0;
-        if CFNumberGetValue(value, kCFNumberFloat64Type, &mut out as *mut f64 as *mut c_void) == 0 {
+        if CFNumberGetValue(
+            value,
+            kCFNumberFloat64Type,
+            &mut out as *mut f64 as *mut c_void,
+        ) == 0
+        {
             return None;
         }
         Some(out)
@@ -363,7 +372,11 @@ pub fn nsstring_to_string(value: Id) -> Option<String> {
     if pointer.is_null() {
         return None;
     }
-    Some(unsafe { CStr::from_ptr(pointer) }.to_string_lossy().into_owned())
+    Some(
+        unsafe { CStr::from_ptr(pointer) }
+            .to_string_lossy()
+            .into_owned(),
+    )
 }
 
 pub fn responds_to(receiver: Id, selector: &str) -> bool {

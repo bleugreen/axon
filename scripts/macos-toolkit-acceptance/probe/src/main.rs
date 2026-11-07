@@ -56,7 +56,10 @@ fn main() {
 
 #[cfg(target_os = "macos")]
 fn fail(problem: &str) -> ! {
-    println!("{}", json::J::obj(vec![("error", json::J::str(problem))]).render());
+    println!(
+        "{}",
+        json::J::obj(vec![("error", json::J::str(problem))]).render()
+    );
     std::process::exit(1);
 }
 
