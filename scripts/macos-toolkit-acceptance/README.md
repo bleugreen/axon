@@ -203,6 +203,29 @@ axn/204's field report that pid-targeted keystrokes into Ghostty did nothing cam
 daemon's layout-translated construction, which is a different variant. The harness locates an
 application by bundle identifier, because a cask installed without sudo lives in `~/Applications`.
 
+### Chords and the Unicode payload (axn/268)
+
+A chord is a different variant from a keystroke, and one variable inside it decides whether AppKit
+acts: whether the key's own events carry the character as an explicit Unicode string. On bgsrv-mac
+(macOS 26.6), `cmd+n` posted to TextEdit opened a window without the payload and did nothing with
+it, through the HID tap, the session tap, and `CGEventPostToPid` alike. AppKit matches a menu key
+equivalent against characters it derives from the key code, and a set string defeats the match.
+The daemon therefore posts every stroke that holds Command, Control, or Option without a payload,
+and keeps it on unmodified and Shift-only strokes and on text, the measured keystroke variant.
+
+The probe posts the daemon's chord shape, each modifier pressed as a key of its own around the key
+and the last event holding nothing, with the payload switchable:
+
+```sh
+acceptance-probe foreground-chord --pid <pid> --key n --modifiers cmd --payload without --restore
+acceptance-probe post-chord --pid <pid> --key s --modifiers cmd,shift --payload with
+```
+
+Its `variant` reads `chord/modifiers=<mods>/payload=<with|without>/source=<source>`. The harness has
+no `chord` action yet: a row needs a target-side readback of a key equivalent (a fixture menu item,
+a page's `keydown` listener reporting `metaKey`), which no target has today, and a chord row is
+measured on the bench like every other.
+
 ### Live daemon evidence
 
 `live/axn230/` holds the transcript of the Rust daemon's live acceptance on the signed bench, not a
