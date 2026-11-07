@@ -103,6 +103,7 @@ unsafe extern "C" {
         keyDown: bool,
     ) -> CGEventRef;
     pub fn CGEventKeyboardSetUnicodeString(event: CGEventRef, length: CFIndex, string: *const u16);
+    pub fn CGEventSetFlags(event: CGEventRef, flags: u64);
     pub fn CGEventSetIntegerValueField(event: CGEventRef, field: u32, value: i64);
     pub fn CGEventPostToPid(pid: i32, event: CGEventRef);
     pub fn CGEventPost(tap: u32, event: CGEventRef);

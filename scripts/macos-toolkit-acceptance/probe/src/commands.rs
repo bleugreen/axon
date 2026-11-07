@@ -33,6 +33,8 @@ pub fn run(command: &str, args: &Args) -> Result<J, String> {
         "post-key" => post_key(args),
         "foreground-click" => foreground_click(args),
         "foreground-key" => foreground_key(args),
+        "post-chord" => chord(args, false),
+        "foreground-chord" => chord(args, true),
         "activate" => activate_command(args),
         "raise" => raise_command(args),
         "ax-read" => ax_read(args),
@@ -637,6 +639,132 @@ fn copy_attribute(element: CFTypeRef, attribute: &str) -> (CFTypeRef, i32) {
         return (std::ptr::null(), status);
     }
     (value, status)
+}
+
+/// The modifier keys a chord presses, in the order they go down, with the flag each holds: the
+/// shape the Rust daemon posts (`rust/axon-mac/src/input.rs`, `stroke_events`).
+const CHORD_MODIFIERS: [(&str, u64, u16); 4] = [
+    ("cmd", 1 << 20, 55),
+    ("shift", 1 << 17, 56),
+    ("option", 1 << 19, 58),
+    ("ctrl", 1 << 18, 59),
+];
+
+/// One chord: each modifier pressed as a key of its own, the key down and up with every modifier's
+/// flag, the modifiers released in reverse, and the last event holding nothing. `--payload` decides
+/// whether the key's own events carry its character as an explicit Unicode string, which is the
+/// variable axn/268 found decides whether AppKit matches a menu key equivalent. `foreground`
+/// activates the target and posts through the HID tap, as the daemon's foreground rung does;
+/// otherwise the events go to the process.
+fn chord(args: &Args, foreground: bool) -> Result<J, String> {
+    let pid = args.i32("pid")?;
+    let key = args.string("key")?;
+    let mut characters = key.chars();
+    let (Some(character), None) = (characters.next(), characters.next()) else {
+        return Err(format!("--key must be one character, got {key}"));
+    };
+    let requested = args.string("modifiers")?;
+    let mut held = Vec::new();
+    for name in requested.split(',').filter(|name| !name.is_empty()) {
+        let Some(&modifier) = CHORD_MODIFIERS.iter().find(|(known, _, _)| *known == name) else {
+            return Err(format!("unknown modifier: {name} (cmd|shift|option|ctrl)"));
+        };
+        held.push(modifier);
+    }
+    if held.is_empty() {
+        return Err("--modifiers names no modifier; an unmodified key is post-key".into());
+    }
+    held.sort_by_key(|(name, _, _)| CHORD_MODIFIERS.iter().position(|(known, _, _)| known == name));
+    held.dedup();
+    let payload = match args.optional_string("payload").as_deref().unwrap_or("without") {
+        "with" => true,
+        "without" => false,
+        other => return Err(format!("--payload must be with or without, got {other}")),
+    };
+    let source_kind = if foreground { Source::Null } else { source_of(args)? };
+
+    let code = key_code_for(character);
+    let mut events: Vec<(u16, bool, u64)> = Vec::new();
+    let mut flags = 0;
+    for &(_, flag, modifier) in &held {
+        flags |= flag;
+        events.push((modifier, true, flags));
+    }
+    events.push((code, true, flags));
+    events.push((code, false, flags));
+    for &(_, flag, modifier) in held.iter().rev() {
+        flags &= !flag;
+        events.push((modifier, false, flags));
+    }
+    let utf16: Vec<u16> = character.to_string().encode_utf16().collect();
+
+    let before = state();
+    let prior_frontmost = frontmost_application().map(|identity| identity.pid);
+    let activated = foreground.then(|| activate(pid));
+    if activated.is_some() {
+        sleep(Duration::from_millis(600));
+    }
+    let source = source_kind.create();
+    let mut created = true;
+    for &(event_code, down, event_flags) in &events {
+        unsafe {
+            let event = CGEventCreateKeyboardEvent(source, event_code, down);
+            if event.is_null() {
+                created = false;
+                continue;
+            }
+            CGEventSetFlags(event, event_flags);
+            if payload && event_code == code {
+                CGEventKeyboardSetUnicodeString(event, utf16.len() as CFIndex, utf16.as_ptr());
+            }
+            if foreground {
+                CGEventPost(kCGHIDEventTap, event);
+            } else {
+                CGEventPostToPid(pid, event);
+            }
+            CFRelease(event);
+        }
+    }
+    release_source(source);
+    sleep(SETTLE);
+    let observed = state();
+    if let Some(prior) = prior_frontmost.filter(|_| foreground && args.flag("restore")) {
+        activate(prior);
+        sleep(Duration::from_millis(400));
+    }
+    let names: Vec<&str> = held.iter().map(|(name, _, _)| *name).collect();
+    Ok(J::obj(vec![
+        (
+            "mechanism",
+            J::str(if foreground {
+                "CGEventPost(kCGHIDEventTap)"
+            } else {
+                "CGEventPostToPid"
+            }),
+        ),
+        (
+            "variant",
+            J::str(format!(
+                "chord/modifiers={}/payload={}/source={}",
+                names.join("+"),
+                if payload { "with" } else { "without" },
+                source_kind.key()
+            )),
+        ),
+        ("targetPid", J::Int(pid as i64)),
+        ("key", J::str(key)),
+        ("eventsCreated", J::Bool(created)),
+        (
+            "activated",
+            activated.map(J::Bool).unwrap_or(J::Null),
+        ),
+        (
+            "accessibilityTrusted",
+            J::Bool(unsafe { AXIsProcessTrusted() } != 0),
+        ),
+        ("before", before),
+        ("after", observed),
+    ]))
 }
 
 fn source_of(args: &Args) -> Result<Source, String> {
