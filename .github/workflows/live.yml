@@ -543,6 +543,24 @@ jobs:
           fi
           echo "screenText recognized: $(printf '%s' "$screen" | probe screen_text -c)"
 
+          # A recording the production Swift daemon made, replayed by this build: the compatibility
+          # promise the flip from Swift to Rust rests on. Skipped until the qualification commits
+          # the recording, and loud about it, so a green lane cannot be read as having replayed it.
+          replay="$PWD/scripts/macos-toolkit-acceptance/live/axn125/calculator-swift-0.3.6.axn"
+          if [[ ! -f "$replay" ]]; then
+            echo "::notice::$replay is not committed yet; skipping the Swift-recorded replay probe"
+          else
+            replay_status=0
+            replay_output="$("$cli" run "$replay" 2>&1)" || replay_status=$?
+            if [[ "$replay_status" != 0 ]] || ! printf '%s' "$replay_output" | jq -e '.error == null and .result.success == true' >/dev/null 2>&1; then
+              echo "::error::replaying $replay failed (exit $replay_status)"
+              printf '%s\n' "$replay_output" | jq '{error, success: .result.success, failed: [.result.trace[]? | select(.success != true) | {index, tool, error}]}' 2>/dev/null \
+                || printf '%.2000s\n' "$replay_output"
+              exit 1
+            fi
+            echo "replayed $replay successfully"
+          fi
+
           # A shortcut, delivered and acted on. A chord is the one keystroke whose effect is an
           # application's menu rather than a text field, and it once failed in exactly the way a
           # dispatch report cannot show: every chord reported a foreground delivery with its
@@ -599,24 +617,6 @@ jobs:
           fi
           echo "cmd+n opened a TextEdit window ($windows_before -> $windows_after) with the modifiers restored"
           killall TextEdit >/dev/null 2>&1 || true
-
-          # A recording the production Swift daemon made, replayed by this build: the compatibility
-          # promise the flip from Swift to Rust rests on. Skipped until the qualification commits
-          # the recording, and loud about it, so a green lane cannot be read as having replayed it.
-          replay="$PWD/scripts/macos-toolkit-acceptance/live/axn125/calculator-swift-0.3.6.axn"
-          if [[ ! -f "$replay" ]]; then
-            echo "::notice::$replay is not committed yet; skipping the Swift-recorded replay probe"
-          else
-            replay_status=0
-            replay_output="$("$cli" run "$replay" 2>&1)" || replay_status=$?
-            if [[ "$replay_status" != 0 ]] || ! printf '%s' "$replay_output" | jq -e '.error == null and .result.success == true' >/dev/null 2>&1; then
-              echo "::error::replaying $replay failed (exit $replay_status)"
-              printf '%s\n' "$replay_output" | jq '{error, success: .result.success, failed: [.result.trace[]? | select(.success != true) | {index, tool, error}]}' 2>/dev/null \
-                || printf '%.2000s\n' "$replay_output"
-              exit 1
-            fi
-            echo "replayed $replay successfully"
-          fi
 
           # The menu has been talking to the candidate for the whole probe; one that died on any
           # of it would otherwise pass unnoticed, because nothing above is its client.
