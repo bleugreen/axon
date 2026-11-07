@@ -711,8 +711,16 @@ mod tests {
         assert_eq!(
             stroke_events(text_stroke('é')),
             vec![
-                KeyEvent { code: 0, down: true, flags: 0 },
-                KeyEvent { code: 0, down: false, flags: 0 },
+                KeyEvent {
+                    code: 0,
+                    down: true,
+                    flags: 0
+                },
+                KeyEvent {
+                    code: 0,
+                    down: false,
+                    flags: 0
+                },
             ]
         );
     }
