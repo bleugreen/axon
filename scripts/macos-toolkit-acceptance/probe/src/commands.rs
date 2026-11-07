@@ -444,7 +444,10 @@ fn foreground_click(args: &Args) -> Result<J, String> {
     Ok(J::obj(vec![
         ("mechanism", J::str("CGEventPost(kCGHIDEventTap)")),
         ("point", point_json(point)),
-        ("activated", activated.map(J::Bool).unwrap_or(J::Null)),
+        (
+            "activated",
+            activated.map(J::Bool).unwrap_or(J::Null),
+        ),
         ("restored", J::Bool(args.flag("restore"))),
         ("before", before),
         ("after", observed),
@@ -488,7 +491,10 @@ fn foreground_key(args: &Args) -> Result<J, String> {
     Ok(J::obj(vec![
         ("mechanism", J::str("CGEventPost(kCGHIDEventTap)")),
         ("text", J::str(text)),
-        ("activated", activated.map(J::Bool).unwrap_or(J::Null)),
+        (
+            "activated",
+            activated.map(J::Bool).unwrap_or(J::Null),
+        ),
         ("before", before),
         ("after", observed),
     ]))
@@ -547,10 +553,7 @@ fn raise_command(args: &Args) -> Result<J, String> {
             return Ok(J::obj(vec![
                 ("pid", J::Int(pid as i64)),
                 ("raised", J::Bool(false)),
-                (
-                    "reason",
-                    J::str("the application published no window to raise"),
-                ),
+                ("reason", J::str("the application published no window to raise")),
                 ("before", before),
                 ("after", frontmost()),
             ]));
@@ -629,8 +632,9 @@ fn ax_read(args: &Args) -> Result<J, String> {
 fn copy_attribute(element: CFTypeRef, attribute: &str) -> (CFTypeRef, i32) {
     let name = CFString::new(attribute);
     let mut value: CFTypeRef = std::ptr::null();
-    let status =
-        unsafe { AXUIElementCopyAttributeValue(element, name.0, &mut value as *mut CFTypeRef) };
+    let status = unsafe {
+        AXUIElementCopyAttributeValue(element, name.0, &mut value as *mut CFTypeRef)
+    };
     if status != 0 {
         return (std::ptr::null(), status);
     }
@@ -670,26 +674,14 @@ fn chord(args: &Args, foreground: bool) -> Result<J, String> {
     if held.is_empty() {
         return Err("--modifiers names no modifier; an unmodified key is post-key".into());
     }
-    held.sort_by_key(|(name, _, _)| {
-        CHORD_MODIFIERS
-            .iter()
-            .position(|(known, _, _)| known == name)
-    });
+    held.sort_by_key(|(name, _, _)| CHORD_MODIFIERS.iter().position(|(known, _, _)| known == name));
     held.dedup();
-    let payload = match args
-        .optional_string("payload")
-        .as_deref()
-        .unwrap_or("without")
-    {
+    let payload = match args.optional_string("payload").as_deref().unwrap_or("without") {
         "with" => true,
         "without" => false,
         other => return Err(format!("--payload must be with or without, got {other}")),
     };
-    let source_kind = if foreground {
-        Source::Null
-    } else {
-        source_of(args)?
-    };
+    let source_kind = if foreground { Source::Null } else { source_of(args)? };
 
     let code = key_code_for(character);
     let mut events: Vec<(u16, bool, u64)> = Vec::new();
@@ -762,7 +754,10 @@ fn chord(args: &Args, foreground: bool) -> Result<J, String> {
         ("targetPid", J::Int(pid as i64)),
         ("key", J::str(key)),
         ("eventsCreated", J::Bool(created)),
-        ("activated", activated.map(J::Bool).unwrap_or(J::Null)),
+        (
+            "activated",
+            activated.map(J::Bool).unwrap_or(J::Null),
+        ),
         (
             "accessibilityTrusted",
             J::Bool(unsafe { AXIsProcessTrusted() } != 0),
@@ -773,9 +768,7 @@ fn chord(args: &Args, foreground: bool) -> Result<J, String> {
 }
 
 fn source_of(args: &Args) -> Result<Source, String> {
-    let requested = args
-        .optional_string("source")
-        .unwrap_or_else(|| "null".into());
+    let requested = args.optional_string("source").unwrap_or_else(|| "null".into());
     Source::parse(&requested)
         .ok_or_else(|| format!("unknown event source: {requested} (null|hid|combined|private)"))
 }
