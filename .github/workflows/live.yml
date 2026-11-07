@@ -588,8 +588,14 @@ jobs:
             echo '::error::TextEdit never exposed a window to look before the chord probe'
             exit 1
           fi
+          # Read again once launch has settled, so a window TextEdit was still opening is not
+          # credited to the chord.
           sleep 0.5
           windows_before="$(textedit_windows)"
+          if ! [[ "$windows_before" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::TextEdit's window count could not be read before the chord (got '${windows_before}')"
+            exit 1
+          fi
           chord="$(printf '%s\n' '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"keyboard","arguments":{"app":"TextEdit","key":"cmd+n","deliveryPolicy":"foregroundPermitted"}}}' | "$cli" mcp)"
           printf '%s' "$chord" | jq -c '.result.structuredContent | {delivery, dispatchSuccess, dispatch, foreground}'
           if ! printf '%s' "$chord" | jq -e '
